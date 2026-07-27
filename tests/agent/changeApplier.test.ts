@@ -414,6 +414,44 @@ describe("ChangeApplier", () => {
     ]);
   });
 
+  test("applies an approved notebook move to the vault root", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-notebook-move", {
+      kind: "notebook",
+      operation: "move",
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+      parentId: "",
+      targetLabel: "Projects",
+      before: "Parent notebook: folder-parent",
+      after: "Parent notebook: (root)",
+    });
+    const changeSet = changes.getByRun("run-notebook-move");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-notebook-move",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.notebookMetadataUpdates).toEqual([
+      {
+        notebookId: "folder-1",
+        expectedUpdatedTime: 40,
+        parentId: "",
+      },
+    ]);
+  });
+
   test("applies an approved recoverable notebook deletion", async () => {
     const changes = new InMemoryChangeSetStore();
     const proposed = changes.add("chat-1", "run-notebook-delete", {

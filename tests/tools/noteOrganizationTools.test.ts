@@ -13,14 +13,14 @@ import { registerNoteOrganizationTools } from "../../src/tools/noteOrganizationT
 import { ToolRegistry } from "../../src/tools/toolRegistry";
 
 class FakeNoteOrganizationRepository implements NoteOrganizationRepository {
-  public readonly note: NoteMetadataRecord = {
+  public note: NoteMetadataRecord = {
     id: "note-1",
     parentId: "folder-1",
     title: "Draft",
     updatedTime: 10,
     order: 100,
   };
-  public readonly notebook: NotebookMetadataRecord = {
+  public notebook: NotebookMetadataRecord = {
     id: "folder-1",
     parentId: "",
     title: "Projects",
@@ -316,6 +316,166 @@ describe("note organization proposal tools", () => {
         title: "Active projects",
       }),
     ]);
+  });
+
+  test("proposes moving a versioned notebook to the vault root", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const repository = new FakeNoteOrganizationRepository();
+    repository.notebook = {
+      id: "folder-nested",
+      parentId: "folder-parent",
+      title: "test",
+      updatedTime: 40,
+    };
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(registry, repository, changes);
+
+    await registry.execute(
+      {
+        id: "call-move-notebook",
+        name: "move_notebook",
+        arguments: {
+          notebook_id: "folder-nested",
+          expected_updated_time: 40,
+          parent_id: "",
+        },
+      },
+      {
+        chatId: "chat-1",
+        runId: "run-move-notebook-root",
+        hasFileWorkspace: false,
+      },
+    );
+
+    expect(changes.getByRun("run-move-notebook-root")?.changes).toEqual([
+      expect.objectContaining({
+        kind: "notebook",
+        operation: "move",
+        notebookId: "folder-nested",
+        parentId: "",
+      }),
+    ]);
+  });
+
+  test("treats omitted notebook parent_id as the vault root", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const repository = new FakeNoteOrganizationRepository();
+    repository.notebook = {
+      id: "folder-nested",
+      parentId: "folder-parent",
+      title: "test",
+      updatedTime: 40,
+    };
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(registry, repository, changes);
+
+    await registry.execute(
+      {
+        id: "call-move-notebook-omit",
+        name: "move_notebook",
+        arguments: {
+          notebook_id: "folder-nested",
+          expected_updated_time: 40,
+        },
+      },
+      {
+        chatId: "chat-1",
+        runId: "run-move-notebook-omit",
+        hasFileWorkspace: false,
+      },
+    );
+
+    expect(changes.getByRun("run-move-notebook-omit")?.changes).toEqual([
+      expect.objectContaining({
+        kind: "notebook",
+        operation: "move",
+        parentId: "",
+      }),
+    ]);
+  });
+
+  test("rejects moving a notebook under itself", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-move-self",
+          name: "move_notebook",
+          arguments: {
+            notebook_id: "folder-1",
+            expected_updated_time: 40,
+            parent_id: "folder-1",
+          },
+        },
+        {
+          chatId: "chat-1",
+          runId: "run-move-self",
+          hasFileWorkspace: false,
+        },
+      ),
+    ).rejects.toThrow("expected a different notebook ID or root");
+  });
+
+  test("rejects moving a note to the vault root", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-move-note-root",
+          name: "move_note",
+          arguments: {
+            note_id: "note-1",
+            expected_updated_time: 10,
+            parent_id: "",
+          },
+        },
+        {
+          chatId: "chat-1",
+          runId: "run-move-note-root",
+          hasFileWorkspace: false,
+        },
+      ),
+    ).rejects.toThrow("expected schema for tool move_note");
+  });
+
+  test("rejects stale note versions before proposing a move", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-stale-move",
+          name: "move_note",
+          arguments: {
+            note_id: "note-1",
+            expected_updated_time: 999,
+            parent_id: "folder-2",
+          },
+        },
+        {
+          chatId: "chat-1",
+          runId: "run-stale-move",
+          hasFileWorkspace: false,
+        },
+      ),
+    ).rejects.toThrow("expected updated_time 999");
   });
 
   test("proposes moving a versioned notebook and its contents to Trash", async () => {

@@ -76,6 +76,14 @@ export interface NotebookRenameProposalInput extends ChangeProposalBase {
   readonly title: string;
 }
 
+export interface NotebookMoveProposalInput extends ChangeProposalBase {
+  readonly kind: "notebook";
+  readonly operation: "move";
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId: string;
+}
+
 export interface NotebookDeleteProposalInput extends ChangeProposalBase {
   readonly kind: "notebook";
   readonly operation: "delete";
@@ -93,6 +101,7 @@ export type ChangeProposalInput =
   | NoteReorderProposalInput
   | NoteDeleteProposalInput
   | NotebookRenameProposalInput
+  | NotebookMoveProposalInput
   | NotebookDeleteProposalInput;
 
 interface ProposedChangeBase extends ChangeProposalBase {
@@ -112,6 +121,7 @@ export type ProposedChange =
   | (ProposedChangeBase & NoteReorderProposalInput)
   | (ProposedChangeBase & NoteDeleteProposalInput)
   | (ProposedChangeBase & NotebookRenameProposalInput)
+  | (ProposedChangeBase & NotebookMoveProposalInput)
   | (ProposedChangeBase & NotebookDeleteProposalInput);
 
 export interface ChangeSet {
@@ -235,6 +245,17 @@ const NotebookRenameSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const NotebookMoveSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("notebook"),
+    operation: Type.Literal("move"),
+    notebookId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    parentId: Type.String({ maxLength: 128 }),
+  },
+  { additionalProperties: false },
+);
 const NotebookDeleteSchema = Type.Object(
   {
     ...ChangeBaseSchema,
@@ -268,6 +289,7 @@ export const ChangeSetSchema = Type.Object(
         NoteReorderSchema,
         NoteDeleteSchema,
         NotebookRenameSchema,
+        NotebookMoveSchema,
         NotebookDeleteSchema,
       ]),
       { maxItems: 50 },

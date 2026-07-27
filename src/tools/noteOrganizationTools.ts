@@ -235,7 +235,7 @@ class MoveNoteTool extends OrganizationTool<
 > {
   public readonly name = "move_note";
   public readonly description =
-    "Propose moving a versioned Joplin note to another notebook.";
+    "Propose moving a versioned Joplin note into another notebook. parent_id must be a notebook ID from list_notebooks; notes cannot live at the vault root (use move_notebook for notebooks).";
   public readonly risk = "propose-write" as const;
   public readonly inputSchema = Type.Object(
     {

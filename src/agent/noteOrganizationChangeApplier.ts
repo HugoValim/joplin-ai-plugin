@@ -66,6 +66,14 @@ export type ReadyOrganizationChange =
       readonly original: NotebookMetadataRecord;
     }
   | {
+      readonly kind: "notebook-move";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "notebook"; operation: "move" }
+      >;
+      readonly original: NotebookMetadataRecord;
+    }
+  | {
       readonly kind: "notebook-delete";
       readonly change: Extract<
         ProposedChange,
@@ -110,9 +118,11 @@ async function preflightNotebookChange(
   if (change.operation === "create") return { kind: "notebook-create", change };
   const original = await repository.readNotebook(change.notebookId);
   assertOrganizationVersion(change, original);
-  return change.operation === "rename"
-    ? { kind: "notebook-rename", change, original }
-    : { kind: "notebook-delete", change, original };
+  if (change.operation === "rename")
+    return { kind: "notebook-rename", change, original };
+  if (change.operation === "move")
+    return { kind: "notebook-move", change, original };
+  return { kind: "notebook-delete", change, original };
 }
 
 /**
@@ -131,7 +141,13 @@ export async function applyOrganizationChange(
 
 type NotebookReadyChange = Extract<
   ReadyOrganizationChange,
-  { kind: "notebook-create" | "notebook-rename" | "notebook-delete" }
+  {
+    kind:
+      | "notebook-create"
+      | "notebook-rename"
+      | "notebook-move"
+      | "notebook-delete";
+  }
 >;
 type NoteReadyChange = Exclude<ReadyOrganizationChange, NotebookReadyChange>;
 
@@ -149,6 +165,7 @@ async function applyNotebookOrganizationChange(
     return applyNotebookCreate(item, repository);
   if (item.kind === "notebook-rename")
     return applyNotebookRename(item, repository);
+  if (item.kind === "notebook-move") return applyNotebookMove(item, repository);
   await repository.trashNotebook({
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
@@ -173,6 +190,17 @@ async function applyNotebookRename(
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
     title: item.change.title,
+  });
+}
+
+async function applyNotebookMove(
+  item: Extract<ReadyOrganizationChange, { kind: "notebook-move" }>,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  await repository.updateNotebookMetadata({
+    notebookId: item.change.notebookId,
+    expectedUpdatedTime: item.change.expectedUpdatedTime,
+    parentId: item.change.parentId,
   });
 }
 
