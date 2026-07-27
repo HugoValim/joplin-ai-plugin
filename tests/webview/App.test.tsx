@@ -42,7 +42,12 @@ function snapshotEvent(): PluginEvent {
         id: "chat-1",
         title: "Plan",
         messages: [],
-        context: { activeNote: true, vault: false, attachedNoteIds: [] },
+        context: {
+          activeNote: true,
+          vault: false,
+          autoApply: false,
+          attachedNoteIds: [],
+        },
         externalRoot: null,
         pendingChangeSet: null,
       },
@@ -222,6 +227,21 @@ describe("App shell", () => {
     expect(
       screen.getByText("Attachments persist in this chat until detached."),
     ).toBeTruthy();
+  });
+
+  test("requests automatic apply for the current chat", async () => {
+    const { api } = await renderReadyApp();
+    fireEvent.click(screen.getByLabelText("Context settings"));
+    const toggle = screen.getByRole("checkbox", {
+      name: /Auto-apply changes/,
+    });
+
+    fireEvent.click(toggle);
+
+    expect(api.requests.at(-1)).toMatchObject({
+      type: "context.update",
+      payload: { autoApply: true },
+    });
   });
 
   test("provides an accessible guard for panels below supported width", async () => {

@@ -10,7 +10,7 @@ import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
 import type { AiProvider } from "../providers/types";
 import { DomainError } from "../shared/errors";
-import type { PanelRequest } from "../shared/protocol";
+import { PROTOCOL_VERSION, type PanelRequest } from "../shared/protocol";
 import type { ToolExecutionResult, ToolRegistry } from "../tools/toolRegistry";
 import {
   AgentContinuationStore,
@@ -60,8 +60,50 @@ export class ApprovalWorkflow {
     this.continuations.deleteChat(chatId);
   }
 
+  /**
+   * Presents a proposal for review or applies every item under chat opt-in.
+   *
+   * @example await workflow.resolveProposedChanges(changeSet, autoApply)
+   */
+  public async resolveProposedChanges(
+    changeSet: ChangeSet,
+    autoApply: boolean,
+  ): Promise<void> {
+    if (autoApply) {
+      this.postAutomaticProgress(changeSet);
+      await this.applyRequest(automaticApplyRequest(changeSet), true);
+      return;
+    }
+    this.events.post(
+      "changes.proposed",
+      changeSet.chatId,
+      toChangeSetView(changeSet),
+      changeSet.runId,
+    );
+  }
+
+  private postAutomaticProgress(changeSet: ChangeSet): void {
+    this.events.post(
+      "run.progress",
+      changeSet.chatId,
+      {
+        current: 0,
+        total: changeSet.changes.length,
+        label: `Auto-applying ${changeSet.changes.length} proposed changes`,
+      },
+      changeSet.runId,
+    );
+  }
+
   public async apply(
     request: Extract<PanelRequest, { type: "changes.apply" }>,
+  ): Promise<void> {
+    await this.applyRequest(request, false);
+  }
+
+  private async applyRequest(
+    request: Extract<PanelRequest, { type: "changes.apply" }>,
+    automatic: boolean,
   ): Promise<void> {
     const result = await this.applier.apply(
       request.payload.changeSetId,
@@ -71,7 +113,7 @@ export class ApprovalWorkflow {
     await this.clearPending(request.chatId, request.runId, "applied");
     const pending = this.continuations.take(request.payload.changeSetId);
     if (pending) {
-      await this.continueAfterApproval(request, pending, result);
+      await this.continueAfterApproval(request, pending, result, automatic);
       return;
     }
     this.postApplyCompleted(request, result);
@@ -115,6 +157,7 @@ export class ApprovalWorkflow {
     request: Extract<PanelRequest, { type: "changes.apply" }>,
     pending: PendingAgentContinuation,
     applied: ApplyResult,
+    automatic: boolean,
   ): Promise<void> {
     const runId = randomUUID();
     const controller = new AbortController();
@@ -132,6 +175,7 @@ export class ApprovalWorkflow {
         applied,
         request.runId,
         runId,
+        automatic,
         controller.signal,
         deltas,
       );
@@ -148,6 +192,7 @@ export class ApprovalWorkflow {
     applied: ApplyResult,
     appliedRunId: string,
     runId: string,
+    automatic: boolean,
     signal: AbortSignal,
     deltas: DeltaBatcher,
   ): Promise<void> {
@@ -166,7 +211,7 @@ export class ApprovalWorkflow {
         hasFileWorkspace: pending.hasFileWorkspace,
       },
       pending.continuation,
-      approvalSummary(applied),
+      approvalSummary(applied, automatic),
       signal,
     );
     deltas.flush();
@@ -185,11 +230,12 @@ export class ApprovalWorkflow {
       pending.hasFileWorkspace,
       pending.citations,
     );
-    this.postContinuationOutcome(
+    await this.postContinuationOutcome(
       pending.chatId,
       runId,
       outcome.changeSet,
       applied.undoAvailable ? appliedRunId : null,
+      chat.context.autoApply,
     );
   }
 
@@ -243,26 +289,22 @@ export class ApprovalWorkflow {
     );
   }
 
-  private postContinuationOutcome(
+  private async postContinuationOutcome(
     chatId: string,
     runId: string,
     changeSet: ChangeSet | null,
     undoRunId: string | null,
-  ): void {
+    autoApply: boolean,
+  ): Promise<void> {
     if (changeSet) {
-      this.events.post(
-        "changes.proposed",
-        chatId,
-        toChangeSetView(changeSet),
-        runId,
-      );
+      await this.resolveProposedChanges(changeSet, autoApply);
       return;
     }
     this.events.post(
       "run.completed",
       chatId,
       {
-        summary: "Approved changes applied; continuation completed",
+        summary: "Changes applied; continuation completed",
         ...(undoRunId ? { undoRunId } : {}),
       },
       runId,
@@ -331,6 +373,22 @@ export class ApprovalWorkflow {
   }
 }
 
+function automaticApplyRequest(
+  changeSet: ChangeSet,
+): Extract<PanelRequest, { type: "changes.apply" }> {
+  return {
+    version: PROTOCOL_VERSION,
+    messageId: randomUUID(),
+    chatId: changeSet.chatId,
+    runId: changeSet.runId,
+    type: "changes.apply",
+    payload: {
+      changeSetId: changeSet.id,
+      acceptedIds: changeSet.changes.map((change) => change.id),
+    },
+  };
+}
+
 function applyCounts(result: ApplyResult): {
   readonly applied: number;
   readonly conflicts: number;
@@ -343,14 +401,17 @@ function applyCounts(result: ApplyResult): {
   };
 }
 
-function approvalSummary(result: ApplyResult): string {
+function approvalSummary(result: ApplyResult, automatic: boolean): string {
   const details = result.changes.map((change) => ({
     target: change.targetLabel,
     status: change.status,
     ...(change.message ? { message: change.message } : {}),
   }));
+  const policy = automatic
+    ? "The chat's automatic application was enabled by the user."
+    : "The user reviewed the proposed write batch.";
   return [
-    "The user reviewed the proposed write batch.",
+    policy,
     "Treat these execution results as authoritative and continue the task:",
     JSON.stringify(details),
   ].join("\n");

@@ -17,7 +17,7 @@ import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
 import type { PerChatWorkspaceResolver } from "./workspaceAdapters";
 import { DeltaBatcher } from "./deltaBatcher";
-import { mergeHistory, toActiveChat, toChangeSetView } from "./chatView";
+import { mergeHistory, toActiveChat } from "./chatView";
 import {
   deleteChatAndChooseNext,
   persistRunOutcome,
@@ -31,6 +31,9 @@ import type { AssistantOutputActions } from "./assistantOutputActions";
 import type { CommandPort, DialogPort, ProviderFactory } from "./types";
 import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
+
+const AUTO_APPLY_WARNING =
+  "Security warning: Auto-apply will apply every model-proposed note and file change without review. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
 
 export class ChatController {
   private activeChatId: string | null = null;
@@ -270,7 +273,12 @@ export class ChatController {
       Boolean(chat.externalRoot),
       context.citations,
     );
-    await this.emitOutcome(chat.id, request.runId, outcome.changeSet);
+    await this.emitOutcome(
+      chat.id,
+      request.runId,
+      outcome.changeSet,
+      chat.context.autoApply,
+    );
   }
 
   private observer(
@@ -344,14 +352,10 @@ export class ChatController {
     chatId: string,
     runId: string,
     changeSet: ChangeSet | null,
+    autoApply: boolean,
   ): Promise<void> {
     if (changeSet) {
-      this.events.post(
-        "changes.proposed",
-        chatId,
-        toChangeSetView(changeSet),
-        runId,
-      );
+      await this.approvals.resolveProposedChanges(changeSet, autoApply);
     } else {
       this.events.post(
         "run.completed",
@@ -399,12 +403,24 @@ export class ChatController {
     request: Extract<PanelRequest, { type: "context.update" }>,
   ): Promise<void> {
     const chat = await requireChat(this.chats, request.chatId);
+    if (!(await this.allowAutoApplyUpdate(chat, request.payload.autoApply))) {
+      await this.sendSnapshot();
+      return;
+    }
     await this.chats.save({
       ...chat,
       updatedAt: Date.now(),
       context: request.payload,
     });
     await this.sendSnapshot();
+  }
+
+  private async allowAutoApplyUpdate(
+    chat: PersistedChat,
+    requested: boolean,
+  ): Promise<boolean> {
+    if (!requested || chat.context.autoApply) return true;
+    return (await this.dialogs.showMessageBox(AUTO_APPLY_WARNING)) === 0;
   }
 
   private async selectFolder(chatId: string): Promise<void> {

@@ -331,7 +331,7 @@ class ReviewTextFilesTool extends FileTool<
 }
 
 /**
- * Registers root-confined file read and approval-gated proposal tools.
+ * Registers root-confined reads and policy-gated file proposal tools.
  *
  * @example registerFileTools(registry, workspaceResolver, changeSetStore)
  */

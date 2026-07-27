@@ -313,7 +313,7 @@ class ReplaceNoteTool extends NoteTool<ReplaceNoteInput, ProposalOutput> {
 }
 
 /**
- * Registers the bounded Joplin read and approval-gated note proposal tools.
+ * Registers bounded Joplin reads and policy-gated note proposal tools.
  *
  * @example registerNoteTools(registry, repository, changeSetStore)
  */

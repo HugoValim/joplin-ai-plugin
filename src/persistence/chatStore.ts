@@ -47,6 +47,7 @@ const ContextSchema = Type.Object(
   {
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
+    autoApply: Type.Optional(Type.Boolean()),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,
@@ -105,7 +106,14 @@ const IndexSchema = Type.Object(
 );
 
 type StoredChatShape = Static<typeof ChatSchema>;
-export type PersistedChat = Omit<StoredChatShape, "pendingChangeSet"> & {
+type StoredContext = StoredChatShape["context"];
+export type PersistedChat = Omit<
+  StoredChatShape,
+  "context" | "pendingChangeSet"
+> & {
+  readonly context: Omit<StoredContext, "autoApply"> & {
+    readonly autoApply: boolean;
+  };
   readonly pendingChangeSet: ChangeSet | null;
 };
 export type PersistedChatMessage = Static<typeof MessageSchema>;
@@ -144,7 +152,12 @@ export class ChatStore {
       createdAt: timestamp,
       updatedAt: timestamp,
       messages: [],
-      context: { activeNote: true, vault: false, attachedNoteIds: [] },
+      context: {
+        activeNote: true,
+        vault: false,
+        autoApply: false,
+        attachedNoteIds: [],
+      },
       externalRoot: null,
       references: [],
       runSummaries: [],
@@ -167,12 +180,13 @@ export class ChatStore {
       await this.removeIndexEntry(chatId);
       return null;
     }
-    const chat = await this.parseOrQuarantine(
+    const stored = await this.parseOrQuarantine(
       ChatSchema,
       content,
       chatPath,
       chatId,
     );
+    const chat = stored ? normalizeStoredChat(stored) : null;
     if (chat && isConsistentChat(chat, chatId)) return chat;
     if (chat) {
       await this.quarantine(
@@ -312,6 +326,13 @@ export class ChatStore {
 
 function stringify(input: unknown): string {
   return `${JSON.stringify(input, null, 2)}\n`;
+}
+
+function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
+  return {
+    ...chat,
+    context: { ...chat.context, autoApply: chat.context.autoApply ?? false },
+  };
 }
 
 function assertSchema(schema: TSchema, input: unknown, expected: string): void {

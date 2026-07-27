@@ -82,6 +82,7 @@ const ContextUpdateSchema = Type.Object(
       {
         activeNote: Type.Boolean(),
         vault: Type.Boolean(),
+        autoApply: Type.Boolean(),
         attachedNoteIds: Type.Array(IdentifierSchema, {
           maxItems: 50,
           uniqueItems: true,
@@ -224,6 +225,7 @@ const ContextSettingsSchema = Type.Object(
   {
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
+    autoApply: Type.Boolean(),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,

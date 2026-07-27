@@ -28,6 +28,7 @@ import { ToolRegistry } from "../../src/tools/toolRegistry";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
 class MutableNoteRepository implements NoteRepository {
+  public readonly createdNotes: NoteRecord[] = [];
   public note: NoteRecord = {
     id: "note-1",
     parentId: "folder-1",
@@ -48,8 +49,16 @@ class MutableNoteRepository implements NoteRepository {
     return [];
   }
 
-  public async createNote(_input: CreateNoteInput): Promise<NoteRecord> {
-    throw new Error("Unexpected create");
+  public async createNote(input: CreateNoteInput): Promise<NoteRecord> {
+    const created = {
+      id: `note-${this.createdNotes.length + 2}`,
+      parentId: input.parentId,
+      title: input.title,
+      body: input.body,
+      updatedTime: 1,
+    };
+    this.createdNotes.push(created);
+    return created;
   }
 
   public async updateNoteBody(input: UpdateNoteBodyInput): Promise<NoteRecord> {
@@ -153,6 +162,10 @@ describe("ApprovalWorkflow", () => {
       [],
     );
 
+    await workflow.resolveProposedChanges(changeSet, false);
+    expect(notes.note.body).toBe("Old");
+    expect(panel.events.at(-1)?.type).toBe("changes.proposed");
+
     await workflow.apply({
       version: 2,
       messageId: "message-1",
@@ -172,10 +185,90 @@ describe("ApprovalWorkflow", () => {
       "Applied successfully.",
     );
     expect(panel.events.map((event) => event.type)).toEqual([
+      "changes.proposed",
       "run.started",
       "run.progress",
       "assistant.delta",
       "run.completed",
     ]);
+  });
+
+  test("automatically applies every proposed change without review", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Automatic");
+    const changes = new InMemoryChangeSetStore();
+    changes.add(chat.id, "run-auto", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "Updated",
+      expectedUpdatedTime: 10,
+    });
+    changes.add(chat.id, "run-auto", {
+      kind: "note",
+      operation: "create",
+      parentId: "folder-1",
+      title: "Summary",
+      targetLabel: "Summary",
+      before: "",
+      after: "Created",
+    });
+    changes.add(chat.id, "run-auto", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-stale",
+      targetLabel: "Stale note",
+      before: "Old",
+      after: "Must not apply",
+      expectedUpdatedTime: 999,
+    });
+    const changeSet = changes.getByRun("run-auto");
+    if (!changeSet) throw new Error("Expected automatic change set");
+    await chats.save({
+      ...chat,
+      context: { ...chat.context, autoApply: true },
+      pendingChangeSet: changeSet,
+    });
+    const notes = new MutableNoteRepository();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        new EmptyWorkspaceResolver(),
+        new InMemoryRollbackStore(),
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+    );
+
+    await workflow.resolveProposedChanges(changeSet, true);
+
+    expect(notes.note.body).toBe("Updated");
+    expect(notes.createdNotes[0]?.body).toBe("Created");
+    expect(
+      changes.getByRun("run-auto")?.changes.map((change) => change.status),
+    ).toEqual(["applied", "applied", "conflict"]);
+    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+    expect(panel.events.map((event) => event.type)).toEqual([
+      "run.progress",
+      "run.completed",
+    ]);
+    expect(panel.events[0]).toMatchObject({
+      payload: { label: "Auto-applying 3 proposed changes" },
+    });
+    expect(panel.events[1]).toMatchObject({
+      payload: { undoRunId: "run-auto" },
+    });
   });
 });

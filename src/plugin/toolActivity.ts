@@ -11,7 +11,7 @@ export function summarizeToolResult(result: ToolExecutionResult): string {
     return `Preflight: ${preflight.fileCount} files, ${preflight.totalBytes} bytes`;
   }
   return result.risk === "propose-write"
-    ? "Added to approval batch"
+    ? "Added to proposed batch"
     : "Completed";
 }
 

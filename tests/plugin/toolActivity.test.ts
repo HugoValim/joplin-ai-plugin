@@ -22,4 +22,15 @@ describe("summarizeToolResult", () => {
       }),
     ).toBe("Completed");
   });
+
+  test("labels writes as proposals without claiming review mode", () => {
+    expect(
+      summarizeToolResult({
+        toolCallId: "call-write",
+        name: "create_note",
+        risk: "propose-write",
+        output: { change_id: "change-1" },
+      }),
+    ).toBe("Added to proposed batch");
+  });
 });

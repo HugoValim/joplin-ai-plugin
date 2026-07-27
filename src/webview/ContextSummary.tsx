@@ -30,6 +30,9 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
           label={`Vault ${props.chat.context.vault ? "on" : "off"}`}
         />
         <ContextChip
+          label={props.chat.context.autoApply ? "Writes auto" : "Writes review"}
+        />
+        <ContextChip
           label={props.chat.externalRoot ?? "Add folder"}
           title={props.chat.externalRoot ?? undefined}
         />
@@ -62,6 +65,13 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
           checked={props.chat.context.vault}
           disabled={props.disabled}
           onChange={(checked) => props.onUpdate({ vault: checked })}
+        />
+        <ContextToggle
+          label="Auto-apply changes"
+          description="Apply every model-proposed note and file change without review."
+          checked={props.chat.context.autoApply}
+          disabled={props.disabled}
+          onChange={(checked) => props.onUpdate({ autoApply: checked })}
         />
         <div className="context-control">
           <div>

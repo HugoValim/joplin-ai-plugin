@@ -3,6 +3,34 @@ import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
 describe("ChatStore", () => {
+  test("defaults automatic apply off and persists the per-chat opt-in", async () => {
+    const store = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await store.create("Safe by default");
+
+    expect(chat.context.autoApply).toBe(false);
+    await store.save({
+      ...chat,
+      context: { ...chat.context, autoApply: true },
+    });
+
+    expect((await store.get(chat.id))?.context.autoApply).toBe(true);
+  });
+
+  test("loads pre-auto-apply chats in safe review mode", async () => {
+    const files = new MemoryJsonFilePort();
+    const store = new ChatStore("/plugin", files);
+    const chat = await store.create("Legacy");
+    const chatPath = `/plugin/chats/${chat.id}.json`;
+    const stored = files.files.get(chatPath);
+    if (!stored) throw new Error(`Missing chat ${chat.id}; expected JSON`);
+    files.files.set(chatPath, stored.replace('    "autoApply": false,\n', ""));
+
+    const loaded = await store.get(chat.id);
+
+    expect(loaded?.context.autoApply).toBe(false);
+    expect(files.renamed).toEqual([]);
+  });
+
   test("quarantines a corrupt chat and continues loading other chats", async () => {
     const files = new MemoryJsonFilePort();
     const reported: string[] = [];

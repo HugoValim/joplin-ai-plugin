@@ -43,7 +43,12 @@ describe("panel protocol", () => {
     ["run.cancel", {}],
     [
       "context.update",
-      { activeNote: true, vault: false, attachedNoteIds: ["note-1"] },
+      {
+        activeNote: true,
+        vault: false,
+        autoApply: false,
+        attachedNoteIds: ["note-1"],
+      },
     ],
     ["folder.select", {}],
     ["changes.apply", { changeSetId: "changes-1", acceptedIds: ["change-1"] }],
