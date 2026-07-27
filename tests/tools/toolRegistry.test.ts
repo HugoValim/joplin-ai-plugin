@@ -57,4 +57,42 @@ describe("ToolRegistry", () => {
     ).rejects.toThrow("expected schema for tool echo");
     expect(tool.executeCount).toBe(0);
   });
+
+  test("coerces numeric strings for number fields without widening other types", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new EchoAgentTool());
+    registry.register(new CountTool());
+
+    await expect(
+      registry.execute(
+        { id: "call-1", name: "echo", arguments: { value: 42 } },
+        CONTEXT,
+      ),
+    ).rejects.toThrow("expected schema for tool echo");
+
+    const counted = await registry.execute(
+      { id: "call-2", name: "count", arguments: { amount: "7" } },
+      CONTEXT,
+    );
+    expect(counted.output).toEqual({ amount: 7 });
+  });
 });
+
+class CountTool implements AgentTool<{ amount: number }, { amount: number }> {
+  public readonly name = "count";
+  public readonly description = "Echo a number";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    { amount: Type.Number({ minimum: 0 }) },
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ amount: Type.Number() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(input: { amount: number }): Promise<{ amount: number }> {
+    return { amount: input.amount };
+  }
+}

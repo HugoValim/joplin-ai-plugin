@@ -107,12 +107,9 @@ export class ToolRegistry {
         `Tool ${tool.name} is unavailable for chat ${context.chatId}; expected required context`,
       );
     }
-    assertSchema(
-      tool.inputSchema,
-      call.arguments,
-      `schema for tool ${tool.name}`,
-    );
-    const output = await tool.execute(call.arguments, context);
+    const input = coerceToolInput(tool.inputSchema, call.arguments);
+    assertSchema(tool.inputSchema, input, `schema for tool ${tool.name}`);
+    const output = await tool.execute(input, context);
     assertSchema(
       tool.outputSchema,
       output,
@@ -148,4 +145,42 @@ function assertSchema(schema: TSchema, input: unknown, expected: string): void {
     "VALIDATION",
     `Invalid tool value ${safeValue(input)}; expected ${expected}`,
   );
+}
+
+/**
+ * Coerces numeric strings for number-like tool fields before schema checks.
+ *
+ * @example coerceToolInput(schema, { expected_updated_time: "10" })
+ */
+function coerceToolInput(schema: TSchema, input: unknown): unknown {
+  if (!isPlainObject(input)) return input;
+  const properties = objectProperties(schema);
+  if (!properties) return input;
+  const coerced: Record<string, unknown> = { ...input };
+  for (const [key, value] of Object.entries(input)) {
+    const property = properties[key];
+    if (!property || !isNumberLikeSchema(property)) continue;
+    if (typeof value !== "string") continue;
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) coerced[key] = asNumber;
+  }
+  return coerced;
+}
+
+function objectProperties(
+  schema: TSchema,
+): Record<string, TSchema> | undefined {
+  if (!("properties" in schema) || !schema.properties) return undefined;
+  return schema.properties as Record<string, TSchema>;
+}
+
+function isNumberLikeSchema(schema: TSchema): boolean {
+  const kind = (schema as { type?: string }).type;
+  return kind === "number" || kind === "integer";
+}
+
+function isPlainObject(
+  input: unknown,
+): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }

@@ -450,6 +450,42 @@ describe("note organization proposal tools", () => {
     ).rejects.toThrow("expected schema for tool move_note");
   });
 
+  test("accepts numeric timestamps encoded as strings", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      changes,
+    );
+
+    await registry.execute(
+      {
+        id: "call-move-note-string-time",
+        name: "move_note",
+        arguments: {
+          note_id: "note-1",
+          expected_updated_time: "10",
+          parent_id: "folder-2",
+        },
+      },
+      {
+        chatId: "chat-1",
+        runId: "run-move-string-time",
+        hasFileWorkspace: false,
+      },
+    );
+
+    expect(changes.getByRun("run-move-string-time")?.changes).toEqual([
+      expect.objectContaining({
+        kind: "note",
+        operation: "move",
+        noteId: "note-1",
+        parentId: "folder-2",
+      }),
+    ]);
+  });
+
   test("rejects stale note versions before proposing a move", async () => {
     const registry = new ToolRegistry();
     registerNoteOrganizationTools(
