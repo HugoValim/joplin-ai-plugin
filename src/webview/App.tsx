@@ -1,3 +1,4 @@
+import type { ActiveChatView } from "../shared/protocol";
 import { Composer } from "./Composer";
 import { ContextSummary } from "./ContextSummary";
 import { ChangeReview } from "./ChangeReview";
@@ -93,11 +94,13 @@ export function App(): JSX.Element {
             activity={activity}
           />
           <Composer
+            key={activeChat?.id ?? "bootstrap"}
             draft={controller.draft}
             busy={state.busy}
             phase={state.phase}
             focusSequence={state.focusSequence}
             lastRunId={state.lastRunId}
+            history={composerHistory(activeChat?.messages ?? [])}
             onDraftChange={controller.setDraft}
             onSubmit={controller.submit}
             onCancel={controller.cancel}
@@ -108,4 +111,17 @@ export function App(): JSX.Element {
       <RunLiveRegion announcement={state.phase} />
     </main>
   );
+}
+
+/**
+ * Collects chronological user prompt texts for composer ArrowUp recall.
+ *
+ * @example composerHistory(chat.messages)
+ */
+function composerHistory(
+  messages: ActiveChatView["messages"],
+): readonly string[] {
+  return messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content);
 }

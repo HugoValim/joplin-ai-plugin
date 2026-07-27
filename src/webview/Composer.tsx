@@ -6,19 +6,26 @@ interface ComposerProps {
   readonly phase: string;
   readonly focusSequence: number;
   readonly lastRunId: string | null;
+  readonly history: readonly string[];
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: () => void;
   readonly onCancel: () => void;
   readonly onUndo: () => void;
 }
 
+interface HistoryBrowse {
+  readonly index: number;
+  readonly stashedDraft: string;
+}
+
 /**
  * Renders one-to-six-line prompt input with stable Send/Stop placement.
  *
- * @example <Composer draft={draft} onSubmit={submit} {...runState} />
+ * @example <Composer draft={draft} history={userTexts} onSubmit={submit} {...runState} />
  */
 export function Composer(props: ComposerProps): JSX.Element {
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const browse = useRef<HistoryBrowse | null>(null);
   useEffect(() => {
     textarea.current?.focus();
   }, [props.focusSequence]);
@@ -31,6 +38,7 @@ export function Composer(props: ComposerProps): JSX.Element {
       className="composer"
       onSubmit={(event) => {
         event.preventDefault();
+        browse.current = null;
         props.onSubmit();
       }}
     >
@@ -53,9 +61,12 @@ export function Composer(props: ComposerProps): JSX.Element {
           value={props.draft}
           aria-describedby="composer-status"
           placeholder="Ask about enabled context…"
-          onChange={(event) => props.onDraftChange(event.target.value)}
+          onChange={(event) => {
+            browse.current = null;
+            props.onDraftChange(event.target.value);
+          }}
           onInput={(event) => resizeTextarea(event.currentTarget)}
-          onKeyDown={(event) => handleComposerKey(event, props)}
+          onKeyDown={(event) => handleComposerKey(event, props, browse)}
         />
         {props.busy ? (
           <button
@@ -82,10 +93,78 @@ export function Composer(props: ComposerProps): JSX.Element {
 function handleComposerKey(
   event: React.KeyboardEvent<HTMLTextAreaElement>,
   props: ComposerProps,
+  browse: React.MutableRefObject<HistoryBrowse | null>,
 ): void {
-  if (event.key !== "Enter" || event.shiftKey) return;
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    browse.current = null;
+    if (!props.busy) props.onSubmit();
+    return;
+  }
+  if (event.key === "ArrowUp") {
+    recallOlderHistory(event, props, browse);
+    return;
+  }
+  if (event.key === "ArrowDown") {
+    recallNewerHistory(event, props, browse);
+  }
+}
+
+function recallOlderHistory(
+  event: React.KeyboardEvent<HTMLTextAreaElement>,
+  props: ComposerProps,
+  browse: React.MutableRefObject<HistoryBrowse | null>,
+): void {
+  if (!props.history.length) return;
+  if (browse.current === null) {
+    if (event.currentTarget.selectionStart !== 0) return;
+    if (event.currentTarget.selectionEnd !== 0) return;
+  }
   event.preventDefault();
-  if (!props.busy) props.onSubmit();
+  const next = stepOlderBrowse(browse.current, props.draft, props.history.length);
+  browse.current = next;
+  props.onDraftChange(historyEntry(props.history, next.index));
+}
+
+function recallNewerHistory(
+  event: React.KeyboardEvent<HTMLTextAreaElement>,
+  props: ComposerProps,
+  browse: React.MutableRefObject<HistoryBrowse | null>,
+): void {
+  if (browse.current === null) return;
+  event.preventDefault();
+  if (browse.current.index < props.history.length - 1) {
+    const next = {
+      index: browse.current.index + 1,
+      stashedDraft: browse.current.stashedDraft,
+    };
+    browse.current = next;
+    props.onDraftChange(historyEntry(props.history, next.index));
+    return;
+  }
+  const stashed = browse.current.stashedDraft;
+  browse.current = null;
+  props.onDraftChange(stashed);
+}
+
+function stepOlderBrowse(
+  current: HistoryBrowse | null,
+  draft: string,
+  historyLength: number,
+): HistoryBrowse {
+  if (current === null) {
+    return { index: historyLength - 1, stashedDraft: draft };
+  }
+  if (current.index === 0) return current;
+  return { index: current.index - 1, stashedDraft: current.stashedDraft };
+}
+
+function historyEntry(history: readonly string[], index: number): string {
+  const entry = history[index];
+  if (entry !== undefined) return entry;
+  throw new Error(
+    `Invalid history index ${index}; expected 0..${history.length - 1}`,
+  );
 }
 
 function resizeTextarea(textarea: HTMLTextAreaElement): void {

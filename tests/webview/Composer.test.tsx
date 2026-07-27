@@ -12,6 +12,7 @@ function composer(
     phase: "Ready",
     focusSequence: 0,
     lastRunId: null,
+    history: [],
     onDraftChange: jest.fn(),
     onSubmit: jest.fn(),
     onCancel: jest.fn(),
@@ -61,5 +62,54 @@ describe("Composer", () => {
 
     expect(input.style.height).toBe("120px");
     expect(input.style.overflowY).toBe("auto");
+  });
+
+  test("ArrowUp at caret start cycles older user messages and ArrowDown restores draft", () => {
+    const onDraftChange = jest.fn();
+    const props = composer({
+      draft: "drafting",
+      history: ["first", "second", "third"],
+      onDraftChange,
+    });
+    const view = render(<Composer {...props} />);
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    input.setSelectionRange(0, 0);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(onDraftChange).toHaveBeenLastCalledWith("third");
+    view.rerender(<Composer {...props} draft="third" />);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(onDraftChange).toHaveBeenLastCalledWith("second");
+    view.rerender(<Composer {...props} draft="second" />);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(onDraftChange).toHaveBeenLastCalledWith("third");
+    view.rerender(<Composer {...props} draft="third" />);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(onDraftChange).toHaveBeenLastCalledWith("drafting");
+  });
+
+  test("ArrowUp leaves caret mid-text alone so multiline editing still works", () => {
+    const onDraftChange = jest.fn();
+    render(
+      <Composer
+        {...composer({
+          draft: "line one\nline two",
+          history: ["previous"],
+          onDraftChange,
+        })}
+      />,
+    );
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    input.setSelectionRange(5, 5);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(onDraftChange).not.toHaveBeenCalled();
   });
 });
