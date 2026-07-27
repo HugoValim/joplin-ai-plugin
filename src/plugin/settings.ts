@@ -8,6 +8,13 @@ import type { ProviderConfig } from "../providers/types";
 import { DomainError, safeValue } from "../shared/errors";
 
 const SECTION = "joplinAiAgent";
+const DEFAULT_SYSTEM_PROMPT = [
+  "Be a careful writing partner for Joplin notes.",
+  "Preserve the user's meaning, voice, language, factual uncertainty, and useful detail.",
+  "Do not invent facts or sources. Keep valid Markdown, links, tasks, code, and front matter intact unless asked to change them.",
+  "Prefer focused, minimal edits and clear, concise prose.",
+  "Ask one clarifying question when ambiguity could materially change the result.",
+].join(" ");
 const KEYS = {
   baseUrl: "joplinAiAgent.baseUrl",
   apiKey: "joplinAiAgent.apiKey",
@@ -99,7 +106,7 @@ function settingDefinitions(): Record<string, SettingItem> {
     [KEYS.model]: stringSetting("Model", "", "Required model name."),
     [KEYS.systemPrompt]: stringSetting(
       "System prompt",
-      "You are a careful assistant for Joplin notes.",
+      DEFAULT_SYSTEM_PROMPT,
       "Custom instructions appended after fixed safety rules.",
     ),
     [KEYS.temperature]: stringSetting(

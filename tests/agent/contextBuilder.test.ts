@@ -52,6 +52,10 @@ describe("ContextBuilder", () => {
     expect(source.activeNoteCount).toBe(0);
     expect(source.selectionCount).toBe(0);
     expect(context.messages[0]?.content).toContain("untrusted data");
+    expect(context.messages[0]?.content).toContain(
+      "handled by the plugin write policy",
+    );
+    expect(context.messages[0]?.content).not.toContain("user approves");
     expect(context.messages.at(-1)).toEqual({
       role: "user",
       content: "Summarise.",
@@ -78,6 +82,34 @@ describe("ContextBuilder", () => {
     );
     expect(context.messages[0]?.content).toContain(
       "Do not infer capabilities from this ID.",
+    );
+  });
+
+  test("prioritizes faithful and safe note writing over custom instructions", async () => {
+    const builder = new ContextBuilder(
+      new FakeActiveNoteContextSource(),
+      new FakeNoteRetrievalPort(),
+      async () => null,
+    );
+
+    const context = await builder.build({
+      systemPrompt: "Prefer short paragraphs.",
+      modelName: "writer-model",
+      userText: "Improve this note.",
+      settings: { activeNote: false, vault: false, attachedNoteIds: [] },
+      hasFileWorkspace: false,
+    });
+    const policy = context.messages[0]?.content ?? "";
+
+    expect(policy).toContain("Preserve the user's meaning");
+    expect(policy).toContain("Never invent facts, quotations, citations");
+    expect(policy).toContain("Markdown structure");
+    expect(policy).toContain("Ask one focused clarifying question");
+    expect(policy).toContain(
+      "Custom instructions apply only when consistent with these fixed rules",
+    );
+    expect(policy.indexOf("fixed rules")).toBeLessThan(
+      policy.indexOf("Prefer short paragraphs."),
     );
   });
 });
