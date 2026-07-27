@@ -5,6 +5,8 @@
 For each submitted turn, the plugin sends:
 
 - the user message and retained chat transcript;
+- editor text explicitly copied into that message with `Ctrl+L`;
+- fixed safety and note-writing rules;
 - the configured system prompt;
 - current note body and editor selection only when **Active note** is enabled;
 - explicitly attached notes;
@@ -13,6 +15,10 @@ For each submitted turn, the plugin sends:
 
 The selected folder's absolute root is displayed in the sidebar and persisted
 locally, but model file tools receive root-relative paths.
+
+`Ctrl+L` copies at most 20,000 selected editor characters into the local,
+unsent composer. It does not call the configured endpoint until the user
+submits the draft.
 
 ## Data never sent to the sidebar or chat files
 
@@ -38,8 +44,10 @@ LF/CRLF, final-newline presence, and permission mode.
 ## Writes
 
 Model tools never directly write notes or files. They collect proposals for a
-single review batch. Applying rechecks every accepted item's `updated_time` or
-SHA-256. Conflicting items are not overwritten.
+single batch. Review is required by default. A persisted per-chat
+**Auto-apply changes** toggle can apply every proposed item without displaying
+the review batch after an explicit warning. Applying in either mode rechecks
+every item's `updated_time` or SHA-256. Conflicting items are not overwritten.
 
 Assistant response buttons are separate explicit user actions. Insert and
 replace use Joplin editor commands; append rechecks the active note
@@ -47,7 +55,13 @@ replace use Joplin editor commands; append rechecks the active note
 
 File originals are retained under the plugin data directory for exact Undo.
 Retention is newest ten applied runs and no older than seven days. No rollback
-data is stored inside the reviewed folder.
+data is stored inside the reviewed folder. Undo remains available for supported
+note updates and file writes; created notes are not automatically deleted.
+
+Fixed instructions tell the model to treat note/file contents as untrusted data,
+preserve meaning and Markdown, avoid fabricated facts or citations, and keep
+custom instructions subordinate to those rules. These instructions reduce risk
+but do not make model output inherently trustworthy; review important content.
 
 ## Endpoint transport
 

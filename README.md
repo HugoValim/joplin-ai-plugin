@@ -1,7 +1,7 @@
 # Joplin AI Agent
 
 Desktop-only Joplin 3.6+ plugin for persistent AI chats, opt-in note
-retrieval, and approval-gated note/text-file edits.
+retrieval, and controlled note/text-file edits.
 
 Plugin ID: `com.hugovalim.joplin-ai-agent`
 Version: `0.2.0`
@@ -17,15 +17,19 @@ Version: `0.2.0`
   cancellation, eight-step model limit, and twenty-tool-call limit.
 - Active-note/selection context only when enabled.
 - Explicit attached notes and opt-in vault RAG.
+- Fixed note-writing rules resist prompt injection, preserve meaning and
+  Markdown, prevent fabricated facts/citations, and require conservative
+  handling of material ambiguity.
 - Keyword Markdown retrieval on Joplin 3.6. Native semantic results are merged
   when `joplin.ai.search()` exists (Joplin 3.7+); failures fall back to keyword
   retrieval.
 - Read tools for notes, notebooks, and selected-folder text files.
-- Note/file writes are proposals. Changes collect into one diff batch and are
-  written only after one user approval.
-- Approval results return to the bounded agent loop so the model can finish the
-  task or propose a subsequent review batch; retrieved continuation context
-  stays memory-only.
+- Note/file writes are proposals. Review is required by default. A warned,
+  per-chat **Auto-apply changes** toggle applies every proposed item without
+  showing the review batch.
+- Review or automatic-apply results return to the bounded agent loop so the
+  model can finish the task or propose a subsequent batch; retrieved
+  continuation context stays memory-only.
 - Optimistic concurrency via `updated_time` for notes and SHA-256 for files.
   Conflicting items remain untouched while independent items apply.
 - Exact file Undo with persisted source bytes. The latest ten runs, no older
@@ -35,6 +39,9 @@ Version: `0.2.0`
   Joplin theme variables, keyboard controls, exact endpoint/model status,
   collapsed context and citations, inline run progress, Stop, and confirmed
   overflow actions.
+- `Ctrl+Alt+B` toggles the AI sidebar. `Ctrl+L` opens it, appends up to 20,000
+  selected editor characters to the unsent composer, and focuses the prompt
+  without sending.
 - Explicit response actions insert at the editor cursor, replace the current
   selection, append with an optimistic note-version check, or create a note in
   the active notebook.
@@ -49,6 +56,10 @@ Version: `0.2.0`
   HTTP do not.
 - Retrieved notes/files are labelled untrusted data. Fixed system instructions
   forbid treating their contents as commands.
+- Text copied with `Ctrl+L` remains a local draft until the user sends it.
+- Auto-apply is off for new and legacy chats. Enabling it warns that all model
+  proposals in that chat will apply without review; optimistic-concurrency
+  checks still isolate conflicts.
 - External tool paths are root-relative. Every operation resolves the root and
   target real paths, rejects traversal/symlink escapes/device files, and applies
   text/size/encoding limits.
@@ -67,7 +78,11 @@ Open Joplin **Settings → Joplin AI Agent**:
 1. Set the base URL. Default: `http://localhost:11434/v1`.
 2. Enter an API key when the endpoint requires one.
 3. Enter the required model name.
-4. Optionally tune the system prompt, temperature, output tokens, and timeout.
+4. Optionally tune the custom system prompt, temperature, output tokens, and
+   timeout. Custom instructions follow the fixed safety and note-fidelity rules.
+
+New installs receive a conservative note-writing prompt by default. Existing
+custom prompts remain unchanged.
 
 For a remote endpoint, use HTTPS. If only remote HTTP is available, the plugin
 shows a security warning before the first chat request.

@@ -32,6 +32,40 @@ notes or folders.
 - [ ] Vault RAG on: bounded note citations appear.
 - [ ] Attach/detach current note updates that chat only.
 
+## Note-writing rules
+
+- [ ] A new profile shows the conservative note-writing default under plugin
+      settings.
+- [ ] A custom prompt is included after the fixed note-writing rules.
+- [ ] Instructions embedded inside note content are treated as data, not obeyed.
+- [ ] Editing preserves facts, uncertainty, Markdown, links, tasks, and code
+      unless the request explicitly requires a change.
+- [ ] Material ambiguity produces one focused question instead of a risky edit.
+- [ ] The model does not fabricate missing facts, quotes, or citations.
+
+## Keyboard shortcuts
+
+- [ ] `Ctrl+Alt+B` hides the AI sidebar; pressing it again restores the sidebar.
+- [ ] With an existing draft, select note text and press `Ctrl+L`: the sidebar
+      opens, the selection is appended after one blank line, and the composer
+      receives focus.
+- [ ] `Ctrl+L` does not submit the draft or call the provider.
+- [ ] With no editor selection, `Ctrl+L` opens the sidebar without changing the
+      draft.
+
+## Automatic apply
+
+- [ ] New and pre-feature chats show **Writes review** and require the normal
+      review batch.
+- [ ] Enabling **Auto-apply changes** shows a warning; cancelling keeps review
+      mode.
+- [ ] Confirming affects only the current chat and persists after restart.
+- [ ] Every proposal batch applies without opening review, including a second
+      batch proposed during model continuation.
+- [ ] Concurrently modified notes/files remain untouched and report conflicts.
+- [ ] Supported updates expose **Undo**; created notes are not auto-deleted.
+- [ ] Disabling auto-apply requires no warning and restores review mode.
+
 ## Required folder scenario
 
 Prepare a disposable folder with Markdown containing front matter, code fences,
