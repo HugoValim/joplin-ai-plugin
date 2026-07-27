@@ -170,7 +170,7 @@ export class AgentRunner {
     for (const call of calls) {
       assertNotAborted(abortSignal);
       this.observer.onToolStarted?.(call);
-      const result = await this.tools.execute(call, context);
+      const result = await this.executeOneTool(call, context);
       this.observer.onToolCompleted?.(result);
       messages.push({
         role: "tool",
@@ -180,6 +180,17 @@ export class AgentRunner {
       if (result.risk === "propose-write") proposed = true;
     }
     return proposed;
+  }
+
+  private async executeOneTool(
+    call: NormalizedToolCall,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    try {
+      return await this.tools.execute(call, context);
+    } catch (error: unknown) {
+      return toolFailureResult(call, error);
+    }
   }
 }
 
@@ -223,4 +234,32 @@ function assertToolLimit(toolCallCount: number): void {
 function assertNotAborted(abortSignal: AbortSignal): void {
   if (!abortSignal.aborted) return;
   throw new DomainError("ABORTED", "Agent run cancelled", abortSignal.reason);
+}
+
+function toolFailureResult(
+  call: NormalizedToolCall,
+  error: unknown,
+): ToolExecutionResult {
+  if (error instanceof DomainError && shouldRethrowToolError(error)) {
+    throw error;
+  }
+  const failure =
+    error instanceof DomainError
+      ? error
+      : new DomainError("INTERNAL", "Unexpected tool failure", error);
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    risk: "read",
+    output: {
+      error: {
+        code: failure.code,
+        message: failure.message,
+      },
+    },
+  };
+}
+
+function shouldRethrowToolError(error: DomainError): boolean {
+  return error.code === "ABORTED" || error.code === "LIMIT_EXCEEDED";
 }

@@ -259,4 +259,93 @@ describe("AgentRunner", () => {
     ).rejects.toThrow("Agent run cancelled");
     expect(provider.callCount).toBe(0);
   });
+
+  test("returns invalid tool arguments to the model and continues the run", async () => {
+    const provider = new InvalidThenRecoverProvider();
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    registry.register(new StrictMoveTool());
+    const runner = new AgentRunner(
+      provider,
+      registry,
+      new InMemoryChangeSetStore(),
+    );
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-soft-tool",
+        messages: [{ role: "user", content: "move note to root" }],
+        hasFileWorkspace: false,
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.assistantText).toBe("Recovered after bad tool args.");
+    const toolMessage = result.messages.find(
+      (message) => message.role === "tool" && message.toolCallId === "bad-move",
+    );
+    expect(toolMessage?.role).toBe("tool");
+    if (toolMessage?.role !== "tool") throw new Error("Expected tool message");
+    expect(toolMessage.content).toContain("VALIDATION");
+    expect(provider.callCount).toBe(2);
+  });
 });
+
+class InvalidThenRecoverProvider implements AiProvider {
+  public callCount = 0;
+
+  public async *streamChat(): AsyncIterable<ProviderEvent> {
+    this.callCount += 1;
+    if (this.callCount === 1) {
+      yield {
+        type: "tool-calls",
+        calls: [
+          {
+            id: "bad-move",
+            name: "strict_move",
+            arguments: {
+              note_id: "note-1",
+              expected_updated_time: 10,
+            },
+          },
+        ],
+      };
+      yield { type: "completed", finishReason: "tool_calls" };
+      return;
+    }
+    yield { type: "text-delta", delta: "Recovered after bad tool args." };
+    yield { type: "completed", finishReason: "stop" };
+  }
+
+  public async testConnection(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class StrictMoveTool implements AgentTool<
+  { note_id: string; expected_updated_time: number; parent_id: string },
+  { ok: boolean }
+> {
+  public readonly name = "strict_move";
+  public readonly description = "Require destination notebook";
+  public readonly risk = "propose-write" as const;
+  public readonly inputSchema = Type.Object(
+    {
+      note_id: Type.String({ minLength: 1 }),
+      expected_updated_time: Type.Number({ minimum: 0 }),
+      parent_id: Type.String({ minLength: 1 }),
+    },
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}
