@@ -6,7 +6,9 @@ type MessageCallback = (message: unknown) => Promise<unknown>;
 class FakePanelsPort {
   public readonly posted: unknown[] = [];
   public readonly scripts: string[] = [];
+  public readonly visibilityChanges: boolean[] = [];
   public callback: MessageCallback | null = null;
+  private isVisible = false;
 
   public async create(): Promise<string> {
     return "panel-1";
@@ -32,8 +34,24 @@ class FakePanelsPort {
     this.posted.push(message);
   }
 
-  public async show(): Promise<void> {
+  public async show(_handle: string, show = true): Promise<void> {
+    this.isVisible = show;
+    this.visibilityChanges.push(show);
     return Promise.resolve();
+  }
+
+  public async hide(): Promise<void> {
+    this.isVisible = false;
+    this.visibilityChanges.push(false);
+    return Promise.resolve();
+  }
+
+  public async visible(): Promise<boolean> {
+    return this.isVisible;
+  }
+
+  public resetVisibilityChanges(): void {
+    this.visibilityChanges.length = 0;
   }
 }
 
@@ -51,6 +69,29 @@ describe("JoplinPanelPort", () => {
       "./webview/review.css",
       "./webview/index.js",
     ]);
+  });
+
+  test("toggles the initialized sidebar visibility", async () => {
+    const panels = new FakePanelsPort();
+    const panel = new JoplinPanelPort(panels, jest.fn());
+    await panel.initialize(async () => Promise.resolve());
+    panels.resetVisibilityChanges();
+
+    await panel.toggleVisibility();
+    await panel.toggleVisibility();
+
+    expect(panels.visibilityChanges).toEqual([false, true]);
+  });
+
+  test("shows the initialized sidebar", async () => {
+    const panels = new FakePanelsPort();
+    const panel = new JoplinPanelPort(panels, jest.fn());
+    await panel.initialize(async () => Promise.resolve());
+    panels.resetVisibilityChanges();
+
+    await panel.show();
+
+    expect(panels.visibilityChanges).toEqual([true]);
   });
 
   test("returns typed run failure when a validated request fails", async () => {

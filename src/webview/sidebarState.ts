@@ -96,6 +96,8 @@ function reducePluginEvent(
   if (event.type === "state.snapshot") return receiveSnapshot(state, event);
   if (event.type === "workspace.changed")
     return { ...state, activeNote: event.payload.activeNote };
+  if (event.type === "composer.prefill")
+    return { ...state, focusSequence: state.focusSequence + 1 };
   if (event.type === "run.started") return startRun(state, event.runId);
   if (event.type === "assistant.delta")
     return {
@@ -119,6 +121,7 @@ function reduceToolOrTerminalEvent(
       type:
         | "state.snapshot"
         | "workspace.changed"
+        | "composer.prefill"
         | "run.started"
         | "assistant.delta"
         | "run.progress";

@@ -100,6 +100,7 @@ describe("plugin protocol", () => {
       "workspace.changed",
       { activeNote: { id: "note-1", title: "Project brief" } },
     ],
+    ["composer.prefill", { text: "selected note text" }],
     ["run.started", { startedAt: 1 }],
     ["assistant.delta", { delta: "Hello" }],
     ["tool.started", { toolCallId: "tool-1", name: "read_note" }],
@@ -112,7 +113,11 @@ describe("plugin protocol", () => {
     ["run.failed", { code: "PROVIDER", message: "Provider failed." }],
     ["run.completed", { summary: "Done" }],
   ])("accepts %s events", (type, payload) => {
-    const hasRun = !["state.snapshot", "workspace.changed"].includes(type);
+    const hasRun = ![
+      "state.snapshot",
+      "workspace.changed",
+      "composer.prefill",
+    ].includes(type);
     const event = {
       version: PROTOCOL_VERSION,
       messageId: `message-${type}`,
@@ -133,6 +138,18 @@ describe("plugin protocol", () => {
         chatId: "chat-1",
         type: "workspace.changed",
         payload: { activeNote: null },
+      }),
+    ).toThrow("expected a protocol v2 plugin event");
+  });
+
+  test("rejects oversized composer selection", () => {
+    expect(() =>
+      parsePluginEvent({
+        version: PROTOCOL_VERSION,
+        messageId: "selection-oversized",
+        chatId: "bootstrap",
+        type: "composer.prefill",
+        payload: { text: "x".repeat(20_001) },
       }),
     ).toThrow("expected a protocol v2 plugin event");
   });

@@ -138,6 +138,34 @@ describe("App shell", () => {
     expect(document.activeElement).toBe(composer);
   });
 
+  test("appends shortcut selection to the draft without submitting", async () => {
+    const { api } = await renderReadyApp();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    fireEvent.change(composer, { target: { value: "Existing prompt" } });
+    screen.getByRole("button", { name: "New" }).focus();
+
+    await act(async () =>
+      api.emit({
+        version: PROTOCOL_VERSION,
+        messageId: "selection-1",
+        chatId: "bootstrap",
+        type: "composer.prefill",
+        payload: { text: "selected note text" },
+      }),
+    );
+
+    expect(composer.value).toBe("Existing prompt\n\nselected note text");
+    expect(document.activeElement).toBe(composer);
+    expect(
+      api.requests.some(
+        (request) =>
+          (request as { readonly type?: unknown }).type === "chat.submit",
+      ),
+    ).toBe(false);
+  });
+
   test("shows trusted model and active-note title without transcript live region", async () => {
     const { api } = await renderReadyApp();
     await act(async () =>

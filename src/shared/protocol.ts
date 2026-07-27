@@ -15,7 +15,6 @@ const RunEnvelopeProperties = {
   ...EnvelopeProperties,
   runId: IdentifierSchema,
 };
-
 const ChatSubmitSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -27,7 +26,6 @@ const ChatSubmitSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
 const PanelReadySchema = Type.Object(
   {
     ...EnvelopeProperties,
@@ -194,9 +192,7 @@ const PanelRequestSchema = Type.Union([
   NoteOpenSchema,
   AssistantActionSchema,
 ]);
-
 export type PanelRequest = Static<typeof PanelRequestSchema>;
-
 const CitationSchema = Type.Object(
   {
     kind: Type.Union([Type.Literal("note"), Type.Literal("file")]),
@@ -336,6 +332,17 @@ const WorkspaceChangedSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ComposerPrefillSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("composer.prefill"),
+    payload: Type.Object(
+      { text: Type.String({ minLength: 1, maxLength: 20_000 }) },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const RunStartedSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -447,6 +454,7 @@ const RunCompletedSchema = Type.Object(
 const PluginEventSchema = Type.Union([
   StateSnapshotSchema,
   WorkspaceChangedSchema,
+  ComposerPrefillSchema,
   RunStartedSchema,
   AssistantDeltaSchema,
   ToolStartedSchema,
@@ -456,11 +464,9 @@ const PluginEventSchema = Type.Union([
   RunFailedSchema,
   RunCompletedSchema,
 ]);
-
 export type PluginEvent = Static<typeof PluginEventSchema>;
 export type ActiveChatView = Static<typeof ActiveChatSchema>;
 export type ChangeSetView = Static<typeof ChangeSetViewSchema>;
-
 /**
  * Validates a message received from the untrusted sidebar webview.
  *
@@ -475,7 +481,6 @@ export function parsePanelRequest(input: unknown): PanelRequest {
     `Invalid panel message ${safeValue(input)}; expected a protocol v2 panel request`,
   );
 }
-
 /**
  * Validates a message received from the plugin process by the sidebar.
  *

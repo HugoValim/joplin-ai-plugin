@@ -64,7 +64,7 @@ export function useSidebarController(): SidebarController {
   const [acceptedIds, setAcceptedIds] = useAcceptedChanges(
     state.snapshot.activeChat?.pendingChangeSet ?? null,
   );
-  usePanelEvents(dispatch, submissionLock);
+  usePanelEvents(dispatch, submissionLock, setDraft);
   const actions = useSidebarActions(
     state,
     draft,
@@ -80,20 +80,39 @@ export function useSidebarController(): SidebarController {
 function usePanelEvents(
   dispatch: StateDispatch,
   submissionLock: React.MutableRefObject<boolean>,
+  setDraft: React.Dispatch<React.SetStateAction<string>>,
 ): void {
   useEffect(() => {
-    webviewApi.onMessage((input) => {
-      try {
-        const event = parseWebviewPluginEvent(input);
-        if (isTerminalEvent(event)) submissionLock.current = false;
-        dispatch({ type: "plugin", event });
-      } catch (error: unknown) {
-        submissionLock.current = false;
-        dispatch({ type: "post-failed", message: errorMessage(error) });
-      }
-    });
+    webviewApi.onMessage((input) =>
+      receivePanelEvent(input, dispatch, submissionLock, setDraft),
+    );
     postRequest(readyRequest(), dispatch, submissionLock);
-  }, [dispatch, submissionLock]);
+  }, [dispatch, setDraft, submissionLock]);
+}
+
+function receivePanelEvent(
+  input: unknown,
+  dispatch: StateDispatch,
+  submissionLock: React.MutableRefObject<boolean>,
+  setDraft: React.Dispatch<React.SetStateAction<string>>,
+): void {
+  try {
+    const event = parseWebviewPluginEvent(input);
+    if (event.type === "composer.prefill") {
+      setDraft((current) =>
+        appendComposerSelection(current, event.payload.text),
+      );
+    }
+    if (isTerminalEvent(event)) submissionLock.current = false;
+    dispatch({ type: "plugin", event });
+  } catch (error: unknown) {
+    submissionLock.current = false;
+    dispatch({ type: "post-failed", message: errorMessage(error) });
+  }
+}
+
+function appendComposerSelection(current: string, selection: string): string {
+  return current ? `${current}\n\n${selection}` : selection;
 }
 
 function useAcceptedChanges(

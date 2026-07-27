@@ -19,6 +19,8 @@ interface JoplinPanelsPort {
   ): Promise<void>;
   postMessage(handle: string, message: unknown): void;
   show(handle: string, show?: boolean): Promise<void>;
+  hide(handle: string): Promise<void>;
+  visible(handle: string): Promise<boolean>;
 }
 
 export interface PanelPort {
@@ -76,6 +78,40 @@ export class JoplinPanelPort implements PanelPort {
   public post(event: PluginEvent): void {
     if (!this.handle) return;
     this.panels.postMessage(this.handle, parsePluginEvent(event));
+  }
+
+  /**
+   * Shows the initialized sidebar before composer-prefill delivery.
+   *
+   * @example await panel.show()
+   */
+  public async show(): Promise<void> {
+    const handle = this.handle;
+    if (!handle) {
+      throw new Error(
+        "Invalid panel handle null; expected an initialized panel",
+      );
+    }
+    await this.panels.show(handle, true);
+  }
+
+  /**
+   * Toggles the initialized sidebar using Joplin's current visibility state.
+   *
+   * @example await panel.toggleVisibility()
+   */
+  public async toggleVisibility(): Promise<void> {
+    const handle = this.handle;
+    if (!handle) {
+      throw new Error(
+        "Invalid panel handle null; expected an initialized panel",
+      );
+    }
+    if (await this.panels.visible(handle)) {
+      await this.panels.hide(handle);
+      return;
+    }
+    await this.panels.show(handle, true);
   }
 
   private reportRequestFailure(request: PanelRequest, error: unknown): void {

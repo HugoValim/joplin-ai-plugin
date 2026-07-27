@@ -31,6 +31,10 @@ import {
 import { JoplinPanelPort } from "./panelPort";
 import { registerPluginSettings } from "./settings";
 import {
+  registerSelectionToChatShortcut,
+  registerToggleSidebarShortcut,
+} from "./shortcutCommands";
+import {
   JoplinActiveNoteContextSource,
   PerChatWorkspaceResolver,
 } from "./workspaceAdapters";
@@ -103,6 +107,17 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     (config) => new OpenAiCompatibleProvider(config),
   );
   await panel.initialize((request) => controller.handle(request));
+  await registerToggleSidebarShortcut(
+    joplin.commands,
+    joplin.views.menuItems,
+    panel,
+  );
+  await registerSelectionToChatShortcut(
+    joplin.commands,
+    joplin.views.menuItems,
+    panel,
+    activeSource,
+  );
   controller.workspaceChanged(await activeNoteSummary(activeSource));
   await joplin.workspace.onNoteSelectionChange(() => {
     publishActiveNoteSummary(controller, activeSource);
