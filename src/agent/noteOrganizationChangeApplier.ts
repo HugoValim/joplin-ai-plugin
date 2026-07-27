@@ -1,0 +1,221 @@
+import type {
+  NoteMetadataRecord,
+  NoteOrganizationRepository,
+  NotebookMetadataRecord,
+} from "../notes/retriever";
+import type { ProposedChange } from "../persistence/changeSetStore";
+import { DomainError } from "../shared/errors";
+
+type NoteOrganizationChange = Extract<
+  ProposedChange,
+  {
+    kind: "note";
+    operation: "rename" | "move" | "reorder" | "delete";
+  }
+>;
+type NotebookOrganizationChange = Extract<ProposedChange, { kind: "notebook" }>;
+export type OrganizationChange =
+  NoteOrganizationChange | NotebookOrganizationChange;
+
+export type ReadyOrganizationChange =
+  | {
+      readonly kind: "notebook-create";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "notebook"; operation: "create" }
+      >;
+    }
+  | {
+      readonly kind: "note-rename";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "note"; operation: "rename" }
+      >;
+      readonly original: NoteMetadataRecord;
+    }
+  | {
+      readonly kind: "note-move";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "note"; operation: "move" }
+      >;
+      readonly original: NoteMetadataRecord;
+    }
+  | {
+      readonly kind: "note-reorder";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "note"; operation: "reorder" }
+      >;
+      readonly original: NoteMetadataRecord;
+    }
+  | {
+      readonly kind: "note-delete";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "note"; operation: "delete" }
+      >;
+      readonly original: NoteMetadataRecord;
+    }
+  | {
+      readonly kind: "notebook-rename";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "notebook"; operation: "rename" }
+      >;
+      readonly original: NotebookMetadataRecord;
+    }
+  | {
+      readonly kind: "notebook-delete";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "notebook"; operation: "delete" }
+      >;
+      readonly original: NotebookMetadataRecord;
+    };
+
+/**
+ * Validates one organization proposal against current Joplin metadata.
+ *
+ * @example await preflightOrganizationChange(change, repository)
+ */
+export async function preflightOrganizationChange(
+  change: OrganizationChange,
+  repository: NoteOrganizationRepository,
+): Promise<ReadyOrganizationChange> {
+  if (change.kind === "notebook")
+    return preflightNotebookChange(change, repository);
+  return preflightNoteChange(change, repository);
+}
+
+async function preflightNoteChange(
+  change: NoteOrganizationChange,
+  repository: NoteOrganizationRepository,
+): Promise<ReadyOrganizationChange> {
+  const original = await repository.readNoteMetadata(change.noteId);
+  assertOrganizationVersion(change, original);
+  if (change.operation === "rename")
+    return { kind: "note-rename", change, original };
+  if (change.operation === "move")
+    return { kind: "note-move", change, original };
+  if (change.operation === "reorder")
+    return { kind: "note-reorder", change, original };
+  return { kind: "note-delete", change, original };
+}
+
+async function preflightNotebookChange(
+  change: NotebookOrganizationChange,
+  repository: NoteOrganizationRepository,
+): Promise<ReadyOrganizationChange> {
+  if (change.operation === "create") return { kind: "notebook-create", change };
+  const original = await repository.readNotebook(change.notebookId);
+  assertOrganizationVersion(change, original);
+  return change.operation === "rename"
+    ? { kind: "notebook-rename", change, original }
+    : { kind: "notebook-delete", change, original };
+}
+
+/**
+ * Applies one preflighted organization proposal through project-owned ports.
+ *
+ * @example await applyOrganizationChange(ready, repository)
+ */
+export async function applyOrganizationChange(
+  item: ReadyOrganizationChange,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  if (isNotebookReadyChange(item))
+    return applyNotebookOrganizationChange(item, repository);
+  return applyNoteOrganizationChange(item, repository);
+}
+
+type NotebookReadyChange = Extract<
+  ReadyOrganizationChange,
+  { kind: "notebook-create" | "notebook-rename" | "notebook-delete" }
+>;
+type NoteReadyChange = Exclude<ReadyOrganizationChange, NotebookReadyChange>;
+
+function isNotebookReadyChange(
+  item: ReadyOrganizationChange,
+): item is NotebookReadyChange {
+  return item.kind.startsWith("notebook-");
+}
+
+async function applyNotebookOrganizationChange(
+  item: NotebookReadyChange,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  if (item.kind === "notebook-create")
+    return applyNotebookCreate(item, repository);
+  if (item.kind === "notebook-rename")
+    return applyNotebookRename(item, repository);
+  await repository.trashNotebook({
+    notebookId: item.change.notebookId,
+    expectedUpdatedTime: item.change.expectedUpdatedTime,
+  });
+}
+
+async function applyNotebookCreate(
+  item: Extract<ReadyOrganizationChange, { kind: "notebook-create" }>,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  await repository.createNotebook({
+    parentId: item.change.parentId,
+    title: item.change.title,
+  });
+}
+
+async function applyNotebookRename(
+  item: Extract<ReadyOrganizationChange, { kind: "notebook-rename" }>,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  await repository.updateNotebookMetadata({
+    notebookId: item.change.notebookId,
+    expectedUpdatedTime: item.change.expectedUpdatedTime,
+    title: item.change.title,
+  });
+}
+
+async function applyNoteOrganizationChange(
+  item: NoteReadyChange,
+  repository: NoteOrganizationRepository,
+): Promise<void> {
+  if (item.kind === "note-delete") {
+    await repository.trashNote({
+      noteId: item.change.noteId,
+      expectedUpdatedTime: item.change.expectedUpdatedTime,
+    });
+    return;
+  }
+  await repository.updateNoteMetadata(noteMetadataUpdate(item));
+}
+
+function noteMetadataUpdate(
+  item: Extract<
+    ReadyOrganizationChange,
+    { kind: "note-rename" | "note-move" | "note-reorder" }
+  >,
+): Parameters<NoteOrganizationRepository["updateNoteMetadata"]>[0] {
+  const common = {
+    noteId: item.change.noteId,
+    expectedUpdatedTime: item.change.expectedUpdatedTime,
+  };
+  if (item.kind === "note-rename") {
+    return { ...common, title: item.change.title };
+  }
+  if (item.kind === "note-move") {
+    return { ...common, parentId: item.change.parentId };
+  }
+  return { ...common, order: item.change.order };
+}
+
+function assertOrganizationVersion(
+  change: { readonly expectedUpdatedTime: number },
+  current: { readonly id: string; readonly updatedTime: number },
+): void {
+  if (current.updatedTime === change.expectedUpdatedTime) return;
+  throw new DomainError(
+    "CONFLICT",
+    `Item ${current.id} has updated_time ${current.updatedTime}; expected updated_time ${change.expectedUpdatedTime}`,
+  );
+}

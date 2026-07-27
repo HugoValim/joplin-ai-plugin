@@ -43,6 +43,36 @@ describe("InMemoryChangeSetStore", () => {
     expect(restored.getByRun("run-1")).toEqual(persisted);
   });
 
+  test("restores persisted organization proposals", () => {
+    const original = new InMemoryChangeSetStore();
+    original.add("chat-1", "run-1", {
+      kind: "note",
+      operation: "move",
+      noteId: "note-1",
+      parentId: "notebook-2",
+      expectedUpdatedTime: 123,
+      targetLabel: "Note",
+      before: "Notebook: notebook-1",
+      after: "Notebook: notebook-2",
+    });
+    original.add("chat-1", "run-1", {
+      kind: "notebook",
+      operation: "delete",
+      notebookId: "notebook-1",
+      expectedUpdatedTime: 456,
+      targetLabel: "Notebook",
+      before: "Active",
+      after: "Trash",
+    });
+    const persisted = original.getByRun("run-1");
+    expect(persisted).not.toBeNull();
+
+    const restored = new InMemoryChangeSetStore();
+    restored.restore(persisted!);
+
+    expect(restored.getByRun("run-1")).toEqual(persisted);
+  });
+
   test("rejects approval access from another chat or run", () => {
     const store = new InMemoryChangeSetStore();
     store.add("chat-1", "run-1", {

@@ -30,8 +30,70 @@ export interface NoteCreateProposalInput extends ChangeProposalBase {
   readonly title: string;
 }
 
+export interface NotebookCreateProposalInput extends ChangeProposalBase {
+  readonly kind: "notebook";
+  readonly operation: "create";
+  readonly parentId: string;
+  readonly title: string;
+}
+
+export interface NoteRenameProposalInput extends ChangeProposalBase {
+  readonly kind: "note";
+  readonly operation: "rename";
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly title: string;
+}
+
+export interface NoteMoveProposalInput extends ChangeProposalBase {
+  readonly kind: "note";
+  readonly operation: "move";
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId: string;
+}
+
+export interface NoteReorderProposalInput extends ChangeProposalBase {
+  readonly kind: "note";
+  readonly operation: "reorder";
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly order: number;
+}
+
+export interface NoteDeleteProposalInput extends ChangeProposalBase {
+  readonly kind: "note";
+  readonly operation: "delete";
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+}
+
+export interface NotebookRenameProposalInput extends ChangeProposalBase {
+  readonly kind: "notebook";
+  readonly operation: "rename";
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+  readonly title: string;
+}
+
+export interface NotebookDeleteProposalInput extends ChangeProposalBase {
+  readonly kind: "notebook";
+  readonly operation: "delete";
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+}
+
 export type ChangeProposalInput =
-  FileChangeProposalInput | NoteUpdateProposalInput | NoteCreateProposalInput;
+  | FileChangeProposalInput
+  | NoteUpdateProposalInput
+  | NoteCreateProposalInput
+  | NotebookCreateProposalInput
+  | NoteRenameProposalInput
+  | NoteMoveProposalInput
+  | NoteReorderProposalInput
+  | NoteDeleteProposalInput
+  | NotebookRenameProposalInput
+  | NotebookDeleteProposalInput;
 
 interface ProposedChangeBase extends ChangeProposalBase {
   readonly id: string;
@@ -43,7 +105,14 @@ interface ProposedChangeBase extends ChangeProposalBase {
 export type ProposedChange =
   | (ProposedChangeBase & FileChangeProposalInput)
   | (ProposedChangeBase & NoteUpdateProposalInput)
-  | (ProposedChangeBase & NoteCreateProposalInput);
+  | (ProposedChangeBase & NoteCreateProposalInput)
+  | (ProposedChangeBase & NotebookCreateProposalInput)
+  | (ProposedChangeBase & NoteRenameProposalInput)
+  | (ProposedChangeBase & NoteMoveProposalInput)
+  | (ProposedChangeBase & NoteReorderProposalInput)
+  | (ProposedChangeBase & NoteDeleteProposalInput)
+  | (ProposedChangeBase & NotebookRenameProposalInput)
+  | (ProposedChangeBase & NotebookDeleteProposalInput);
 
 export interface ChangeSet {
   readonly id: string;
@@ -102,6 +171,80 @@ const NoteCreateSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const NotebookCreateSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("notebook"),
+    operation: Type.Literal("create"),
+    parentId: Type.String({ maxLength: 128 }),
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+const NoteRenameSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("note"),
+    operation: Type.Literal("rename"),
+    noteId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+const NoteMoveSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("note"),
+    operation: Type.Literal("move"),
+    noteId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    parentId: Type.String({ minLength: 1, maxLength: 128 }),
+  },
+  { additionalProperties: false },
+);
+const NoteReorderSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("note"),
+    operation: Type.Literal("reorder"),
+    noteId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    order: Type.Number(),
+  },
+  { additionalProperties: false },
+);
+const NoteDeleteSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("note"),
+    operation: Type.Literal("delete"),
+    noteId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+const NotebookRenameSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("notebook"),
+    operation: Type.Literal("rename"),
+    notebookId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+const NotebookDeleteSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("notebook"),
+    operation: Type.Literal("delete"),
+    notebookId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
 export const ChangeSetSchema = Type.Object(
   {
     id: Type.String({ minLength: 1, maxLength: 128 }),
@@ -115,7 +258,18 @@ export const ChangeSetSchema = Type.Object(
       Type.Literal("discarded"),
     ]),
     changes: Type.Array(
-      Type.Union([FileChangeSchema, NoteUpdateSchema, NoteCreateSchema]),
+      Type.Union([
+        FileChangeSchema,
+        NoteUpdateSchema,
+        NoteCreateSchema,
+        NotebookCreateSchema,
+        NoteRenameSchema,
+        NoteMoveSchema,
+        NoteReorderSchema,
+        NoteDeleteSchema,
+        NotebookRenameSchema,
+        NotebookDeleteSchema,
+      ]),
       { maxItems: 50 },
     ),
   },
@@ -274,12 +428,7 @@ export class InMemoryChangeSetStore implements ChangeSetStore {
 }
 
 function createProposedChange(input: ChangeProposalInput): ProposedChange {
-  const targetPath =
-    input.kind === "file"
-      ? input.relativePath
-      : input.operation === "create"
-        ? input.title
-        : input.noteId;
+  const targetPath = proposalTarget(input);
   return {
     ...input,
     id: randomUUID(),
@@ -294,6 +443,12 @@ function createProposedChange(input: ChangeProposalInput): ProposedChange {
     ),
     status: "proposed",
   };
+}
+
+function proposalTarget(input: ChangeProposalInput): string {
+  if (input.kind === "file") return input.relativePath;
+  if (input.operation === "create") return input.title;
+  return input.kind === "note" ? input.noteId : input.notebookId;
 }
 
 function assertScope(changeSet: ChangeSet, scope: ChangeSetScope): void {

@@ -19,6 +19,7 @@ import { ChatStore } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
 import { registerFileTools } from "../tools/fileTools";
+import { registerNoteOrganizationTools } from "../tools/noteOrganizationTools";
 import { registerNoteTools } from "../tools/noteTools";
 import { ToolRegistry } from "../tools/toolRegistry";
 import { ChatController } from "./chatController";
@@ -81,6 +82,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
   const changes = new InMemoryChangeSetStore();
   const tools = new ToolRegistry();
   registerNoteTools(tools, notes, changes);
+  registerNoteOrganizationTools(tools, notes, changes);
   registerFileTools(tools, workspaces, changes);
   const dataDirectory = await joplin.plugins.dataDir();
   const chats = new ChatStore(dataDirectory, jsonFiles, structuredWarning);
@@ -89,6 +91,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     notes,
     workspaces,
     new JsonRollbackStore(dataDirectory, jsonFiles),
+    notes,
   );
   const dialogs = new JoplinDialogAdapter(joplin);
   const panel = new JoplinPanelPort(joplin.views.panels, structuredWarning);

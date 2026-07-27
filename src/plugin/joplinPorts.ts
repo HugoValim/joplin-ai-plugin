@@ -55,6 +55,18 @@ export class JoplinDataAdapter implements JoplinDataPort {
   ): Promise<unknown> {
     return (await this.joplin.data.put(path, query, body)) as unknown;
   }
+
+  /**
+   * Delegates recoverable item deletion to Joplin's Data API.
+   *
+   * @example await adapter.delete(['notes', noteId])
+   */
+  public async delete(
+    path: string[],
+    query?: Record<string, unknown>,
+  ): Promise<unknown> {
+    return (await this.joplin.data.delete(path, query)) as unknown;
+  }
 }
 
 export class JoplinDialogAdapter implements DialogPort {

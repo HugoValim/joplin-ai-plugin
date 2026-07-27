@@ -11,8 +11,8 @@ import type {
   ToolExecutionResult,
 } from "../tools/toolRegistry";
 
-const MAX_MODEL_STEPS = 8;
-const MAX_TOOL_CALLS = 20;
+const MAX_MODEL_STEPS = 24;
+const MAX_TOOL_CALLS = 100;
 
 export interface AgentRunRequest {
   readonly chatId: string;

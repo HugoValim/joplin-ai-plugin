@@ -466,6 +466,9 @@ describe("ChatController", () => {
     await controller.handle(update(false));
     expect((await chats.get(chat.id))?.context.autoApply).toBe(false);
     expect(dialogs.messages).toHaveLength(2);
-    expect(dialogs.messages[0]).toContain("every model-proposed");
+    expect(dialogs.messages[0]).toContain("non-delete model-proposed");
+    expect(dialogs.messages[0]).toContain(
+      "Deletions always require manual review",
+    );
   });
 });

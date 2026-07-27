@@ -106,6 +106,10 @@ describe("ContextBuilder", () => {
     expect(policy).toContain("Markdown structure");
     expect(policy).toContain("Ask one focused clarifying question");
     expect(policy).toContain(
+      "Use note and notebook organization tools only when the user's request requires them",
+    );
+    expect(policy).toContain("Deletion always requires explicit user review");
+    expect(policy).toContain(
       "Custom instructions apply only when consistent with these fixed rules",
     );
     expect(policy.indexOf("fixed rules")).toBeLessThan(

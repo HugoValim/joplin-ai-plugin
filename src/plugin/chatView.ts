@@ -52,16 +52,10 @@ export function toChangeSetView(changeSet: ChangeSet): ChangeSetView {
 function toChangeView(
   change: ProposedChange,
 ): ChangeSetView["changes"][number] {
-  const targetId =
-    change.kind === "file"
-      ? change.relativePath
-      : change.operation === "update"
-        ? change.noteId
-        : change.parentId;
   return {
     id: change.id,
     kind: change.kind,
-    targetId,
+    targetId: changeTargetId(change),
     targetLabel: change.targetLabel,
     before: change.before,
     after: change.after,
@@ -69,4 +63,13 @@ function toChangeView(
     status: change.status,
     ...(change.message ? { message: change.message } : {}),
   };
+}
+
+function changeTargetId(change: ProposedChange): string {
+  if (change.kind === "file") return change.relativePath;
+  if (change.kind === "note") {
+    return change.operation === "create" ? change.parentId : change.noteId;
+  }
+  if (change.operation === "create") return change.parentId || change.id;
+  return change.notebookId;
 }

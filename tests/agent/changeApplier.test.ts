@@ -10,12 +10,20 @@ import type {
   TextSearchMatch,
 } from "../../src/fileWorkspace/fileWorkspaceRepository";
 import type {
+  CreateNotebookInput,
   CreateNoteInput,
+  NoteMetadataRecord,
+  NoteOrganizationRepository,
   NoteRecord,
   NoteRepository,
   NoteSearchHit,
+  NotebookMetadataRecord,
   NotebookRecord,
+  TrashNoteInput,
+  TrashNotebookInput,
   UpdateNoteBodyInput,
+  UpdateNoteMetadataInput,
+  UpdateNotebookMetadataInput,
 } from "../../src/notes/retriever";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 
@@ -36,6 +44,77 @@ class UnusedNoteRepository implements NoteRepository {
     _input: UpdateNoteBodyInput,
   ): Promise<NoteRecord> {
     throw new Error("No note changes expected");
+  }
+}
+
+class RecordingNoteOrganizationRepository implements NoteOrganizationRepository {
+  public readonly createdNotebooks: CreateNotebookInput[] = [];
+  public readonly noteMetadataUpdates: UpdateNoteMetadataInput[] = [];
+  public readonly trashedNotes: TrashNoteInput[] = [];
+  public readonly notebookMetadataUpdates: UpdateNotebookMetadataInput[] = [];
+  public readonly trashedNotebooks: TrashNotebookInput[] = [];
+  public readonly note: NoteMetadataRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Draft",
+    updatedTime: 10,
+    order: 100,
+  };
+  public readonly notebook: NotebookMetadataRecord = {
+    id: "folder-1",
+    parentId: "",
+    title: "Projects",
+    updatedTime: 40,
+  };
+
+  public async readNoteMetadata(): Promise<NoteMetadataRecord> {
+    return this.note;
+  }
+  public async listNotebookNotes(): Promise<readonly NoteMetadataRecord[]> {
+    return [];
+  }
+  public async readNotebook(): Promise<NotebookMetadataRecord> {
+    return this.notebook;
+  }
+  public async createNotebook(
+    input: CreateNotebookInput,
+  ): Promise<NotebookMetadataRecord> {
+    this.createdNotebooks.push(input);
+    return {
+      id: "folder-created",
+      parentId: input.parentId,
+      title: input.title,
+      updatedTime: 1,
+    };
+  }
+  public async updateNoteMetadata(
+    input: UpdateNoteMetadataInput,
+  ): Promise<NoteMetadataRecord> {
+    this.noteMetadataUpdates.push(input);
+    return {
+      ...this.note,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+      ...(input.order !== undefined ? { order: input.order } : {}),
+      updatedTime: 11,
+    };
+  }
+  public async updateNotebookMetadata(
+    input: UpdateNotebookMetadataInput,
+  ): Promise<NotebookMetadataRecord> {
+    this.notebookMetadataUpdates.push(input);
+    return {
+      ...this.notebook,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+      updatedTime: 41,
+    };
+  }
+  public async trashNote(input: TrashNoteInput): Promise<void> {
+    this.trashedNotes.push(input);
+  }
+  public async trashNotebook(input: TrashNotebookInput): Promise<void> {
+    this.trashedNotebooks.push(input);
   }
 }
 
@@ -117,6 +196,257 @@ class FakeFileWorkspaceResolver implements FileWorkspaceWriteResolver {
 }
 
 describe("ChangeApplier", () => {
+  test("applies an approved note rename", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-rename", {
+      kind: "note",
+      operation: "rename",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      title: "Published",
+      targetLabel: "Draft",
+      before: "Title: Draft",
+      after: "Title: Published",
+    });
+    const changeSet = changes.getByRun("run-rename");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-rename",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.noteMetadataUpdates).toEqual([
+      {
+        noteId: "note-1",
+        expectedUpdatedTime: 10,
+        title: "Published",
+      },
+    ]);
+  });
+
+  test("applies an approved note move", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-move", {
+      kind: "note",
+      operation: "move",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      parentId: "folder-2",
+      targetLabel: "Draft",
+      before: "Notebook: folder-1",
+      after: "Notebook: folder-2",
+    });
+    const changeSet = changes.getByRun("run-move");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-move",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.noteMetadataUpdates).toEqual([
+      {
+        noteId: "note-1",
+        expectedUpdatedTime: 10,
+        parentId: "folder-2",
+      },
+    ]);
+  });
+
+  test("applies an approved note reorder", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-reorder", {
+      kind: "note",
+      operation: "reorder",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      order: 250,
+      targetLabel: "Draft",
+      before: "Manual order: 100",
+      after: "Manual order: 250",
+    });
+    const changeSet = changes.getByRun("run-reorder");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-reorder",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.noteMetadataUpdates).toEqual([
+      {
+        noteId: "note-1",
+        expectedUpdatedTime: 10,
+        order: 250,
+      },
+    ]);
+  });
+
+  test("applies an approved recoverable note deletion", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-delete", {
+      kind: "note",
+      operation: "delete",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      targetLabel: "Draft",
+      before: "Title: Draft",
+      after: "Moved to Joplin Trash (recoverable).",
+    });
+    const changeSet = changes.getByRun("run-delete");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-delete",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.trashedNotes).toEqual([
+      { noteId: "note-1", expectedUpdatedTime: 10 },
+    ]);
+  });
+
+  test("applies an approved notebook creation", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-notebook", {
+      kind: "notebook",
+      operation: "create",
+      parentId: "folder-1",
+      title: "Archive",
+      targetLabel: "Archive",
+      before: "Notebook does not exist.",
+      after: "Title: Archive\nParent notebook: folder-1",
+    });
+    const changeSet = changes.getByRun("run-notebook");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-notebook",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.createdNotebooks).toEqual([
+      { parentId: "folder-1", title: "Archive" },
+    ]);
+  });
+
+  test("applies an approved notebook rename", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-notebook-rename", {
+      kind: "notebook",
+      operation: "rename",
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+      title: "Active projects",
+      targetLabel: "Projects",
+      before: "Title: Projects",
+      after: "Title: Active projects",
+    });
+    const changeSet = changes.getByRun("run-notebook-rename");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-notebook-rename",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.notebookMetadataUpdates).toEqual([
+      {
+        notebookId: "folder-1",
+        expectedUpdatedTime: 40,
+        title: "Active projects",
+      },
+    ]);
+  });
+
+  test("applies an approved recoverable notebook deletion", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-notebook-delete", {
+      kind: "notebook",
+      operation: "delete",
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+      targetLabel: "Projects",
+      before: "Title: Projects",
+      after: "Moved to Joplin Trash with contained items (recoverable).",
+    });
+    const changeSet = changes.getByRun("run-notebook-delete");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-notebook-delete",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.trashedNotebooks).toEqual([
+      { notebookId: "folder-1", expectedUpdatedTime: 40 },
+    ]);
+  });
+
   test("applies independent files, reports conflicts, and undoes exact originals", async () => {
     const changes = new InMemoryChangeSetStore();
     const good = changes.add("chat-1", "run-1", {

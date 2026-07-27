@@ -15,15 +15,19 @@ import {
 class RepeatingToolProvider implements AiProvider {
   public callCount = 0;
 
+  public constructor(private readonly toolsPerStep = 1) {}
+
   public async *streamChat(
     _request: StreamChatRequest,
     _abortSignal: AbortSignal,
   ): AsyncIterable<ProviderEvent> {
     this.callCount += 1;
-    yield {
-      type: "tool-calls",
-      calls: [{ id: `call-${this.callCount}`, name: "echo", arguments: {} }],
-    };
+    const calls = Array.from({ length: this.toolsPerStep }, (_, index) => ({
+      id: `call-${this.callCount}-${index + 1}`,
+      name: "echo",
+      arguments: {},
+    }));
+    yield { type: "tool-calls", calls };
     yield { type: "completed", finishReason: "tool_calls" };
   }
 
@@ -129,7 +133,7 @@ class ProposeTool implements AgentTool<
 }
 
 describe("AgentRunner", () => {
-  test("stops after eight model steps", async () => {
+  test("stops after twenty-four model steps", async () => {
     const provider = new RepeatingToolProvider();
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
@@ -149,8 +153,32 @@ describe("AgentRunner", () => {
         },
         new AbortController().signal,
       ),
-    ).rejects.toThrow("8 model steps");
-    expect(provider.callCount).toBe(8);
+    ).rejects.toThrow("24 model steps");
+    expect(provider.callCount).toBe(24);
+  });
+
+  test("stops when parallel tool batches exceed one hundred calls", async () => {
+    const provider = new RepeatingToolProvider(10);
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    const runner = new AgentRunner(
+      provider,
+      registry,
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      runner.run(
+        {
+          chatId: "chat-1",
+          runId: "run-1",
+          messages: [{ role: "user", content: "Many tools" }],
+          hasFileWorkspace: false,
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("expected at most 100");
+    expect(provider.callCount).toBe(11);
   });
 
   test("pauses after collecting proposed writes", async () => {

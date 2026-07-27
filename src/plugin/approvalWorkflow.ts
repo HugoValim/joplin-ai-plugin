@@ -69,7 +69,7 @@ export class ApprovalWorkflow {
     changeSet: ChangeSet,
     autoApply: boolean,
   ): Promise<void> {
-    if (autoApply) {
+    if (autoApply && !requiresManualReview(changeSet)) {
       this.postAutomaticProgress(changeSet);
       await this.applyRequest(automaticApplyRequest(changeSet), true);
       return;
@@ -371,6 +371,12 @@ export class ApprovalWorkflow {
       pendingChangeSet: null,
     });
   }
+}
+
+function requiresManualReview(changeSet: ChangeSet): boolean {
+  return changeSet.changes.some(
+    (change) => "operation" in change && change.operation === "delete",
+  );
 }
 
 function automaticApplyRequest(

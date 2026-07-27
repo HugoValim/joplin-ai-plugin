@@ -235,6 +235,9 @@ describe("App shell", () => {
     const toggle = screen.getByRole("checkbox", {
       name: /Auto-apply changes/,
     });
+    expect(
+      screen.getByText(/Deletions still require manual review/),
+    ).toBeTruthy();
 
     fireEvent.click(toggle);
 

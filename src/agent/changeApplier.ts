@@ -3,7 +3,11 @@ import type {
   TextFileSnapshot,
   TextSearchMatch,
 } from "../fileWorkspace/fileWorkspaceRepository";
-import type { NoteRecord, NoteRepository } from "../notes/retriever";
+import type {
+  NoteOrganizationRepository,
+  NoteRecord,
+  NoteRepository,
+} from "../notes/retriever";
 import type {
   ChangeSet,
   ChangeSetScope,
@@ -11,6 +15,11 @@ import type {
   ProposedChange,
 } from "../persistence/changeSetStore";
 import { DomainError, safeValue } from "../shared/errors";
+import {
+  applyOrganizationChange,
+  preflightOrganizationChange,
+  type ReadyOrganizationChange,
+} from "./noteOrganizationChangeApplier";
 
 export interface FileWorkspaceWritePort {
   listTextFiles(): Promise<readonly TextFileSnapshot[]>;
@@ -119,7 +128,8 @@ type ReadyChange =
         ProposedChange,
         { kind: "note"; operation: "create" }
       >;
-    };
+    }
+  | ReadyOrganizationChange;
 
 export class ChangeApplier {
   public constructor(
@@ -127,6 +137,7 @@ export class ChangeApplier {
     private readonly notes: NoteRepository,
     private readonly workspaces: FileWorkspaceWriteResolver,
     private readonly rollbacks: RollbackStore,
+    private readonly organizations: NoteOrganizationRepository | null = null,
   ) {}
 
   /**
@@ -235,7 +246,19 @@ export class ChangeApplier {
       const original = await workspace.captureRollback(change.relativePath);
       return { kind: "file", change, chatId, workspace, original };
     }
+    if (change.kind === "notebook") {
+      return preflightOrganizationChange(
+        change,
+        requireOrganizations(this.organizations),
+      );
+    }
     if (change.operation === "create") return { kind: "note-create", change };
+    if (change.operation !== "update") {
+      return preflightOrganizationChange(
+        change,
+        requireOrganizations(this.organizations),
+      );
+    }
     const original = await this.notes.readNote(change.noteId);
     assertNoteVersion(change, original);
     return { kind: "note-update", change, original };
@@ -279,6 +302,13 @@ export class ChangeApplier {
         title: item.change.title,
         body: item.change.after,
       });
+      return null;
+    }
+    if (item.kind !== "note-update") {
+      await applyOrganizationChange(
+        item,
+        requireOrganizations(this.organizations),
+      );
       return null;
     }
     const applied = await this.notes.updateNoteBody({
@@ -334,6 +364,16 @@ function requireWorkspace(
   throw new DomainError(
     "NOT_AVAILABLE",
     `Chat ${chatId} has no file workspace; expected its selected folder`,
+  );
+}
+
+function requireOrganizations(
+  repository: NoteOrganizationRepository | null,
+): NoteOrganizationRepository {
+  if (repository) return repository;
+  throw new DomainError(
+    "NOT_AVAILABLE",
+    "Note organization repository is unavailable; expected configured Joplin data access",
   );
 }
 

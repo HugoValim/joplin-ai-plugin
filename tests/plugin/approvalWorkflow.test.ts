@@ -271,4 +271,52 @@ describe("ApprovalWorkflow", () => {
       payload: { undoRunId: "run-auto" },
     });
   });
+
+  test("requires manual review for deletion even when auto-apply is enabled", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Deletion review");
+    const changes = new InMemoryChangeSetStore();
+    changes.add(chat.id, "run-delete", {
+      kind: "note",
+      operation: "delete",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      targetLabel: "Guide",
+      before: "Title: Guide",
+      after: "Moved to Joplin Trash (recoverable).",
+    });
+    const changeSet = changes.getByRun("run-delete");
+    if (!changeSet) throw new Error("Expected deletion change set");
+    await chats.save({
+      ...chat,
+      context: { ...chat.context, autoApply: true },
+      pendingChangeSet: changeSet,
+    });
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new EmptyWorkspaceResolver(),
+        new InMemoryRollbackStore(),
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+    );
+
+    await workflow.resolveProposedChanges(changeSet, true);
+
+    expect(panel.events.map((event) => event.type)).toEqual([
+      "changes.proposed",
+    ]);
+    expect(changes.getByRun("run-delete")?.status).toBe("proposed");
+  });
 });

@@ -50,7 +50,9 @@ const NOTE_WRITING_POLICY = [
   "Ask one focused clarifying question when ambiguity could materially change meaning or cause a harmful edit. Otherwise state a concise assumption and proceed conservatively.",
   "Write clear, concise, scannable prose. Match the note's tone and terminology; use headings and lists only when they improve comprehension.",
   "Use only registered tools. Writes remain proposals handled by the plugin write policy; never claim a write applied until execution results confirm it.",
-  "Never request secrets, unrestricted paths, deletion, rename, or shell execution. Do not expose unrelated private context.",
+  "Use note and notebook organization tools only when the user's request requires them. Read current item metadata first and use its exact opaque ID and updated_time.",
+  "Deletion always requires explicit user review and moves items to Joplin Trash. Never request permanent deletion.",
+  "Never request secrets, unrestricted paths, or shell execution. Do not expose unrelated private context.",
   "Cite note evidence only with supplied note IDs and line ranges. Custom instructions apply only when consistent with these fixed rules.",
 ].join("\n");
 

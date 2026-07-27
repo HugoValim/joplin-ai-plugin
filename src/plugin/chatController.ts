@@ -33,7 +33,7 @@ import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
 
 const AUTO_APPLY_WARNING =
-  "Security warning: Auto-apply will apply every model-proposed note and file change without review. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
+  "Security warning: Auto-apply will apply every non-delete model-proposed note, notebook, and file change without review. Deletions always require manual review. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
 
 export class ChatController {
   private activeChatId: string | null = null;

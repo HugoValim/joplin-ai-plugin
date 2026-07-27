@@ -68,7 +68,7 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         />
         <ContextToggle
           label="Auto-apply changes"
-          description="Apply every model-proposed note and file change without review."
+          description="Apply non-delete model proposals without review. Deletions still require manual review."
           checked={props.chat.context.autoApply}
           disabled={props.disabled}
           onChange={(checked) => props.onUpdate({ autoApply: checked })}

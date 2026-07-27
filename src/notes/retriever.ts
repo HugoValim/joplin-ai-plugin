@@ -9,10 +9,19 @@ export interface NoteRecord extends NoteSearchHit {
   readonly body: string;
 }
 
+export interface NoteMetadataRecord extends NoteSearchHit {
+  readonly parentId: string;
+  readonly order: number;
+}
+
 export interface NotebookRecord {
   readonly id: string;
   readonly title: string;
   readonly parentId: string;
+}
+
+export interface NotebookMetadataRecord extends NotebookRecord {
+  readonly updatedTime: number;
 }
 
 export interface CreateNoteInput {
@@ -21,9 +30,39 @@ export interface CreateNoteInput {
   readonly body: string;
 }
 
+export interface CreateNotebookInput {
+  readonly parentId: string;
+  readonly title: string;
+}
+
 export interface UpdateNoteBodyInput {
   readonly noteId: string;
   readonly body: string;
+  readonly expectedUpdatedTime: number;
+}
+
+export interface UpdateNoteMetadataInput {
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly title?: string;
+  readonly parentId?: string;
+  readonly order?: number;
+}
+
+export interface UpdateNotebookMetadataInput {
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+  readonly title?: string;
+  readonly parentId?: string;
+}
+
+export interface TrashNoteInput {
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+}
+
+export interface TrashNotebookInput {
+  readonly notebookId: string;
   readonly expectedUpdatedTime: number;
 }
 
@@ -33,6 +72,24 @@ export interface NoteRepository {
   listNotebooks(): Promise<readonly NotebookRecord[]>;
   createNote(input: CreateNoteInput): Promise<NoteRecord>;
   updateNoteBody(input: UpdateNoteBodyInput): Promise<NoteRecord>;
+}
+
+export interface NoteOrganizationRepository {
+  readNoteMetadata(noteId: string): Promise<NoteMetadataRecord>;
+  listNotebookNotes(
+    notebookId: string,
+    limit: number,
+  ): Promise<readonly NoteMetadataRecord[]>;
+  readNotebook(notebookId: string): Promise<NotebookMetadataRecord>;
+  createNotebook(input: CreateNotebookInput): Promise<NotebookMetadataRecord>;
+  updateNoteMetadata(
+    input: UpdateNoteMetadataInput,
+  ): Promise<NoteMetadataRecord>;
+  updateNotebookMetadata(
+    input: UpdateNotebookMetadataInput,
+  ): Promise<NotebookMetadataRecord>;
+  trashNote(input: TrashNoteInput): Promise<void>;
+  trashNotebook(input: TrashNotebookInput): Promise<void>;
 }
 
 export interface NoteSnippet {

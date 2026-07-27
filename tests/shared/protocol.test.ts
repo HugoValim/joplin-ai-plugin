@@ -90,6 +90,34 @@ describe("panel protocol", () => {
 });
 
 describe("plugin protocol", () => {
+  test("accepts a notebook organization proposal", () => {
+    const event = {
+      version: PROTOCOL_VERSION,
+      messageId: "message-notebook-change",
+      chatId: "chat-1",
+      runId: "run-1",
+      type: "changes.proposed",
+      payload: {
+        changeSetId: "changes-1",
+        runId: "run-1",
+        changes: [
+          {
+            id: "change-1",
+            kind: "notebook",
+            targetId: "folder-1",
+            targetLabel: "Projects",
+            before: "Title: Projects",
+            after: "Title: Active projects",
+            diff: "notebook diff",
+            status: "proposed",
+          },
+        ],
+      },
+    };
+
+    expect(parsePluginEvent(event)).toEqual(event);
+  });
+
   test.each([
     [
       "state.snapshot",

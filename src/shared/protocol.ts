@@ -34,7 +34,6 @@ const PanelReadySchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
 const ChatCreateSchema = Type.Object(
   {
     ...EnvelopeProperties,
@@ -46,7 +45,6 @@ const ChatCreateSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
 const ChatSelectSchema = Type.Object(
   {
     ...EnvelopeProperties,
@@ -55,7 +53,6 @@ const ChatSelectSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
 const ChatMaintenanceSchema = Type.Object(
   {
     ...EnvelopeProperties,
@@ -64,7 +61,6 @@ const ChatMaintenanceSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
 const RunCancelSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -237,7 +233,11 @@ const ContextSettingsSchema = Type.Object(
 const ChangeViewSchema = Type.Object(
   {
     id: IdentifierSchema,
-    kind: Type.Union([Type.Literal("note"), Type.Literal("file")]),
+    kind: Type.Union([
+      Type.Literal("note"),
+      Type.Literal("notebook"),
+      Type.Literal("file"),
+    ]),
     targetId: IdentifierSchema,
     targetLabel: Type.String({ minLength: 1, maxLength: 1_000 }),
     before: Type.String({ maxLength: 2_000_000 }),
