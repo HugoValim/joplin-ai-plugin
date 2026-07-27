@@ -1,0 +1,181 @@
+import type {
+  AiProvider,
+  ProviderEvent,
+  StreamChatRequest,
+} from "../../src/providers/types";
+import {
+  ChangeApplier,
+  InMemoryRollbackStore,
+  type FileWorkspaceWritePort,
+  type FileWorkspaceWriteResolver,
+} from "../../src/agent/changeApplier";
+import type {
+  CreateNoteInput,
+  NoteRecord,
+  NoteRepository,
+  NoteSearchHit,
+  NotebookRecord,
+  UpdateNoteBodyInput,
+} from "../../src/notes/retriever";
+import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
+import { ChatStore } from "../../src/persistence/chatStore";
+import { ApprovalWorkflow } from "../../src/plugin/approvalWorkflow";
+import type { PanelPort } from "../../src/plugin/panelPort";
+import { PluginEventSender } from "../../src/plugin/pluginEventSender";
+import { RunCancellationRegistry } from "../../src/plugin/runCancellationRegistry";
+import type { PluginEvent } from "../../src/shared/protocol";
+import { ToolRegistry } from "../../src/tools/toolRegistry";
+import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
+
+class MutableNoteRepository implements NoteRepository {
+  public note: NoteRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Guide",
+    body: "Old",
+    updatedTime: 10,
+  };
+
+  public async searchNotes(): Promise<readonly NoteSearchHit[]> {
+    return [];
+  }
+
+  public async readNote(): Promise<NoteRecord> {
+    return this.note;
+  }
+
+  public async listNotebooks(): Promise<readonly NotebookRecord[]> {
+    return [];
+  }
+
+  public async createNote(_input: CreateNoteInput): Promise<NoteRecord> {
+    throw new Error("Unexpected create");
+  }
+
+  public async updateNoteBody(input: UpdateNoteBodyInput): Promise<NoteRecord> {
+    if (this.note.updatedTime !== input.expectedUpdatedTime) {
+      throw new Error("Concurrent note change");
+    }
+    this.note = { ...this.note, body: input.body, updatedTime: 11 };
+    return this.note;
+  }
+}
+
+class EmptyWorkspaceResolver implements FileWorkspaceWriteResolver {
+  public resolve(): FileWorkspaceWritePort | null {
+    return null;
+  }
+}
+
+class FinalTextProvider implements AiProvider {
+  public lastRequest: StreamChatRequest | null = null;
+
+  public async *streamChat(
+    request: StreamChatRequest,
+  ): AsyncIterable<ProviderEvent> {
+    this.lastRequest = request;
+    yield { type: "text-delta", delta: "Applied successfully." };
+    yield { type: "completed", finishReason: "stop" };
+  }
+
+  public async testConnection(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class RecordingPanelPort implements PanelPort {
+  public readonly events: PluginEvent[] = [];
+
+  public async initialize(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public post(event: PluginEvent): void {
+    this.events.push(event);
+  }
+}
+
+describe("ApprovalWorkflow", () => {
+  test("applies a batch, returns results to the model, and persists continuation", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Review");
+    const changes = new InMemoryChangeSetStore();
+    const change = changes.add(chat.id, "run-1", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "New",
+      expectedUpdatedTime: 10,
+    });
+    const changeSet = changes.getByRun("run-1");
+    if (!changeSet) throw new Error("Expected change set");
+    await chats.save({
+      ...chat,
+      pendingChangeSet: changeSet,
+      runSummaries: [
+        {
+          runId: "run-1",
+          status: "awaiting-approval",
+          summary: "Changes proposed",
+          completedAt: 1,
+        },
+      ],
+    });
+    const notes = new MutableNoteRepository();
+    const provider = new FinalTextProvider();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        new EmptyWorkspaceResolver(),
+        new InMemoryRollbackStore(),
+      ),
+      new ToolRegistry(),
+      { createWithConfirmation: async () => provider },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+    );
+    workflow.remember(
+      changeSet,
+      {
+        messages: [{ role: "user", content: "Improve the guide" }],
+        nextStep: 2,
+        toolCallCount: 1,
+      },
+      chat.id,
+      false,
+      [],
+    );
+
+    await workflow.apply({
+      version: 1,
+      messageId: "message-1",
+      chatId: chat.id,
+      runId: "run-1",
+      type: "changes.apply",
+      payload: { changeSetId: changeSet.id, acceptedIds: [change.id] },
+    });
+
+    expect(notes.note.body).toBe("New");
+    expect(
+      provider.lastRequest?.messages.some((message) =>
+        message.content.includes('"status":"applied"'),
+      ),
+    ).toBe(true);
+    expect((await chats.get(chat.id))?.messages.at(-1)?.content).toBe(
+      "Applied successfully.",
+    );
+    expect(panel.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "run.progress",
+      "assistant.delta",
+      "run.completed",
+    ]);
+  });
+});

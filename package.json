@@ -1,0 +1,64 @@
+{
+  "name": "joplin-plugin-joplin-ai-agent",
+  "version": "0.1.0",
+  "description": "Persistent AI chats, opt-in note retrieval, and controlled note/file editing for Joplin.",
+  "scripts": {
+    "build:plugin": "webpack --env joplin-plugin-config=buildMain",
+    "build:webview": "webpack --config webpack.webview.js",
+    "dist": "npm run build:plugin && npm run build:webview && webpack --env joplin-plugin-config=buildExtraScripts && webpack --env joplin-plugin-config=createArchive",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,html,json}\" \"tests/**/*.ts\" \"*.{json,js,mjs,md}\"",
+    "lint": "eslint src tests",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run dist",
+    "updateVersion": "webpack --env joplin-plugin-config=updateVersion",
+    "update": "npm install -g generator-joplin && yo joplin --node-package-manager npm --update --force"
+  },
+  "license": "MIT",
+  "keywords": [
+    "joplin-plugin",
+    "ai",
+    "rag",
+    "ollama"
+  ],
+  "files": [
+    "publish"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@types/diff": "^7.0.2",
+    "@types/fs-extra": "^11.0.4",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.19.10",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "@types/write-file-atomic": "^4.0.3",
+    "chalk": "^4.1.0",
+    "copy-webpack-plugin": "^13.0.1",
+    "eslint": "^9.33.0",
+    "fs-extra": "^11.3.1",
+    "glob": "^11.0.3",
+    "jest": "^29.7.0",
+    "prettier": "^3.6.2",
+    "tar": "^7.4.3",
+    "ts-jest": "^29.4.1",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.1",
+    "webpack": "^5.101.3",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.40",
+    "diff": "^8.0.2",
+    "eventsource-parser": "^3.0.5",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1",
+    "write-file-atomic": "^7.0.0"
+  }
+}

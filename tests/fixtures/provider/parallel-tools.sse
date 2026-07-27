@@ -1,0 +1,9 @@
+data: {"choices":[{"delta":{"content":"Hel","tool_calls":[{"index":0,"id":"call-note","type":"function","function":{"name":"read_note","arguments":"{\"note"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call-files","type":"function","function":{"name":"list_text_files","arguments":{"pattern":"**/*.md"}}}]}}]}
+
+data: {"choices":[{"delta":{"content":"lo","tool_calls":[{"index":0,"function":{"arguments":"Id\":\"n1\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
