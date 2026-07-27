@@ -60,11 +60,27 @@ notes or folders.
 - [ ] Enabling **Auto-apply changes** shows a warning; cancelling keeps review
       mode.
 - [ ] Confirming affects only the current chat and persists after restart.
-- [ ] Every proposal batch applies without opening review, including a second
-      batch proposed during model continuation.
+- [ ] Every non-delete proposal batch applies without opening review, including
+      a second batch proposed during model continuation.
+- [ ] Note and notebook deletion proposals always open review despite
+      auto-apply.
 - [ ] Concurrently modified notes/files remain untouched and report conflicts.
 - [ ] Supported updates expose **Undo**; created notes are not auto-deleted.
 - [ ] Disabling auto-apply requires no warning and restores review mode.
+
+## Note and notebook organization
+
+Use disposable notebooks and notes.
+
+- [ ] Create a root notebook and a nested notebook through reviewed proposals.
+- [ ] Rename a note and notebook; concurrent edits produce conflicts.
+- [ ] Move a note between notebooks.
+- [ ] Set manual note order, switch Joplin sorting to **Custom**, and confirm
+      visible order changes.
+- [ ] Delete a note; review states Joplin Trash and the note is recoverable.
+- [ ] Delete a notebook containing disposable items; review states contained
+      items move to Trash and the notebook is recoverable.
+- [ ] No organization tool offers permanent deletion.
 
 ## Required folder scenario
 

@@ -14,7 +14,7 @@ Version: `0.3.0`
   connectivity checks. Works with Ollama and compatible endpoints; no provider
   SDK required.
 - Fragment-safe SSE parsing, parallel tool-call assembly, typed usage, timeout,
-  cancellation, eight-step model limit, and twenty-tool-call limit.
+  cancellation, twenty-four-step model limit, and one-hundred-tool-call limit.
 - Active-note/selection context only when enabled.
 - Explicit attached notes and opt-in vault RAG.
 - Fixed note-writing rules resist prompt injection, preserve meaning and
@@ -24,9 +24,11 @@ Version: `0.3.0`
   when `joplin.ai.search()` exists (Joplin 3.7+); failures fall back to keyword
   retrieval.
 - Read tools for notes, notebooks, and selected-folder text files.
-- Note/file writes are proposals. Review is required by default. A warned,
-  per-chat **Auto-apply changes** toggle applies every proposed item without
-  showing the review batch.
+- Reviewed organization tools create notebooks; rename, move, and manually
+  reorder notes; rename notebooks; and move notes or notebooks to Joplin Trash.
+- Note/notebook/file writes are proposals. Review is required by default. A warned,
+  per-chat **Auto-apply changes** toggle applies non-delete proposals without
+  showing the review batch. Deletions always require manual review.
 - Review or automatic-apply results return to the bounded agent loop so the
   model can finish the task or propose a subsequent batch; retrieved
   continuation context stays memory-only.
@@ -57,17 +59,18 @@ Version: `0.3.0`
 - Retrieved notes/files are labelled untrusted data. Fixed system instructions
   forbid treating their contents as commands.
 - Text copied with `Ctrl+L` remains a local draft until the user sends it.
-- Auto-apply is off for new and legacy chats. Enabling it warns that all model
-  proposals in that chat will apply without review; optimistic-concurrency
-  checks still isolate conflicts.
+- Auto-apply is off for new and legacy chats. Enabling it warns that non-delete
+  proposals in that chat apply without review; deletion proposals still open
+  review. Optimistic-concurrency checks isolate conflicts.
 - External tool paths are root-relative. Every operation resolves the root and
   target real paths, rejects traversal/symlink escapes/device files, and applies
   text/size/encoding limits.
 - Folder scans exclude hidden VCS data, dependencies, build output, `.env*`,
   credential/key/certificate names, binaries, and rollback data. Root
   `.gitignore` rules apply.
-- No note/file delete, rename, shell, attachment, unrestricted filesystem, or
-  mobile support.
+- Note and notebook deletion is recoverable Joplin Trash only; permanent
+  deletion is unavailable. No file delete/rename, shell, attachment,
+  unrestricted filesystem, or mobile support.
 
 Full disclosure: [docs/PRIVACY.md](docs/PRIVACY.md).
 

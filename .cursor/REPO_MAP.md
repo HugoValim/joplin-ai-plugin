@@ -19,7 +19,7 @@ opt-in note retrieval, and policy-gated note/text-file edits.
 - `src/plugin/`: Joplin adapters, settings, panel, startup composition.
 - `src/agent/`: context construction and bounded agent loop.
 - `src/providers/`: OpenAI-compatible transport and SSE parsing.
-- `src/notes/`: Joplin note access, chunking, retrieval.
+- `src/notes/`: Joplin note/notebook access, organization, chunking, retrieval.
 - `src/fileWorkspace/`: root-confined text-file access and rollback.
 - `src/tools/`: validated tools and proposed-write routing.
 - `src/persistence/`: atomic local chat/change/rollback records.
@@ -55,22 +55,27 @@ actions; note mutations use Joplin commands or optimistic repository updates.
 - External file paths are root-relative, realpath checked, text-only, and bounded.
 - Writes require optimistic-concurrency tokens and either batch review or an
   explicitly warned per-chat auto-apply setting.
-- No delete, rename, shell, binary edit, attachment, mobile, or unrestricted FS.
+- Note/notebook deletion uses Joplin Trash and always requires manual review.
+- No permanent deletion, file delete/rename, shell, binary edit, attachment,
+  mobile, or unrestricted FS.
 
 ## Current navigation snapshot
 
-- Goal: improve the agent's default note-writing quality and safety rules.
-- Entry points: editable system-prompt default in `src/plugin/settings.ts`;
-  fixed per-turn policy composition in `src/agent/contextBuilder.ts`.
-- Data flow: registered default or user customization -> settings load -> fixed
-  policy boundary -> provider system message -> bounded agent/tool loop.
-- Decision points: preserve user customization, fixed-rule priority, ambiguity,
-  factual uncertainty, formatting fidelity, and minimum necessary edit scope.
-- Side effects: provider instructions change; no new data, tool, or write access.
-- Chosen edit point: strengthen both the new-install default and the fixed core
-  policy so existing customized installs retain their text without losing safety.
-- Validation plan: public prompt-composition and settings-registration tests,
-  then format/lint/typecheck/full Jest/dist gates.
+- Goal: let the agent organize Joplin notes and notebooks safely.
+- Entry points: organization tools in `src/tools/`; proposal schemas in
+  `src/persistence/changeSetStore.ts`; application through
+  `src/agent/noteOrganizationChangeApplier.ts`.
+- Data flow: validated tool input -> versioned proposal -> manual/auto review
+  policy -> optimistic preflight -> Joplin Data API -> model continuation.
+- Decision points: deletion always forces review; deletion is Trash-only;
+  metadata writes require current `updated_time`; note order affects Custom
+  sorting.
+- Side effects: create/rename notebooks; rename/move/reorder notes; trash notes
+  or notebooks and their contained items.
+- Chosen edit point: a separate organization repository/tool/applier path,
+  reusing existing change-set review and conflict isolation.
+- Validation plan: public repository/tool/applier/protocol tests, then
+  format/lint/typecheck/full Jest/dist gates.
 
 ## Open questions
 

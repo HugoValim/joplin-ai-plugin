@@ -43,11 +43,13 @@ LF/CRLF, final-newline presence, and permission mode.
 
 ## Writes
 
-Model tools never directly write notes or files. They collect proposals for a
-single batch. Review is required by default. A persisted per-chat
-**Auto-apply changes** toggle can apply every proposed item without displaying
-the review batch after an explicit warning. Applying in either mode rechecks
-every item's `updated_time` or SHA-256. Conflicting items are not overwritten.
+Model tools never directly write notes, notebooks, or files. They collect
+proposals for a single batch. Review is required by default. A persisted
+per-chat **Auto-apply changes** toggle can apply non-delete proposals without
+displaying the review batch after an explicit warning. Note and notebook
+deletions always require manual review and use recoverable Joplin Trash, never
+permanent deletion. Applying in either mode rechecks every item's
+`updated_time` or SHA-256. Conflicting items are not overwritten.
 
 Assistant response buttons are separate explicit user actions. Insert and
 replace use Joplin editor commands; append rechecks the active note
@@ -56,7 +58,9 @@ replace use Joplin editor commands; append rechecks the active note
 File originals are retained under the plugin data directory for exact Undo.
 Retention is newest ten applied runs and no older than seven days. No rollback
 data is stored inside the reviewed folder. Undo remains available for supported
-note updates and file writes; created notes are not automatically deleted.
+note-body updates and file writes. Notebook creation and metadata organization
+are not included in plugin Undo; trashed items can be recovered through Joplin
+Trash.
 
 Fixed instructions tell the model to treat note/file contents as untrusted data,
 preserve meaning and Markdown, avoid fabricated facts or citations, and keep
