@@ -1,0 +1,323 @@
+.app-shell {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 7px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.panel-width-guard {
+  display: none;
+}
+
+.sidebar-header {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chat-picker,
+.chat-picker select {
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-picker select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 650;
+}
+
+.connection-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--joplin-color);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.connection-status > span {
+  color: var(--joplin-color-warn);
+}
+
+.status-online > span {
+  color: var(--joplin-color-correct);
+}
+
+.status-offline > span {
+  color: var(--joplin-color-error);
+}
+
+.header-menu {
+  position: relative;
+}
+
+.header-menu > summary {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 7px;
+  list-style: none;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+  padding: 4px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.header-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.header-menu-popover {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  width: min(250px, calc(100vw - 16px));
+  gap: 5px;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 9px;
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+  padding: 7px;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 22%);
+}
+
+.header-menu-popover > button {
+  width: 100%;
+  text-align: left;
+}
+
+.privacy {
+  border-top: 1px solid var(--joplin-divider-color);
+  padding-top: 4px;
+}
+
+.privacy > summary {
+  display: flex;
+  align-items: center;
+}
+
+.privacy p {
+  margin: 4px 3px;
+  font-size: 0.78rem;
+}
+
+.context-summary {
+  min-width: 0;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 9px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+}
+
+.context-summary > summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  padding: 5px;
+}
+
+.context-summary > summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+}
+
+.context-summary[open] > summary::before {
+  content: "▾";
+}
+
+.context-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-chip {
+  display: block;
+  max-width: min(190px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 999px;
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-details {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--joplin-divider-color);
+  padding: 6px;
+}
+
+.context-control {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.context-control > div,
+.context-control > span {
+  min-width: 0;
+}
+
+.context-control strong {
+  font-size: 0.8rem;
+}
+
+.context-control p {
+  margin: 1px 0 0;
+  overflow: hidden;
+  font-size: 0.73rem;
+  text-overflow: ellipsis;
+}
+
+.context-placeholder {
+  min-height: 1px;
+}
+
+.composer {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border-top: 1px solid var(--joplin-divider-color);
+  background: var(--joplin-background-color);
+  padding-top: 6px;
+}
+
+.composer-status,
+.composer-input {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.composer-status {
+  min-height: 24px;
+  color: var(--joplin-color);
+  font-size: 0.76rem;
+}
+
+.composer-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-status button {
+  flex: 0 0 auto;
+}
+
+.composer textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  max-height: calc(1.45em * 6 + 14px);
+  resize: none;
+  padding: 7px 9px;
+  line-height: 1.45;
+}
+
+.composer textarea::placeholder {
+  color: var(--joplin-color2);
+  opacity: 0.72;
+}
+
+.composer-submit {
+  flex: 0 0 auto;
+  min-width: 58px;
+  align-self: stretch;
+}
+
+@media (max-width: 320px) {
+  .app-shell {
+    padding: 6px;
+  }
+
+  .topbar {
+    gap: 3px;
+  }
+
+  .topbar button {
+    padding-inline: 6px;
+  }
+
+  .context-chip {
+    max-width: 145px;
+  }
+}
+
+@media (max-width: 279px) {
+  .app-shell {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-shell > :not(.panel-width-guard) {
+    display: none;
+  }
+
+  .panel-width-guard {
+    display: grid;
+    min-width: 0;
+    place-content: center;
+    justify-items: center;
+    gap: 6px;
+    border: 1px solid var(--joplin-divider-color);
+    border-radius: 9px;
+    background: var(--joplin-background-color2);
+    color: var(--joplin-color2);
+    padding: 8px;
+    text-align: center;
+  }
+
+  .panel-width-guard-icon {
+    font-size: 1.5rem;
+  }
+
+  .panel-width-guard-detail {
+    font-size: 0.75rem;
+  }
+}
+
+@media (max-width: 119px) {
+  .panel-width-guard-detail {
+    display: none;
+  }
+
+  .panel-width-guard strong {
+    font-size: 0.72rem;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 59px) {
+  .panel-width-guard strong {
+    display: none;
+  }
+}

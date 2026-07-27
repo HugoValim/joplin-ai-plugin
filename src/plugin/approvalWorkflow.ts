@@ -24,7 +24,7 @@ import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import { summarizeToolResult } from "./toolActivity";
 
 interface ContinuationProviderPort {
-  createWithConfirmation(): Promise<AiProvider>;
+  connectWithConfirmation(): Promise<{ readonly provider: AiProvider }>;
 }
 
 export class ApprovalWorkflow {
@@ -151,7 +151,7 @@ export class ApprovalWorkflow {
     signal: AbortSignal,
     deltas: DeltaBatcher,
   ): Promise<void> {
-    const provider = await this.providers.createWithConfirmation();
+    const { provider } = await this.providers.connectWithConfirmation();
     const runner = new AgentRunner(
       provider,
       this.tools,

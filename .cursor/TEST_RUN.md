@@ -6,4 +6,4 @@ This file was last updated after a **successful** test run so agents can repeat 
 - **Working directory**: `/home/hugovalim/projects/jopplin-ai-plugin`
 - **Command**: `npm test`
 - **Environment**: Node.js 20.20.2 with npm 10.8.2
-- **Scope**: full Jest suite (22 suites, 81 tests)
+- **Scope**: full Jest suite (32 suites, 112 tests)

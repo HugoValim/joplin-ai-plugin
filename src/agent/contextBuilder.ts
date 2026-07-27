@@ -20,6 +20,7 @@ export type AttachedNoteLoader = (noteId: string) => Promise<NoteRecord | null>;
 
 export interface ContextBuildInput {
   readonly systemPrompt: string;
+  readonly modelName: string;
   readonly userText: string;
   readonly settings: ContextSettings;
   readonly hasFileWorkspace: boolean;
@@ -57,7 +58,7 @@ export class ContextBuilder {
   /**
    * Snapshots user-enabled context into provider messages for one turn.
    *
-   * @example await builder.build({ systemPrompt, userText, settings, hasFileWorkspace })
+   * @example await builder.build({ systemPrompt, modelName, userText, settings, hasFileWorkspace })
    */
   public async build(input: ContextBuildInput): Promise<BuiltContext> {
     const contextBlocks: string[] = [];
@@ -136,7 +137,11 @@ function buildMessages(
   const messages: ProviderMessage[] = [
     {
       role: "system",
-      content: `${SAFETY_PROMPT}\n\n${input.systemPrompt.trim()}`,
+      content: [
+        SAFETY_PROMPT,
+        modelIdentityPrompt(input.modelName),
+        input.systemPrompt.trim(),
+      ].join("\n\n"),
     },
   ];
   if (contextBlocks.length) {
@@ -147,6 +152,14 @@ function buildMessages(
   }
   messages.push({ role: "user", content: input.userText });
   return messages;
+}
+
+function modelIdentityPrompt(modelName: string): string {
+  return [
+    `Configured model ID: ${JSON.stringify(modelName)}.`,
+    "When asked which model you are using, answer with this exact configured ID.",
+    "Do not infer capabilities from this ID. Do not make unsupported capability claims.",
+  ].join(" ");
 }
 
 function formatNote(

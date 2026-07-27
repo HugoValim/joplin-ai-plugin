@@ -8,7 +8,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ["src/**/*.{ts,tsx}", "tests/**/*.ts"],
+    files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -29,7 +29,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["tests/**/*.ts"],
+    files: ["tests/**/*.{ts,tsx}"],
     rules: {
       "@typescript-eslint/require-await": "off",
     },

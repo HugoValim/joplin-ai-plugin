@@ -1,0 +1,244 @@
+.transcript-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.transcript {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 3px 2px 12px;
+  scrollbar-gutter: stable;
+}
+
+.load-earlier,
+.activity-feed-item {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.load-earlier {
+  display: flex;
+  justify-content: center;
+}
+
+.message {
+  width: fit-content;
+  max-width: min(94%, 72ch);
+  flex: 0 0 auto;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 10px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+}
+
+.message-user {
+  max-width: min(86%, 56ch);
+  align-self: flex-end;
+  border-left: 3px solid var(--joplin-color-accent);
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+}
+
+.message-assistant,
+.message-tool {
+  align-self: flex-start;
+}
+
+.message > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+  font-size: 0.72rem;
+}
+
+.message > header time,
+.message > header span {
+  color: inherit;
+  opacity: 0.72;
+}
+
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+.message-content p,
+.message-content li {
+  line-height: 1.55;
+}
+
+.message-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+  padding: 8px;
+}
+
+.message-content code {
+  font-family: var(--joplin-font-family-monospace);
+}
+
+.message-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid var(--joplin-divider-color);
+  padding: 4px 7px;
+}
+
+.streaming {
+  border-style: dashed;
+}
+
+.citations {
+  margin-top: 7px;
+}
+
+.citations > summary,
+.message-actions summary {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 0.75rem;
+}
+
+.citations > div,
+.message-actions,
+.action-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.citations > div {
+  margin-top: 4px;
+}
+
+.source-label {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 0.75rem;
+}
+
+.message-actions {
+  align-items: flex-start;
+  margin-top: 7px;
+}
+
+.message-actions > details {
+  position: relative;
+}
+
+.action-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 3px);
+  left: 0;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 30px));
+  flex-direction: column;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 8px;
+  background: var(--joplin-background-color);
+  padding: 5px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+}
+
+.action-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+.empty-transcript {
+  width: min(100%, 50ch);
+  align-self: center;
+  margin: auto 0;
+  border: 1px dashed var(--joplin-divider-color);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+}
+
+.empty-transcript p {
+  margin-top: 0;
+}
+
+.empty-transcript > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+}
+
+.jump-latest {
+  position: absolute;
+  z-index: 3;
+  right: 10px;
+  bottom: 9px;
+  border: 2px solid var(--joplin-color-accent);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 22%);
+}
+
+.run-activity {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 72ch);
+  border-left: 3px solid var(--joplin-color-accent);
+  border-radius: 7px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+  padding: 7px 9px;
+  font-size: 0.78rem;
+}
+
+.run-activity p {
+  margin: 0;
+}
+
+.run-activity ul {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding-left: 20px;
+}
+
+.run-activity li span {
+  display: block;
+}
+
+.run-error {
+  border: 1px solid var(--joplin-color-error);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.run-error p {
+  white-space: pre-wrap;
+}

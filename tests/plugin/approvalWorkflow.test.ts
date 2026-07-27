@@ -137,7 +137,7 @@ describe("ApprovalWorkflow", () => {
         new InMemoryRollbackStore(),
       ),
       new ToolRegistry(),
-      { createWithConfirmation: async () => provider },
+      { connectWithConfirmation: async () => ({ provider }) },
       new PluginEventSender(panel),
       new RunCancellationRegistry(),
     );
@@ -154,7 +154,7 @@ describe("ApprovalWorkflow", () => {
     );
 
     await workflow.apply({
-      version: 1,
+      version: 2,
       messageId: "message-1",
       chatId: chat.id,
       runId: "run-1",

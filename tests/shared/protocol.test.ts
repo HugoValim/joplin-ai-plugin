@@ -71,7 +71,7 @@ describe("panel protocol", () => {
 
   test("rejects another protocol version", () => {
     const request = {
-      version: 2,
+      version: 1,
       messageId: "message-3",
       chatId: "bootstrap",
       type: "panel.ready",
@@ -79,7 +79,7 @@ describe("panel protocol", () => {
     };
 
     expect(() => parsePanelRequest(request)).toThrow(
-      "expected a protocol v1 panel request",
+      "expected a protocol v2 panel request",
     );
   });
 });
@@ -96,7 +96,10 @@ describe("plugin protocol", () => {
         privacyNotice: "Context is opt-in.",
       },
     ],
-    ["workspace.changed", { activeNoteId: null }],
+    [
+      "workspace.changed",
+      { activeNote: { id: "note-1", title: "Project brief" } },
+    ],
     ["run.started", { startedAt: 1 }],
     ["assistant.delta", { delta: "Hello" }],
     ["tool.started", { toolCallId: "tool-1", name: "read_note" }],
@@ -120,5 +123,17 @@ describe("plugin protocol", () => {
     };
 
     expect(parsePluginEvent(event)).toEqual(event);
+  });
+
+  test("rejects protocol v1 plugin events", () => {
+    expect(() =>
+      parsePluginEvent({
+        version: 1,
+        messageId: "message-v1",
+        chatId: "chat-1",
+        type: "workspace.changed",
+        payload: { activeNote: null },
+      }),
+    ).toThrow("expected a protocol v2 plugin event");
   });
 });

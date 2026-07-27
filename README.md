@@ -31,9 +31,10 @@ Version: `0.1.0`
 - Exact file Undo with persisted source bytes. The latest ten runs, no older
   than seven days, are retained.
 - Chat-local folder roots restored on reopen.
-- Markdown transcript rendering with raw HTML disabled, Joplin theme variables,
-  keyboard controls, endpoint/model status, citations, tool activity, progress,
-  Stop, chat clear, and chat delete.
+- Compact fixed-shell sidebar with a smart-follow, 100-message paged transcript,
+  Joplin theme variables, keyboard controls, exact endpoint/model status,
+  collapsed context and citations, inline run progress, Stop, and confirmed
+  overflow actions.
 - Explicit response actions insert at the editor cursor, replace the current
   selection, append with an optimistic note-version check, or create a note in
   the active notebook.

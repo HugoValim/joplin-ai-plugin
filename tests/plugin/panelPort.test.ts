@@ -5,6 +5,7 @@ type MessageCallback = (message: unknown) => Promise<unknown>;
 
 class FakePanelsPort {
   public readonly posted: unknown[] = [];
+  public readonly scripts: string[] = [];
   public callback: MessageCallback | null = null;
 
   public async create(): Promise<string> {
@@ -15,7 +16,8 @@ class FakePanelsPort {
     return "panel-1";
   }
 
-  public async addScript(): Promise<void> {
+  public async addScript(_handle: string, scriptPath: string): Promise<void> {
+    this.scripts.push(scriptPath);
     return Promise.resolve();
   }
 
@@ -36,6 +38,21 @@ class FakePanelsPort {
 }
 
 describe("JoplinPanelPort", () => {
+  test("loads split styles in deterministic order before the webview bundle", async () => {
+    const panels = new FakePanelsPort();
+    const panel = new JoplinPanelPort(panels, jest.fn());
+
+    await panel.initialize(async () => Promise.resolve());
+
+    expect(panels.scripts).toEqual([
+      "./webview/base.css",
+      "./webview/layout.css",
+      "./webview/message.css",
+      "./webview/review.css",
+      "./webview/index.js",
+    ]);
+  });
+
   test("returns typed run failure when a validated request fails", async () => {
     const panels = new FakePanelsPort();
     const reported: unknown[] = [];
@@ -46,7 +63,7 @@ describe("JoplinPanelPort", () => {
     if (!panels.callback) throw new Error("Expected message callback");
 
     await panels.callback({
-      version: 1,
+      version: 2,
       messageId: "message-1",
       chatId: "chat-1",
       runId: "run-1",

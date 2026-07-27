@@ -1,0 +1,120 @@
+import { useRef } from "react";
+import type { SidebarSnapshot } from "./sidebarState";
+
+interface SidebarHeaderProps {
+  readonly snapshot: SidebarSnapshot;
+  readonly busy: boolean;
+  readonly onSelectChat: (chatId: string) => void;
+  readonly onCreateChat: () => void;
+  readonly onClearChat: () => void;
+  readonly onDeleteChat: () => void;
+}
+
+/**
+ * Renders compact chat navigation, provider identity, and secondary actions.
+ *
+ * @example <SidebarHeader snapshot={snapshot} {...actions} />
+ */
+export function SidebarHeader(props: SidebarHeaderProps): JSX.Element {
+  const activeChat = props.snapshot.activeChat;
+  return (
+    <header className="sidebar-header">
+      <div className="topbar">
+        <label className="chat-picker">
+          <span className="sr-only">Current chat</span>
+          <select
+            aria-label="Current chat"
+            value={activeChat?.id ?? ""}
+            disabled={props.busy}
+            onChange={(event) => props.onSelectChat(event.target.value)}
+          >
+            {props.snapshot.chats.map((chat) => (
+              <option value={chat.id} key={chat.id}>
+                {chat.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={props.busy}
+          onClick={props.onCreateChat}
+        >
+          New
+        </button>
+        <HeaderMenu {...props} />
+      </div>
+      <div
+        className={`connection-status status-${props.snapshot.endpointStatus}`}
+        aria-label={`Connection ${props.snapshot.endpointStatus}`}
+      >
+        <span aria-hidden="true">●</span>
+        {statusText(props.snapshot)}
+      </div>
+    </header>
+  );
+}
+
+function HeaderMenu(props: SidebarHeaderProps): JSX.Element {
+  const menu = useRef<HTMLDetailsElement>(null);
+  const close = (): void => {
+    if (menu.current) menu.current.open = false;
+  };
+  return (
+    <details
+      ref={menu}
+      className="header-menu"
+      onKeyDown={(event) => closeOnEscape(event, menu, close)}
+    >
+      <summary aria-label="More options">•••</summary>
+      <div className="header-menu-popover">
+        <button
+          type="button"
+          disabled={!props.snapshot.activeChat || props.busy}
+          onClick={() => confirmClear(close, props.onClearChat)}
+        >
+          Clear chat
+        </button>
+        <button
+          type="button"
+          className="danger-action"
+          disabled={!props.snapshot.activeChat || props.busy}
+          onClick={() => confirmDelete(close, props.onDeleteChat)}
+        >
+          Delete chat
+        </button>
+        <details className="privacy">
+          <summary>Privacy &amp; safety</summary>
+          <p>{props.snapshot.privacyNotice}</p>
+        </details>
+      </div>
+    </details>
+  );
+}
+
+function closeOnEscape(
+  event: React.KeyboardEvent<HTMLDetailsElement>,
+  menu: React.RefObject<HTMLDetailsElement>,
+  close: () => void,
+): void {
+  if (event.key !== "Escape") return;
+  close();
+  menu.current?.querySelector("summary")?.focus();
+}
+
+function confirmClear(close: () => void, clear: () => void): void {
+  close();
+  if (confirm("Clear this chat transcript?")) clear();
+}
+
+function confirmDelete(close: () => void, remove: () => void): void {
+  close();
+  if (confirm("Delete this local chat? This cannot be undone.")) remove();
+}
+
+function statusText(snapshot: SidebarSnapshot): string {
+  const status =
+    snapshot.endpointStatus[0]?.toUpperCase() +
+    snapshot.endpointStatus.slice(1);
+  return `${status} · ${snapshot.modelName || "model not set"}`;
+}

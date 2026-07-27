@@ -103,10 +103,27 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     (config) => new OpenAiCompatibleProvider(config),
   );
   await panel.initialize((request) => controller.handle(request));
-  controller.workspaceChanged((await activeSource.activeNote())?.id ?? null);
-  await joplin.workspace.onNoteSelectionChange((event) => {
-    controller.workspaceChanged(event.value[0] ?? null);
+  controller.workspaceChanged(await activeNoteSummary(activeSource));
+  await joplin.workspace.onNoteSelectionChange(() => {
+    publishActiveNoteSummary(controller, activeSource);
   });
+}
+
+function publishActiveNoteSummary(
+  controller: ChatController,
+  source: JoplinActiveNoteContextSource,
+): void {
+  void activeNoteSummary(source).then(
+    (note) => controller.workspaceChanged(note),
+    structuredWarning,
+  );
+}
+
+async function activeNoteSummary(
+  source: JoplinActiveNoteContextSource,
+): Promise<{ readonly id: string; readonly title: string } | null> {
+  const note = await source.activeNote();
+  return note ? { id: note.id, title: note.title } : null;
 }
 
 function requireFsExtra(joplin: Joplin): FsExtraBundle {

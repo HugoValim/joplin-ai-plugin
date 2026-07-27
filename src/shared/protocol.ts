@@ -2,7 +2,7 @@ import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { DomainError, safeValue } from "./errors";
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
 const IdentifierSchema = Type.String({ minLength: 1, maxLength: 128 });
 const EmptyPayloadSchema = Type.Object({}, { additionalProperties: false });
@@ -318,7 +318,18 @@ const WorkspaceChangedSchema = Type.Object(
     ...EnvelopeProperties,
     type: Type.Literal("workspace.changed"),
     payload: Type.Object(
-      { activeNoteId: Type.Union([IdentifierSchema, Type.Null()]) },
+      {
+        activeNote: Type.Union([
+          Type.Object(
+            {
+              id: IdentifierSchema,
+              title: Type.String({ minLength: 1, maxLength: 500 }),
+            },
+            { additionalProperties: false },
+          ),
+          Type.Null(),
+        ]),
+      },
       { additionalProperties: false },
     ),
   },
@@ -453,7 +464,7 @@ export type ChangeSetView = Static<typeof ChangeSetViewSchema>;
 /**
  * Validates a message received from the untrusted sidebar webview.
  *
- * @example parsePanelRequest({ version: 1, messageId: 'm', chatId: 'c',
+ * @example parsePanelRequest({ version: 2, messageId: 'm', chatId: 'c',
  * runId: 'r', type: 'chat.submit', payload: { text: 'Hello' } })
  */
 export function parsePanelRequest(input: unknown): PanelRequest {
@@ -461,21 +472,21 @@ export function parsePanelRequest(input: unknown): PanelRequest {
 
   throw new DomainError(
     "VALIDATION",
-    `Invalid panel message ${safeValue(input)}; expected a protocol v1 panel request`,
+    `Invalid panel message ${safeValue(input)}; expected a protocol v2 panel request`,
   );
 }
 
 /**
  * Validates a message received from the plugin process by the sidebar.
  *
- * @example parsePluginEvent({ version: 1, messageId: 'm', chatId: 'c',
- * type: 'workspace.changed', payload: { activeNoteId: null } })
+ * @example parsePluginEvent({ version: 2, messageId: 'm', chatId: 'c',
+ * type: 'workspace.changed', payload: { activeNote: null } })
  */
 export function parsePluginEvent(input: unknown): PluginEvent {
   if (Value.Check(PluginEventSchema, input)) return input;
 
   throw new DomainError(
     "VALIDATION",
-    `Invalid plugin message ${safeValue(input)}; expected a protocol v1 plugin event`,
+    `Invalid plugin message ${safeValue(input)}; expected a protocol v2 plugin event`,
   );
 }

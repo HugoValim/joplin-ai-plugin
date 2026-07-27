@@ -43,9 +43,12 @@ export class JoplinPanelPort implements PanelPort {
     this.handle = await this.panels.create("joplinAiAgentSidebar");
     await this.panels.setHtml(
       this.handle,
-      '<!doctype html><html><body><div id="root"></div></body></html>',
+      '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div></body></html>',
     );
-    await this.panels.addScript(this.handle, "./webview/style.css");
+    await this.panels.addScript(this.handle, "./webview/base.css");
+    await this.panels.addScript(this.handle, "./webview/layout.css");
+    await this.panels.addScript(this.handle, "./webview/message.css");
+    await this.panels.addScript(this.handle, "./webview/review.css");
     await this.panels.addScript(this.handle, "./webview/index.js");
     await this.panels.onMessage(this.handle, async (input) => {
       let request: PanelRequest;

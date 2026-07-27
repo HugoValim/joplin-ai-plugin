@@ -1,0 +1,145 @@
+.change-review {
+  display: grid;
+  grid-row: 3 / 5;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 7px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 10px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+}
+
+.review-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px;
+}
+
+.review-header h2 {
+  margin: 1px 0;
+  font-size: 1rem;
+}
+
+.review-header p:not(.eyebrow) {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.selection-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.review-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-block: 1px solid var(--joplin-divider-color);
+  padding: 7px;
+}
+
+.change {
+  flex: 0 0 auto;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 7px;
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+  padding: 4px;
+}
+
+.change > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+
+.change > summary::-webkit-details-marker {
+  display: none;
+}
+
+.change > summary > span:not(.change-status) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-status {
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 999px;
+  padding: 2px 5px;
+  font-size: 0.68rem;
+  text-transform: capitalize;
+}
+
+.status-applied {
+  border-color: var(--joplin-color-correct);
+}
+
+.status-conflict {
+  border-color: var(--joplin-color-error);
+}
+
+.status-skipped {
+  opacity: 0.75;
+}
+
+.change-message {
+  margin: 4px;
+  border-left: 3px solid var(--joplin-color-error);
+  padding-left: 6px;
+  white-space: pre-wrap;
+}
+
+.diff {
+  max-height: 280px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+  padding: 8px;
+  font-family: var(--joplin-font-family-monospace);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.review-footer {
+  display: flex;
+  min-height: 46px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.review-footer > div {
+  display: flex;
+  gap: 5px;
+}
+
+@media (max-width: 320px) {
+  .review-header,
+  .review-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .selection-controls,
+  .review-footer > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}

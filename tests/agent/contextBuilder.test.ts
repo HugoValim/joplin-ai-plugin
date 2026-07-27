@@ -43,6 +43,7 @@ describe("ContextBuilder", () => {
 
     const context = await builder.build({
       systemPrompt: "Be concise.",
+      modelName: "glm-5.2:cloud",
       userText: "Summarise.",
       settings: { activeNote: false, vault: false, attachedNoteIds: [] },
       hasFileWorkspace: false,
@@ -55,5 +56,28 @@ describe("ContextBuilder", () => {
       role: "user",
       content: "Summarise.",
     });
+  });
+
+  test("supplies exact configured model identity without capability claims", async () => {
+    const builder = new ContextBuilder(
+      new FakeActiveNoteContextSource(),
+      new FakeNoteRetrievalPort(),
+      async () => null,
+    );
+
+    const context = await builder.build({
+      systemPrompt: "Be concise.",
+      modelName: "glm-5.2:cloud",
+      userText: "Which model are you?",
+      settings: { activeNote: false, vault: false, attachedNoteIds: [] },
+      hasFileWorkspace: false,
+    });
+
+    expect(context.messages[0]?.content).toContain(
+      'Configured model ID: "glm-5.2:cloud".',
+    );
+    expect(context.messages[0]?.content).toContain(
+      "Do not infer capabilities from this ID.",
+    );
   });
 });

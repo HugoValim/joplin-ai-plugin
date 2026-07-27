@@ -4,6 +4,21 @@ export class RunCancellationRegistry {
     { readonly runId: string; readonly controller: AbortController }
   >();
 
+  /**
+   * Starts only when the chat has no active run.
+   *
+   * @example registry.tryStart(chatId, runId, new AbortController())
+   */
+  public tryStart(
+    chatId: string,
+    runId: string,
+    controller: AbortController,
+  ): boolean {
+    if (this.runs.has(chatId)) return false;
+    this.runs.set(chatId, { runId, controller });
+    return true;
+  }
+
   public replace(
     chatId: string,
     runId: string,

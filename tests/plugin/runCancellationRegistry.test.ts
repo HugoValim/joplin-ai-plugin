@@ -30,4 +30,16 @@ describe("RunCancellationRegistry", () => {
 
     expect(controller.signal.reason).toEqual(new Error("Chat cleared"));
   });
+
+  test("rejects a second active run without cancelling the first", () => {
+    const registry = new RunCancellationRegistry();
+    const first = new AbortController();
+    const second = new AbortController();
+
+    expect(registry.tryStart("chat-1", "run-first", first)).toBe(true);
+    expect(registry.tryStart("chat-1", "run-second", second)).toBe(false);
+
+    expect(first.signal.aborted).toBe(false);
+    expect(second.signal.aborted).toBe(false);
+  });
 });

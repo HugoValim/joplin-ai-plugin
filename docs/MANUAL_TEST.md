@@ -22,6 +22,10 @@ notes or folders.
 
 ## Context
 
+- [ ] Collapsed chips show active-note title, attachment count, Vault state,
+      and folder scope without exposing note body.
+- [ ] Expanded context disclosure explains each scope and remains usable at
+      280px width and 200% zoom.
 - [ ] Active Note off: current note/selection is not sent.
 - [ ] Active Note on: the current note and selection are available.
 - [ ] Vault RAG off: no automatic search.
@@ -38,11 +42,11 @@ links, a table, LF/CRLF variants, a BOM file, and a file ignored by
 2. Ask: `Review these Markdown files and improve clarity while preserving structure.`
 3. Confirm scan/progress and per-file diffs appear before any write.
 4. Reject one diff and accept the others.
-5. Select **Apply accepted** once.
+5. Select **Apply** once.
 6. Confirm only accepted files changed.
 7. Confirm BOM, line endings, final newline, permissions, front matter, fences,
    links, and tables remain valid.
-8. Select **Undo last applied run** and byte-compare restored originals.
+8. Select **Undo** and byte-compare restored originals.
 
 - [ ] Files ignored by `.gitignore` never appear.
 - [ ] `.env*`, credentials, keys, certificates, dependencies, VCS, and build
@@ -67,6 +71,12 @@ links, a table, LF/CRLF variants, a BOM file, and a file ignored by
 ## Persistence and cancellation
 
 - [ ] Restart Joplin: chats, context toggles, references, and folder root return.
+- [ ] Empty, 100+, and 1,000-message chats initially render the latest 100;
+      **Load 100 earlier** preserves reading position.
+- [ ] Scrolling upward during streaming preserves position and shows
+      **Jump to latest** with an unread count.
+- [ ] Chat switch and local submission move to the latest message.
+- [ ] Rapid Enter/click posts one request and persists one user message.
 - [ ] Stop interrupts a streaming/bulk run.
 - [ ] Clear requires confirmation and preserves the chat/folder context.
 - [ ] Delete requires irreversible-action confirmation.
@@ -74,7 +84,28 @@ links, a table, LF/CRLF variants, a BOM file, and a file ignored by
 
 ## Assistant output actions
 
+- [ ] **Copy** remains visible; **Sources (N)** and **More actions** work by
+      keyboard and close with Escape.
 - [ ] **Insert** adds one saved assistant response at the editor cursor.
 - [ ] **Replace selection** replaces only the current editor selection.
 - [ ] **Append** adds the response to the active note.
 - [ ] **Create note** prompts for a title and creates it in the active notebook.
+
+## Sidebar layout and accessibility matrix
+
+Repeat core chat, streaming, Stop, offline error, folder review, Apply, conflict,
+Discard, and Undo flows across:
+
+- [ ] Widths 280px, 360px, and 600px; short and tall panels.
+- [ ] Below 280px, **Widen panel** replaces unusable controls and keyboard focus
+      stays out of the hidden sidebar.
+- [ ] Light, dark, and high-contrast themes.
+- [ ] 200% zoom with no clipped composer or unreachable review footer.
+- [ ] Mouse and keyboard-only operation.
+- [ ] Screen-reader smoke test: dedicated run announcements, busy feed, author/
+      timestamp/position labels, collapsed Sources, and concise error alerts.
+- [ ] Reduced-motion OS setting.
+
+Confirm long responses never render behind the composer. Confirm transcript is
+the main scroll region; review diffs and six-line composer overflow only within
+their own bounded controls.

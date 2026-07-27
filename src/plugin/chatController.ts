@@ -13,11 +13,7 @@ import type {
 import { DomainError, safeValue } from "../shared/errors";
 import type { PanelRequest } from "../shared/protocol";
 import type { ToolRegistry, ToolExecutionResult } from "../tools/toolRegistry";
-import {
-  loadProviderConfig,
-  loadSystemPrompt,
-  type SettingsPort,
-} from "./settings";
+import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
 import type { PerChatWorkspaceResolver } from "./workspaceAdapters";
 import { DeltaBatcher } from "./deltaBatcher";
@@ -152,10 +148,18 @@ export class ChatController {
     }
   }
 
-  /** Publishes active-note identity without its body. Example: workspaceChanged(noteId). */
-  public workspaceChanged(activeNoteId: string | null): void {
+  /** Publishes active-note identity without its body. Example: workspaceChanged(note). */
+  public workspaceChanged(
+    activeNote: { readonly id: string; readonly title: string } | null,
+  ): void {
     const chatId = this.activeChatId ?? "bootstrap";
-    this.events.post("workspace.changed", chatId, { activeNoteId });
+    const summary = activeNote
+      ? {
+          id: activeNote.id,
+          title: activeNote.title.trim().slice(0, 500) || "Untitled note",
+        }
+      : null;
+    this.events.post("workspace.changed", chatId, { activeNote: summary });
   }
 
   private async handleReady(): Promise<void> {
@@ -186,7 +190,14 @@ export class ChatController {
     request: Extract<PanelRequest, { type: "chat.submit" }>,
   ): Promise<void> {
     const abortController = new AbortController();
-    this.activeRuns.replace(request.chatId, request.runId, abortController);
+    if (
+      !this.activeRuns.tryStart(request.chatId, request.runId, abortController)
+    ) {
+      throw new DomainError(
+        "CONFLICT",
+        `Chat ${safeValue(request.chatId)} already has an active run; expected one run at a time`,
+      );
+    }
     this.events.post(
       "run.started",
       request.chatId,
@@ -218,16 +229,18 @@ export class ChatController {
     deltaBatcher: DeltaBatcher,
   ): Promise<void> {
     const chat = await requireChat(this.chats, request.chatId);
+    const session = await this.providerConnector.connectWithConfirmation();
+    this.modelName = session.config.model;
     const context = await this.contextBuilder.build({
       systemPrompt: await loadSystemPrompt(this.settings),
+      modelName: session.config.model,
       userText: request.payload.text,
       settings: chat.context,
       hasFileWorkspace: Boolean(chat.externalRoot),
     });
     const saved = await this.appendUserMessage(chat, request.payload.text);
-    const provider = await this.providerConnector.createWithConfirmation();
     const runner = new AgentRunner(
-      provider,
+      session.provider,
       this.tools,
       this.changes,
       this.observer(request, deltaBatcher),
@@ -420,12 +433,9 @@ export class ChatController {
   private async checkEndpoint(): Promise<void> {
     this.endpointStatus = "checking";
     await this.sendSnapshot();
-    try {
-      this.modelName = (await loadProviderConfig(this.settings)).model;
-    } catch {
-      this.modelName = "";
-    }
-    this.endpointStatus = await this.providerConnector.check();
+    const check = await this.providerConnector.check();
+    this.modelName = check.modelName;
+    this.endpointStatus = check.status;
     await this.sendSnapshot();
   }
 

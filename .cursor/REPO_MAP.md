@@ -58,13 +58,25 @@ actions; note mutations use Joplin commands or optimistic repository updates.
 
 ## Current navigation snapshot
 
-- Goal: deliver Joplin AI Agent v0.1.0 from the approved v1 plan.
-- Entry points: `src/index.ts`, `src/webview/index.tsx`.
-- Data flow: panel -> agent -> provider/tools -> proposal -> approval -> repository.
-- Decision points: context opt-ins, endpoint security, tool availability, conflicts.
-- Side effects: provider HTTP, Joplin data API, plugin data dir, selected folder.
-- Chosen edit point: new responsibility-focused modules behind narrow interfaces.
-- Validation plan: focused Jest slices, full tests, lint, type-check, dist/JPL.
+- Goal: redesign the desktop sidebar for bounded scrolling, clear hierarchy,
+  accessible controls, responsive layouts, efficient long transcripts, and
+  trusted model/active-note transparency.
+- Entry points: `src/webview/App.tsx`, `src/webview/Transcript.tsx`,
+  `src/webview/ChangeReview.tsx`, `src/webview/useSidebarController.ts`,
+  `src/plugin/chatController.ts`, and `src/shared/protocol.ts`.
+- Data flow: validated plugin events -> `App` state -> header/context/transcript/
+  review/composer components -> typed panel requests; provider connection ->
+  trusted provider/config session -> model-aware context.
+- Decision points: near-bottom auto-scroll, loaded message window, busy/approval
+  modes, exclusive per-chat run start, compact-width layout, context disclosure,
+  and action availability.
+- Side effects: webview messages, scroll/focus movement, confirmation prompts;
+  note/file safety and approval semantics remain unchanged.
+- Chosen edit point: 97-line composition-only `App`, focused webview components,
+  pure scroll policy, protocol v2, and exclusive controller run registration.
+- Validation plan: 32-suite Jest gate with DOM/axe/scroll/request-integrity
+  coverage; format/lint/typecheck/dist; then light/dark and narrow/wide manual
+  Joplin matrix.
 
 ## Open questions
 

@@ -13,6 +13,14 @@ interface SecurityDialogPort {
 type ProviderFactory = (config: ProviderConfig) => AiProvider;
 
 export type EndpointStatus = "unconfigured" | "checking" | "online" | "offline";
+export interface ProviderSession {
+  readonly provider: AiProvider;
+  readonly config: ProviderConfig;
+}
+export interface EndpointCheck {
+  readonly status: EndpointStatus;
+  readonly modelName: string;
+}
 
 export class ProviderConnector {
   public constructor(
@@ -21,32 +29,31 @@ export class ProviderConnector {
     private readonly factory: ProviderFactory,
   ) {}
 
-  public async createWithConfirmation(): Promise<AiProvider> {
+  /**
+   * Creates one provider from the validated config returned with the session.
+   *
+   * @example const { provider, config } = await connector.connectWithConfirmation()
+   */
+  public async connectWithConfirmation(): Promise<ProviderSession> {
     const config = await loadProviderConfig(this.settings);
     try {
-      return this.factory(config);
+      return this.createSession(config);
     } catch (error: unknown) {
       if (!(error instanceof DomainError) || error.code !== "SECURITY")
         throw error;
       await this.confirmRemoteHttp(error);
-      return this.factory({ ...config, allowInsecureRemote: true });
+      return this.createSession({ ...config, allowInsecureRemote: true });
     }
   }
 
-  public async check(): Promise<EndpointStatus> {
+  public async check(): Promise<EndpointCheck> {
     try {
       const config = await loadProviderConfig(this.settings);
-      if (!config.model) return "unconfigured";
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-      try {
-        await this.factory(config).testConnection(controller.signal);
-        return "online";
-      } finally {
-        clearTimeout(timer);
-      }
+      if (!config.model) return { status: "unconfigured", modelName: "" };
+      const status = await this.testProvider(config);
+      return { status, modelName: config.model };
     } catch {
-      return "offline";
+      return { status: "offline", modelName: "" };
     }
   }
 
@@ -56,5 +63,20 @@ export class ProviderConnector {
     );
     if (choice !== 0) throw originalError;
     await allowConfirmedRemoteHttp(this.settings);
+  }
+
+  private createSession(config: ProviderConfig): ProviderSession {
+    return { provider: this.factory(config), config };
+  }
+
+  private async testProvider(config: ProviderConfig): Promise<EndpointStatus> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+      await this.factory(config).testConnection(controller.signal);
+      return "online";
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
