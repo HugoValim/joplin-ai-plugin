@@ -61,6 +61,7 @@ const CONFIG: ProviderConfig = {
   maxOutputTokens: 500,
   timeoutMs: 5_000,
   allowInsecureRemote: false,
+  allowedInsecureOrigin: "",
 };
 
 describe("OpenAiCompatibleProvider", () => {

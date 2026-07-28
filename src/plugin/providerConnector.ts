@@ -5,6 +5,7 @@ import {
   loadProviderConfig,
   type SettingsPort,
 } from "./settings";
+import { reconcileInsecureOrigin } from "../providers/endpoint";
 
 interface SecurityDialogPort {
   showMessageBox(message: string): Promise<number>;
@@ -35,14 +36,19 @@ export class ProviderConnector {
    * @example const { provider, config } = await connector.connectWithConfirmation()
    */
   public async connectWithConfirmation(): Promise<ProviderSession> {
-    const config = await loadProviderConfig(this.settings);
+    const loaded = await loadProviderConfig(this.settings);
+    const config = await reconcileInsecureOrigin(this.settings, loaded);
     try {
       return this.createSession(config);
     } catch (error: unknown) {
       if (!(error instanceof DomainError) || error.code !== "SECURITY")
         throw error;
-      await this.confirmRemoteHttp(error);
-      return this.createSession({ ...config, allowInsecureRemote: true });
+      await this.confirmRemoteHttp(error, config);
+      return this.createSession({
+        ...config,
+        allowInsecureRemote: true,
+        allowedInsecureOrigin: new URL(config.baseUrl).origin,
+      });
     }
   }
 
@@ -57,12 +63,18 @@ export class ProviderConnector {
     }
   }
 
-  private async confirmRemoteHttp(originalError: DomainError): Promise<void> {
+  private async confirmRemoteHttp(
+    originalError: DomainError,
+    config: ProviderConfig,
+  ): Promise<void> {
     const choice = await this.dialogs.showMessageBox(
       "Security warning: A remote HTTP endpoint can expose note contents and the API key to network observers. Use HTTPS whenever possible. Continue with this endpoint?",
     );
     if (choice !== 0) throw originalError;
-    await allowConfirmedRemoteHttp(this.settings);
+    await allowConfirmedRemoteHttp(
+      this.settings,
+      new URL(config.baseUrl).origin,
+    );
   }
 
   private createSession(config: ProviderConfig): ProviderSession {

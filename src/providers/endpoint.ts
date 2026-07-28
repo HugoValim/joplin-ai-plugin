@@ -21,6 +21,14 @@ function isLoopback(hostname: string): boolean {
   );
 }
 
+function isBlockedPrivateHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "169.254.169.254" || normalized === "metadata.google.internal") {
+    return true;
+  }
+  return /^169\.254\./.test(normalized);
+}
+
 /**
  * Validates and normalizes an OpenAI-compatible endpoint configuration.
  *
@@ -66,8 +74,19 @@ function parseEndpoint(value: string): URL {
 }
 
 function validateEndpointSecurity(endpoint: URL, config: ProviderConfig): void {
+  if (isBlockedPrivateHost(endpoint.hostname)) {
+    throw new DomainError(
+      "SECURITY",
+      `Private or metadata endpoint ${endpoint.hostname} is blocked; expected a public HTTPS endpoint or localhost`,
+    );
+  }
   if (endpoint.protocol !== "http:" || isLoopback(endpoint.hostname)) return;
-  if (config.allowInsecureRemote) return;
+  if (
+    config.allowInsecureRemote &&
+    config.allowedInsecureOrigin === endpoint.origin
+  ) {
+    return;
+  }
   throw new DomainError(
     "SECURITY",
     `Remote HTTP endpoint ${endpoint.origin} requires explicit security confirmation; expected HTTPS or localhost`,
@@ -77,4 +96,29 @@ function validateEndpointSecurity(endpoint: URL, config: ProviderConfig): void {
 function ensureTrailingSlash(endpoint: URL): string {
   if (!endpoint.pathname.endsWith("/")) endpoint.pathname += "/";
   return endpoint.toString();
+}
+
+/**
+ * Clears stale remote-HTTP confirmation when the configured origin changes.
+ *
+ * @example await reconcileInsecureOrigin(settings, config)
+ */
+export async function reconcileInsecureOrigin(
+  port: {
+    setValue(key: string, value: unknown): Promise<void>;
+  },
+  config: ProviderConfig,
+): Promise<ProviderConfig> {
+  if (!config.allowInsecureRemote || !config.allowedInsecureOrigin) {
+    return config;
+  }
+  const endpoint = parseEndpoint(config.baseUrl);
+  if (endpoint.origin === config.allowedInsecureOrigin) return config;
+  await port.setValue("joplinAiAgent.allowInsecureRemote", false);
+  await port.setValue("joplinAiAgent.allowedInsecureOrigin", "");
+  return {
+    ...config,
+    allowInsecureRemote: false,
+    allowedInsecureOrigin: "",
+  };
 }

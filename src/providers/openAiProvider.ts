@@ -22,6 +22,11 @@ export type {
 } from "./types";
 
 const MAX_SSE_EVENT_CHARS = 1_048_576;
+const MAX_TOTAL_SSE_BYTES = 16 * 1024 * 1024;
+const MAX_ASSISTANT_TEXT_CHARS = 4_000_000;
+const MAX_TOOL_ARGUMENT_CHARS = 1_048_576;
+const MAX_MODELS_JSON_BYTES = 1_048_576;
+const MAX_CHUNK_CONTENT_CHARS = 256_000;
 const JsonObjectSchema = Type.Record(Type.String(), Type.Unknown());
 const ToolCallDeltaSchema = Type.Object(
   {
@@ -52,7 +57,12 @@ const ChunkSchema = Type.Object(
         {
           delta: Type.Object(
             {
-              content: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+              content: Type.Optional(
+                Type.Union([
+                  Type.String({ maxLength: MAX_CHUNK_CONTENT_CHARS }),
+                  Type.Null(),
+                ]),
+              ),
               tool_calls: Type.Optional(Type.Array(ToolCallDeltaSchema)),
             },
             { additionalProperties: true },
@@ -92,6 +102,9 @@ interface PendingToolCall {
 interface StreamState {
   readonly tools: Map<number, PendingToolCall>;
   completed: boolean;
+  totalBytes: number;
+  assistantTextChars: number;
+  toolArgumentChars: number;
 }
 
 export class FetchHttpTransport implements HttpTransport {
@@ -146,7 +159,13 @@ export class OpenAiCompatibleProvider implements AiProvider {
       signal: abortSignal,
     });
     assertSuccessfulResponse(response, "application/json");
-    const body: unknown = await response.json();
+    const bodyText = await readResponseText(response, MAX_MODELS_JSON_BYTES);
+    let body: unknown;
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      throw malformedResponse(bodyText.slice(0, 100), "valid models JSON");
+    }
     if (!Value.Check(Type.Object({ data: Type.Array(Type.Unknown()) }), body)) {
       throw malformedResponse(body, "a models object with a data array");
     }
@@ -238,13 +257,21 @@ async function* decodeProviderStream(
     },
   });
   const decoder = new TextDecoder();
-  const state: StreamState = { tools: new Map(), completed: false };
+  const state: StreamState = {
+    tools: new Map(),
+    completed: false,
+    totalBytes: 0,
+    assistantTextChars: 0,
+    toolArgumentChars: 0,
+  };
   const reader = response.body.getReader();
   try {
     while (true) {
       const result = await reader.read();
       if (result.done) break;
       if (signal.aborted) throw signal.reason;
+      state.totalBytes += result.value.byteLength;
+      assertStreamByteLimit(state.totalBytes);
       parser.feed(decoder.decode(result.value, { stream: true }));
       yield* drainParsedEvents(rawEvents, parseErrors, state);
     }
@@ -284,12 +311,16 @@ function* processRawEvent(
     return;
   }
   const chunk = parseChunk(rawEvent);
+  state.totalBytes += rawEvent.length;
+  assertStreamByteLimit(state.totalBytes);
   for (const choice of chunk.choices) {
     if (choice.delta.content) {
+      state.assistantTextChars += choice.delta.content.length;
+      assertAssistantTextLimit(state.assistantTextChars);
       yield { type: "text-delta", delta: choice.delta.content };
     }
     for (const toolDelta of choice.delta.tool_calls ?? []) {
-      accumulateToolDelta(state.tools, toolDelta);
+      accumulateToolDelta(state, toolDelta);
     }
     if (choice.finish_reason && !state.completed) {
       yield* finishStream(state, choice.finish_reason);
@@ -325,16 +356,23 @@ function parseChunk(rawEvent: string): StreamChunk {
   return input;
 }
 
-function accumulateToolDelta(
-  tools: Map<number, PendingToolCall>,
-  delta: ToolDelta,
-): void {
+function accumulateToolDelta(state: StreamState, delta: ToolDelta): void {
+  const tools = state.tools;
   const pending = tools.get(delta.index) ?? { argumentFragments: [] };
   if (delta.id) pending.id = delta.id;
   if (delta.function?.name) pending.name = delta.function.name;
   const args = delta.function?.arguments;
-  if (typeof args === "string") pending.argumentFragments.push(args);
-  if (typeof args === "object" && args !== null) pending.objectArguments = args;
+  if (typeof args === "string") {
+    state.toolArgumentChars += args.length;
+    assertToolArgumentLimit(state.toolArgumentChars);
+    pending.argumentFragments.push(args);
+  }
+  if (typeof args === "object" && args !== null) {
+    const encoded = JSON.stringify(args);
+    state.toolArgumentChars += encoded.length;
+    assertToolArgumentLimit(state.toolArgumentChars);
+    pending.objectArguments = args;
+  }
   tools.set(delta.index, pending);
 }
 
@@ -457,5 +495,64 @@ function malformedResponse(input: unknown, expected: string): DomainError {
   return new DomainError(
     "PROVIDER",
     `Malformed provider response ${safeValue(input)}; expected ${expected}`,
+  );
+}
+
+async function readResponseText(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  if (!response.body) {
+    throw malformedResponse(null, "a response body");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      total += result.value.byteLength;
+      if (total > maxBytes) {
+        throw new DomainError(
+          "LIMIT_EXCEEDED",
+          `Provider response exceeded ${maxBytes} bytes; expected a bounded body`,
+        );
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+function assertStreamByteLimit(totalBytes: number): void {
+  if (totalBytes <= MAX_TOTAL_SSE_BYTES) return;
+  throw new DomainError(
+    "LIMIT_EXCEEDED",
+    `Provider stream exceeded ${MAX_TOTAL_SSE_BYTES} bytes; expected a bounded response`,
+  );
+}
+
+function assertAssistantTextLimit(totalChars: number): void {
+  if (totalChars <= MAX_ASSISTANT_TEXT_CHARS) return;
+  throw new DomainError(
+    "LIMIT_EXCEEDED",
+    `Provider assistant text exceeded ${MAX_ASSISTANT_TEXT_CHARS} characters; expected a bounded response`,
+  );
+}
+
+function assertToolArgumentLimit(totalChars: number): void {
+  if (totalChars <= MAX_TOOL_ARGUMENT_CHARS) return;
+  throw new DomainError(
+    "LIMIT_EXCEEDED",
+    `Provider tool arguments exceeded ${MAX_TOOL_ARGUMENT_CHARS} characters; expected a bounded response`,
   );
 }

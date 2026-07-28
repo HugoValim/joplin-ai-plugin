@@ -14,6 +14,9 @@ const DEFAULT_SYSTEM_PROMPT = [
   "Do not invent facts or sources. Keep valid Markdown, links, tasks, code, and front matter intact unless asked to change them.",
   "Prefer focused, minimal edits and clear, concise prose.",
   "Ask one clarifying question when ambiguity could materially change the result.",
+  "Use propose-write tools for structural changes; every batch appears in ChangeReview before anything applies.",
+  "Never ask the user for opaque note or notebook IDs; discover targets with search and list tools.",
+  "Respect notebooks the user marked secret; they are excluded from tools and retrieval.",
 ].join(" ");
 const KEYS = {
   baseUrl: "joplinAiAgent.baseUrl",
@@ -24,6 +27,7 @@ const KEYS = {
   maxOutputTokens: "joplinAiAgent.maxOutputTokens",
   timeoutMs: "joplinAiAgent.timeoutMs",
   allowInsecureRemote: "joplinAiAgent.allowInsecureRemote",
+  allowedInsecureOrigin: "joplinAiAgent.allowedInsecureOrigin",
 } as const;
 
 export interface SettingsPort {
@@ -66,6 +70,7 @@ export async function loadProviderConfig(
     maxOutputTokens: readInteger(values, KEYS.maxOutputTokens, 1, 100_000),
     timeoutMs: readInteger(values, KEYS.timeoutMs, 1_000, 600_000),
     allowInsecureRemote: readBoolean(values, KEYS.allowInsecureRemote),
+    allowedInsecureOrigin: readString(values, KEYS.allowedInsecureOrigin),
   };
 }
 
@@ -80,12 +85,16 @@ export async function loadSystemPrompt(port: SettingsPort): Promise<string> {
 }
 
 /**
- * Records the user's explicit remote-HTTP security confirmation.
+ * Records the user's explicit remote-HTTP security confirmation for one origin.
  *
- * @example await allowConfirmedRemoteHttp(joplin.settings)
+ * @example await allowConfirmedRemoteHttp(joplin.settings, "http://192.0.2.1:8080")
  */
-export function allowConfirmedRemoteHttp(port: SettingsPort): Promise<void> {
-  return port.setValue(KEYS.allowInsecureRemote, true);
+export async function allowConfirmedRemoteHttp(
+  port: SettingsPort,
+  origin: string,
+): Promise<void> {
+  await port.setValue(KEYS.allowInsecureRemote, true);
+  await port.setValue(KEYS.allowedInsecureOrigin, origin);
 }
 
 function settingDefinitions(): Record<string, SettingItem> {
@@ -132,6 +141,17 @@ function settingDefinitions(): Record<string, SettingItem> {
       label: "Allow confirmed remote HTTP endpoint",
       description:
         "Security risk: content and credentials can be intercepted. Prefer HTTPS.",
+      public: true,
+      section: SECTION,
+      appTypes: [AppType.Desktop],
+      advanced: true,
+    },
+    [KEYS.allowedInsecureOrigin]: {
+      value: "",
+      type: SettingItemType.String,
+      label: "Confirmed remote HTTP origin",
+      description:
+        "Set automatically after confirming one remote HTTP endpoint. Clears when the base URL origin changes.",
       public: true,
       section: SECTION,
       appTypes: [AppType.Desktop],

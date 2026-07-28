@@ -6,6 +6,7 @@ export interface ProviderConfig {
   readonly maxOutputTokens: number;
   readonly timeoutMs: number;
   readonly allowInsecureRemote: boolean;
+  readonly allowedInsecureOrigin: string;
 }
 
 export interface ProviderMessage {

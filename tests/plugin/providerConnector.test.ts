@@ -57,6 +57,7 @@ const PROVIDER_VALUES: Readonly<Record<string, unknown>> = {
   "joplinAiAgent.maxOutputTokens": 2_000,
   "joplinAiAgent.timeoutMs": 120_000,
   "joplinAiAgent.allowInsecureRemote": false,
+  "joplinAiAgent.allowedInsecureOrigin": "",
 };
 
 describe("ProviderConnector", () => {
