@@ -23,6 +23,7 @@ export interface ToolExecutionContext {
   readonly readableNoteIds: ReadonlySet<string>;
   readonly secretNotebookIds: ReadonlySet<string>;
   readonly agentPlan: AgentPlanState;
+  readonly readOnly: boolean;
 }
 
 export interface AgentTool<TInput, TOutput> {

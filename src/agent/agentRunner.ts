@@ -341,6 +341,7 @@ function toolContext(
     runId: request.runId,
     hasFileWorkspace: request.hasFileWorkspace,
     vault: request.vault,
+    readOnly: request.readOnly,
     readableNoteIds: request.readableNoteIds,
     secretNotebookIds: request.secretNotebookIds,
     agentPlan,

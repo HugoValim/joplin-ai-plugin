@@ -3,7 +3,7 @@
   "id": "com.hugovalim.joplin-ai-agent",
   "app_min_version": "3.6",
   "platforms": ["desktop"],
-  "version": "0.10.0",
+  "version": "0.11.0",
   "name": "Joplin AI Agent",
   "description": "Persistent AI chat, opt-in note retrieval, and controlled note and text-file editing.",
   "author": "Hugo Valim",

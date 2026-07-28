@@ -45,6 +45,7 @@ const CONTEXT: ToolExecutionContext = {
   readableNoteIds: new Set<string>(),
   secretNotebookIds: new Set<string>(),
   agentPlan: { plan: null },
+  readOnly: false,
 };
 
 describe("ToolRegistry", () => {
