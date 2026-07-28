@@ -61,6 +61,47 @@ const ChatMaintenanceSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const ChatRenameSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("chat.rename"),
+    payload: Type.Object(
+      { title: Type.String({ minLength: 1, maxLength: 200 }) },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+const ChatRetrySchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("chat.retry"),
+    payload: EmptyPayloadSchema,
+  },
+  { additionalProperties: false },
+);
+const ChatRegenerateSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("chat.regenerate"),
+    payload: Type.Object(
+      { messageId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+const ModelSelectSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("model.select"),
+    payload: Type.Object(
+      { model: Type.String({ minLength: 1, maxLength: 500 }) },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const RunCancelSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -79,6 +120,10 @@ const ContextUpdateSchema = Type.Object(
         activeNote: Type.Boolean(),
         vault: Type.Boolean(),
         autoApply: Type.Boolean(),
+        interactionMode: Type.Union([
+          Type.Literal("ask"),
+          Type.Literal("agent"),
+        ]),
         attachedNoteIds: Type.Array(IdentifierSchema, {
           maxItems: 50,
           uniqueItems: true,
@@ -122,6 +167,18 @@ const ChangesDiscardSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
     type: Type.Literal("changes.discard"),
+    payload: Type.Object(
+      { changeSetId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ReviewOpenSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("review.open"),
     payload: Type.Object(
       { changeSetId: IdentifierSchema },
       { additionalProperties: false },
@@ -204,17 +261,22 @@ const PanelRequestSchema = Type.Union([
   ChatCreateSchema,
   ChatSelectSchema,
   ChatMaintenanceSchema,
+  ChatRenameSchema,
   ChatSubmitSchema,
+  ChatRetrySchema,
+  ChatRegenerateSchema,
   RunCancelSchema,
   ContextUpdateSchema,
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
+  ReviewOpenSchema,
   RunUndoSchema,
   NoteOpenSchema,
   AssistantActionSchema,
   SecretsMarkSchema,
   SecretsUnmarkSchema,
+  ModelSelectSchema,
 ]);
 export type PanelRequest = Static<typeof PanelRequestSchema>;
 const CitationSchema = Type.Object(
@@ -249,6 +311,10 @@ const ContextSettingsSchema = Type.Object(
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
     autoApply: Type.Boolean(),
+    interactionMode: Type.Union([
+      Type.Literal("ask"),
+      Type.Literal("agent"),
+    ]),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,
@@ -256,6 +322,40 @@ const ContextSettingsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const RunSummaryViewSchema = Type.Object(
+  {
+    runId: IdentifierSchema,
+    status: Type.Union([
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+      Type.Literal("cancelled"),
+      Type.Literal("awaiting-approval"),
+      Type.Literal("applied"),
+    ]),
+    summary: Type.String({ maxLength: 10_000 }),
+    completedAt: Type.Number({ minimum: 0 }),
+    promptTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    outputTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    totalTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    toolNames: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+        maxItems: 100,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ChangeOperationSchema = Type.Union([
+  Type.Literal("create"),
+  Type.Literal("update"),
+  Type.Literal("delete"),
+  Type.Literal("rename"),
+  Type.Literal("move"),
+  Type.Literal("reorder"),
+  Type.Literal("replace"),
+]);
 
 const ChangeViewSchema = Type.Object(
   {
@@ -265,6 +365,7 @@ const ChangeViewSchema = Type.Object(
       Type.Literal("notebook"),
       Type.Literal("file"),
     ]),
+    operation: Type.Optional(ChangeOperationSchema),
     targetId: IdentifierSchema,
     targetLabel: Type.String({ minLength: 1, maxLength: 1_000 }),
     before: Type.String({ maxLength: 2_000_000 }),
@@ -286,6 +387,7 @@ const ChangeSetViewSchema = Type.Object(
     changeSetId: IdentifierSchema,
     runId: Type.Optional(IdentifierSchema),
     applyToken: Type.String({ minLength: 32, maxLength: 128 }),
+    reviewNoteId: Type.Optional(IdentifierSchema),
     changes: Type.Array(ChangeViewSchema, { maxItems: 50 }),
   },
   { additionalProperties: false },
@@ -302,6 +404,7 @@ const ActiveChatSchema = Type.Object(
       Type.Null(),
     ]),
     pendingChangeSet: Type.Union([ChangeSetViewSchema, Type.Null()]),
+    runSummaries: Type.Array(RunSummaryViewSchema, { maxItems: 1_000 }),
   },
   { additionalProperties: false },
 );
@@ -336,6 +439,10 @@ const StateSnapshotSchema = Type.Object(
           maxItems: 500,
           uniqueItems: true,
         }),
+        availableModels: Type.Array(
+          Type.String({ minLength: 1, maxLength: 500 }),
+          { maxItems: 500 },
+        ),
       },
       { additionalProperties: false },
     ),
@@ -456,6 +563,34 @@ const RunProgressSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RunPlanItemSchema = Type.Object(
+  {
+    id: Type.String({ minLength: 1, maxLength: 64 }),
+    content: Type.String({ minLength: 1, maxLength: 500 }),
+    status: Type.Union([
+      Type.Literal("pending"),
+      Type.Literal("in_progress"),
+      Type.Literal("completed"),
+      Type.Literal("cancelled"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+const RunPlanSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("run.plan"),
+    payload: Type.Object(
+      {
+        items: Type.Array(RunPlanItemSchema, { maxItems: 100 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const RunFailedSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -479,6 +614,9 @@ const RunCompletedSchema = Type.Object(
       {
         summary: Type.String({ maxLength: 10_000 }),
         undoRunId: Type.Optional(IdentifierSchema),
+        promptTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+        outputTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+        totalTokens: Type.Optional(Type.Integer({ minimum: 0 })),
       },
       { additionalProperties: false },
     ),
@@ -496,6 +634,7 @@ const PluginEventSchema = Type.Union([
   ToolCompletedSchema,
   ChangesProposedSchema,
   RunProgressSchema,
+  RunPlanSchema,
   RunFailedSchema,
   RunCompletedSchema,
 ]);

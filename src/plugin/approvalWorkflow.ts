@@ -22,6 +22,7 @@ import { DeltaBatcher } from "./deltaBatcher";
 import { ApplyTokenStore } from "./applyTokenStore";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
+import type { ReviewNotePort } from "./reviewNoteService";
 import { summarizeToolResult } from "./toolActivity";
 
 interface ContinuationProviderPort {
@@ -40,6 +41,7 @@ export class ApprovalWorkflow {
     private readonly providers: ContinuationProviderPort,
     private readonly events: PluginEventSender,
     private readonly activeRuns: RunCancellationRegistry,
+    private readonly reviewNotes: ReviewNotePort,
   ) {}
 
   public remember(
@@ -65,7 +67,30 @@ export class ApprovalWorkflow {
   }
 
   public abandonChat(chatId: string): void {
+    void this.disposePendingReviewNote(chatId);
     this.continuations.deleteChat(chatId);
+  }
+
+  /**
+   * Opens or recreates the Review Note for a pending change set.
+   *
+   * @example await workflow.openReview(request)
+   */
+  public async openReview(
+    request: Extract<PanelRequest, { type: "review.open" }>,
+  ): Promise<void> {
+    const chat = await requireChat(this.chats, request.chatId);
+    const pending = chat.pendingChangeSet;
+    if (!pending || pending.id !== request.payload.changeSetId) {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `No pending change set ${request.payload.changeSetId}; expected an awaiting-approval batch`,
+      );
+    }
+    const reviewNoteId = await this.reviewNotes.ensureOpen(pending, chat.title);
+    if (reviewNoteId === pending.reviewNoteId) return;
+    const updated = this.changes.attachReviewNote(pending.id, reviewNoteId);
+    await this.chats.save({ ...chat, pendingChangeSet: updated });
   }
 
   /**
@@ -96,10 +121,17 @@ export class ApprovalWorkflow {
       return;
     }
     const applyToken = this.applyTokens.issue(changeSet.id);
+    const chat = await requireChat(this.chats, changeSet.chatId);
+    const reviewNoteId = await this.reviewNotes.openForChangeSet(
+      changeSet,
+      chat.title,
+    );
+    const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
+    await this.chats.save({ ...chat, pendingChangeSet: reviewed });
     this.events.post(
       "changes.proposed",
       changeSet.chatId,
-      toChangeSetView(changeSet, applyToken),
+      toChangeSetView(reviewed, applyToken),
       changeSet.runId,
     );
   }
@@ -245,6 +277,7 @@ export class ApprovalWorkflow {
         messages: [],
         hasFileWorkspace: pending.hasFileWorkspace,
         vault: pending.vault,
+        readOnly: false,
         readableNoteIds: pending.readableNoteIds,
         secretNotebookIds: pending.secretNotebookIds,
       },
@@ -296,6 +329,19 @@ export class ApprovalWorkflow {
         ),
       onToolCompleted: (result): void =>
         this.postToolCompleted(chatId, runId, result),
+      onPlanUpdated: (plan): void =>
+        this.events.post(
+          "run.plan",
+          chatId,
+          {
+            items: plan.items.map((item) => ({
+              id: item.id,
+              content: item.content,
+              status: item.status,
+            })),
+          },
+          runId,
+        ),
       onStep: (current, total): void =>
         this.events.post(
           "run.progress",
@@ -402,6 +448,7 @@ export class ApprovalWorkflow {
     status: PersistedRunSummary["status"],
   ): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
+    await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
     const runSummaries = chat.runSummaries.map((summary) =>
       summary.runId === runId ? { ...summary, status } : summary,
     );
@@ -412,10 +459,22 @@ export class ApprovalWorkflow {
       pendingChangeSet: null,
     });
   }
+
+  private async disposePendingReviewNote(chatId: string): Promise<void> {
+    const chat = await this.chats.get(chatId);
+    await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
+  }
+
+  private async disposeReviewNote(reviewNoteId: string | undefined): Promise<void> {
+    if (!reviewNoteId) return;
+    await this.reviewNotes.dispose(reviewNoteId);
+  }
 }
 
 function requiresManualReview(changeSet: ChangeSet): boolean {
-  return changeSet.changes.some((change) => change.kind !== "file");
+  return changeSet.changes.some(
+    (change) => change.kind !== "file" && change.operation === "delete",
+  );
 }
 
 function automaticApplyRequest(

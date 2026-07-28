@@ -1,12 +1,19 @@
 import { type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
+import type { AgentPlanState } from "../agent/agentPlan";
 import type {
   NormalizedToolCall,
   ProviderToolDefinition,
 } from "../providers/types";
 import { DomainError, safeValue } from "../shared/errors";
 
-export type ToolRisk = "read" | "propose-write";
+export type ToolRisk = "read" | "propose-write" | "meta";
+
+/** Content-body reads that count toward the per-segment read budget. */
+export const CONTENT_READ_TOOL_NAMES = new Set([
+  "read_note",
+  "read_text_file",
+]);
 
 export interface ToolExecutionContext {
   readonly chatId: string;
@@ -15,6 +22,7 @@ export interface ToolExecutionContext {
   readonly vault: boolean;
   readonly readableNoteIds: ReadonlySet<string>;
   readonly secretNotebookIds: ReadonlySet<string>;
+  readonly agentPlan: AgentPlanState;
 }
 
 export interface AgentTool<TInput, TOutput> {
@@ -73,14 +81,27 @@ export class ToolRegistry {
 
   /**
    * Returns only tools available for the current chat context.
+   * When proposeOnly is set, read tools are omitted so the model must propose writes.
    *
    * @example registry.providerDefinitions(context)
+   * @example registry.providerDefinitions(context, { proposeOnly: true })
    */
   public providerDefinitions(
     context: ToolExecutionContext,
+    options: { readonly proposeOnly?: boolean; readonly readOnly?: boolean } = {},
   ): readonly ProviderToolDefinition[] {
     return [...this.tools.values()]
       .filter((tool) => tool.isAvailable(context))
+      .filter(
+        (tool) =>
+          !options.proposeOnly ||
+          tool.risk === "propose-write" ||
+          tool.risk === "meta",
+      )
+      .filter(
+        (tool) =>
+          !options.readOnly || tool.risk === "read" || tool.risk === "meta",
+      )
       .map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -89,14 +110,36 @@ export class ToolRegistry {
   }
 
   /**
+   * Returns whether a tool name counts toward the content-read budget.
+   *
+   * @example registry.countsTowardReadBudget("read_note")
+   */
+  public countsTowardReadBudget(name: string): boolean {
+    return CONTENT_READ_TOOL_NAMES.has(name);
+  }
+
+  /**
    * Returns whether any propose-write tools are available for the context.
    *
    * @example registry.hasProposeWriteTools(context)
    */
-  public hasProposeWriteTools(context: ToolExecutionContext): boolean {
+  public hasProposeWriteTools(
+    context: ToolExecutionContext,
+    options: { readonly readOnly?: boolean } = {},
+  ): boolean {
+    if (options.readOnly) return false;
     return [...this.tools.values()].some(
       (tool) => tool.risk === "propose-write" && tool.isAvailable(context),
     );
+  }
+
+  /**
+   * Returns the registered risk for a tool name, or null when unknown.
+   *
+   * @example registry.riskFor("list_notebooks")
+   */
+  public riskFor(name: string): ToolRisk | null {
+    return this.tools.get(name)?.risk ?? null;
   }
 
   /**

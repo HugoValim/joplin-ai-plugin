@@ -12,6 +12,8 @@ function composer(
     phase: "Ready",
     focusSequence: 0,
     lastRunId: null,
+    lastUsage: null,
+    disabled: false,
     history: [],
     onDraftChange: jest.fn(),
     onSubmit: jest.fn(),

@@ -29,6 +29,8 @@ describe("persistRunOutcome", () => {
         assistantText: "Review complete.",
         changeSet,
         continuation: null,
+        usage: null,
+        toolNames: [],
       },
       [{ kind: "note", id: "note-1", label: "Guide" }],
     );
@@ -67,10 +69,43 @@ describe("persistRunOutcome", () => {
           assistantText: "Late response",
           changeSet: null,
           continuation: null,
+          usage: null,
+          toolNames: [],
         },
         [],
       ),
     ).rejects.toThrow("changed during model run");
     expect((await chats.get(created.id))?.messages).toEqual([]);
+  });
+});
+
+describe("truncateForRegenerate", () => {
+  test("removes the target assistant message and everything after it", async () => {
+    const { truncateForRegenerate } = await import(
+      "../../src/plugin/chatLifecycle"
+    );
+    const chat = {
+      ...(await new ChatStore("/plugin", new MemoryJsonFilePort()).create(
+        "Regenerate",
+      )),
+      messages: [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: "Question",
+          createdAt: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "Old answer",
+          createdAt: 2,
+        },
+      ],
+    };
+
+    const truncated = truncateForRegenerate(chat, "assistant-1");
+
+    expect(truncated.messages).toEqual([chat.messages[0]]);
   });
 });

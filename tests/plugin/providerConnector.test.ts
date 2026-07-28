@@ -47,6 +47,10 @@ class FakeProvider implements AiProvider {
   public async testConnection(): Promise<void> {
     return Promise.resolve();
   }
+
+  public async listModels(): Promise<readonly string[]> {
+    return ["glm-5.2:cloud"];
+  }
 }
 
 const PROVIDER_VALUES: Readonly<Record<string, unknown>> = {
@@ -93,6 +97,7 @@ describe("ProviderConnector", () => {
     await expect(connector.check()).resolves.toEqual({
       status: "online",
       modelName: "glm-5.2:cloud",
+      availableModels: ["glm-5.2:cloud"],
     });
     expect(settings.valueReads).toBe(1);
   });

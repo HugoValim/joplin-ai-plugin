@@ -70,6 +70,10 @@ class BlockingProvider implements AiProvider {
     return Promise.resolve();
   }
 
+  public async listModels(): Promise<readonly string[]> {
+    return [];
+  }
+
   public waitUntilStarted(): Promise<void> {
     return this.started;
   }
@@ -112,6 +116,10 @@ class ProposalThenCompletionProvider implements AiProvider {
 
   public async testConnection(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
   }
 }
 
@@ -206,8 +214,8 @@ class FakeSettings implements SettingsPort {
     );
   }
 
-  public async setValue(): Promise<void> {
-    return Promise.resolve();
+  public async setValue(key: string, value: unknown): Promise<void> {
+    SETTINGS_VALUES[key] = value;
   }
 }
 
@@ -253,7 +261,7 @@ class RecordingPanel implements PanelPort {
   }
 }
 
-const SETTINGS_VALUES: Readonly<Record<string, unknown>> = {
+const SETTINGS_VALUES: Record<string, unknown> = {
   "joplinAiAgent.baseUrl": "http://localhost:11434/v1",
   "joplinAiAgent.apiKey": "api-key-should-never-appear",
   "joplinAiAgent.model": "glm-5.2:cloud",
@@ -361,7 +369,75 @@ describe("ChatController", () => {
     await first;
   });
 
-  test("requires review for note proposals even when auto-apply is enabled", async () => {
+  test("emits a snapshot with the user message before the model finishes", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Visible");
+    const provider = new BlockingProvider();
+    const notes = new EmptyNoteRepository();
+    const source = new EmptyActiveNoteSource();
+    const changes = new InMemoryChangeSetStore();
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
+      () => provider,
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-1",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    panel.events.length = 0;
+
+    const running = controller.handle(
+      submission(chat.id, "run-visible", "Reorganize my ESS notebooks"),
+    );
+    await provider.waitUntilStarted();
+
+    const midRunSnapshot = panel.events
+      .filter((event) => event.type === "state.snapshot")
+      .at(-1);
+    expect(midRunSnapshot).toMatchObject({ type: "state.snapshot" });
+    if (midRunSnapshot?.type !== "state.snapshot") {
+      throw new Error("Expected mid-run state.snapshot");
+    }
+    expect(midRunSnapshot.payload.activeChat?.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "Reorganize my ESS notebooks",
+      }),
+    ]);
+
+    provider.release();
+    await running;
+  });
+
+  test("auto-applies note proposals when bypass permissions is enabled", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await chats.create("Automatic");
     await chats.save({
@@ -404,12 +480,11 @@ describe("ChatController", () => {
 
     await controller.handle(submission(chat.id, "run-auto", "Create a note"));
 
-    expect(notes.createdNotes).toHaveLength(0);
-    expect(provider.callCount).toBe(1);
+    expect(notes.createdNotes.length).toBeGreaterThan(0);
     expect(
       panel.events.some((event) => event.type === "changes.proposed"),
-    ).toBe(true);
-    expect((await chats.get(chat.id))?.pendingChangeSet).not.toBeNull();
+    ).toBe(false);
+    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
   });
 
   test("requires trusted confirmation before enabling automatic apply", async () => {
@@ -462,6 +537,7 @@ describe("ChatController", () => {
         activeNote: true,
         vault: false,
         autoApply,
+        interactionMode: "agent",
         attachedNoteIds: [],
       },
     });
@@ -476,9 +552,9 @@ describe("ChatController", () => {
     await controller.handle(update(false));
     expect((await chats.get(chat.id))?.context.autoApply).toBe(false);
     expect(dialogs.messages).toHaveLength(2);
-    expect(dialogs.messages[0]).toContain("file change");
+    expect(dialogs.messages[0]).toContain("Bypass permissions");
     expect(dialogs.messages[0]).toContain(
-      "Note and notebook proposals always require manual review",
+      "Deletions still require manual ChangeReview",
     );
   });
 });

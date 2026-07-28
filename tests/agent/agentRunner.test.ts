@@ -6,6 +6,7 @@ import type {
 } from "../../src/providers/types";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import { AgentRunner } from "../../src/agent/agentRunner";
+import { registerAgentPlanTools } from "../../src/tools/agentPlanTools";
 import {
   ToolRegistry,
   type AgentTool,
@@ -34,6 +35,10 @@ class RepeatingToolProvider implements AiProvider {
   public async testConnection(): Promise<void> {
     return Promise.resolve();
   }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
+  }
 }
 
 class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
@@ -58,6 +63,70 @@ class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
   }
 }
 
+/** Named like a real content-read tool so it counts toward the read budget. */
+class ContentReadTool implements AgentTool<
+  Record<string, never>,
+  { ok: boolean }
+> {
+  public readonly name = "read_note";
+  public readonly description = "Read a note body";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    {},
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}
+
+class ListTool implements AgentTool<Record<string, never>, { ok: boolean }> {
+  public readonly name = "list_notebooks";
+  public readonly description = "List notebooks";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    {},
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}
+
+class ListNotebookNotesTool implements AgentTool<
+  Record<string, never>,
+  { ok: boolean }
+> {
+  public readonly name = "list_notebook_notes";
+  public readonly description = "List notes in a notebook";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    {},
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}
+
 class SingleProposalProvider implements AiProvider {
   public callCount = 0;
 
@@ -72,6 +141,10 @@ class SingleProposalProvider implements AiProvider {
 
   public async testConnection(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
   }
 }
 
@@ -94,6 +167,10 @@ class ProposalThenTextProvider implements AiProvider {
 
   public async testConnection(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
   }
 }
 
@@ -133,7 +210,7 @@ class ProposeTool implements AgentTool<
 }
 
 describe("AgentRunner", () => {
-  test("stops after twenty-four model steps", async () => {
+  test("stops after the safety model-step limit when tools never finish", async () => {
     const provider = new RepeatingToolProvider();
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
@@ -149,16 +226,37 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Loop forever" }],
-          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
-    ).rejects.toThrow("24 model steps");
-    expect(provider.callCount).toBe(24);
+    ).rejects.toThrow("200 model steps");
+    expect(provider.callCount).toBe(200);
   });
 
-  test("stops when parallel tool batches exceed one hundred calls", async () => {
-    const provider = new RepeatingToolProvider(10);
+  test("does not cap tool call volume during a run", async () => {
+    let calls = 0;
+    const provider: AiProvider = {
+      async *streamChat() {
+        calls += 1;
+        if (calls <= 3) {
+          yield {
+            type: "tool-calls",
+            calls: Array.from({ length: 50 }, (_, index) => ({
+              id: `call-${calls}-${index + 1}`,
+              name: "echo",
+              arguments: {},
+            })),
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", delta: "Done after many reads." };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
     const runner = new AgentRunner(
@@ -167,18 +265,23 @@ describe("AgentRunner", () => {
       new InMemoryChangeSetStore(),
     );
 
-    await expect(
-      runner.run(
-        {
-          chatId: "chat-1",
-          runId: "run-1",
-          messages: [{ role: "user", content: "Many tools" }],
-          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
-        },
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow("expected at most 100");
-    expect(provider.callCount).toBe(11);
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-1",
+        messages: [{ role: "user", content: "Many tools" }],
+        hasFileWorkspace: false,
+        vault: true,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(calls).toBe(4);
+    expect(result.assistantText).toBe("Done after many reads.");
   });
 
   test("pauses after collecting proposed writes", async () => {
@@ -193,7 +296,7 @@ describe("AgentRunner", () => {
         chatId: "chat-1",
         runId: "run-1",
         messages: [{ role: "user", content: "Improve the guide" }],
-        hasFileWorkspace: true, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+        hasFileWorkspace: true, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
       },
       new AbortController().signal,
     );
@@ -215,6 +318,7 @@ describe("AgentRunner", () => {
       messages: [{ role: "user" as const, content: "Improve the guide" }],
       hasFileWorkspace: true,
       vault: true,
+      readOnly: false,
       readableNoteIds: new Set<string>(),
       secretNotebookIds: new Set<string>(),
     };
@@ -255,7 +359,7 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Do not run" }],
-          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
         },
         controller.signal,
       ),
@@ -281,6 +385,7 @@ describe("AgentRunner", () => {
         messages: [{ role: "user", content: "move note to root" }],
         hasFileWorkspace: false,
         vault: true,
+        readOnly: false,
         readableNoteIds: new Set<string>(),
         secretNotebookIds: new Set<string>(),
       },
@@ -298,19 +403,8 @@ describe("AgentRunner", () => {
     expect(provider.callCount).toBe(2);
   });
 
-  test("injects a read-budget nudge after four consecutive read-only steps", async () => {
-    const captured: StreamChatRequest[] = [];
-    const provider: AiProvider = {
-      async *streamChat(request, _signal) {
-        captured.push(request);
-        yield {
-          type: "tool-calls",
-          calls: [{ id: `call-${captured.length}`, name: "echo", arguments: {} }],
-        };
-        yield { type: "completed", finishReason: "tool_calls" };
-      },
-      testConnection: async () => undefined,
-    };
+  test("keeps reading when no propose-write tools exist", async () => {
+    const provider = new RepeatingToolProvider();
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
     const runner = new AgentRunner(
@@ -327,21 +421,421 @@ describe("AgentRunner", () => {
           messages: [{ role: "user", content: "Keep reading" }],
           hasFileWorkspace: false,
           vault: false,
+        readOnly: false,
           readableNoteIds: new Set<string>(),
           secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
-    ).rejects.toThrow("24 model steps");
+    ).rejects.toThrow("200 model steps");
+    expect(provider.callCount).toBe(200);
+  });
 
-    const fifthRequest = captured[4];
+  test("disables content reads after eight read_note calls even in one parallel batch", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        const names = request.tools.map((tool) => tool.name);
+        if (names.includes("read_note")) {
+          yield {
+            type: "tool-calls",
+            calls: Array.from({ length: 8 }, (_, index) => ({
+              id: `read-${captured.length}-${index + 1}`,
+              name: "read_note",
+              arguments: {},
+            })),
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [
+            {
+              id: `propose-${captured.length}`,
+              name: "propose",
+              arguments: {},
+            },
+          ],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ContentReadTool());
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-hard-budget",
+        messages: [{ role: "user", content: "Reorganize notebooks" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(captured).toHaveLength(2);
+    expect(captured[1]?.tools.map((tool) => tool.name)).toEqual(["propose"]);
     expect(
-      fifthRequest?.messages.some(
+      captured[1]?.messages.some(
         (message) =>
           message.role === "system" &&
-          message.content.includes("READ BUDGET"),
+          message.content.includes("READ BUDGET EXCEEDED"),
       ),
     ).toBe(true);
+  });
+
+  test("does not count list tools toward the content-read budget", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: Array.from({ length: 20 }, (_, index) => ({
+              id: `list-${index + 1}`,
+              name: "list_notebooks",
+              arguments: {},
+            })),
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", delta: "Listed notebooks." };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ListTool());
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-list-budget",
+        messages: [{ role: "user", content: "List everything" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(captured).toHaveLength(2);
+    expect(captured[1]?.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["list_notebooks", "propose"]),
+    );
+    expect(
+      captured.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("READ BUDGET EXCEEDED"),
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses text-only stop after multi-notebook inventory until plan and propose", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              { id: "nb", name: "list_notebooks", arguments: {} },
+              ...Array.from({ length: 3 }, (_, index) => ({
+                id: `notes-${index + 1}`,
+                name: "list_notebook_notes",
+                arguments: {},
+              })),
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length === 2) {
+          yield {
+            type: "text-delta",
+            delta: "Mapped the vault. I'll plan next session.",
+          };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        if (captured.length === 3) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "plan-1",
+                name: "set_agent_plan",
+                arguments: {
+                  items: [{ id: "1", content: "Improve FWS notes" }],
+                },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length === 4) {
+          yield {
+            type: "text-delta",
+            delta: "Plan ready. Say continue when you want edits.",
+          };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [{ id: "propose-1", name: "propose", arguments: {} }],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ListTool());
+    registry.register(new ListNotebookNotesTool());
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-force-plan",
+        messages: [
+          { role: "user", content: "Improve writing in all notes" },
+        ],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(
+      captured.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("PLAN REQUIRED"),
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      captured.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("PLAN IN PROGRESS"),
+        ),
+      ),
+    ).toBe(true);
+    expect(result.continuation?.plan?.items[0]?.content).toBe(
+      "Improve FWS notes",
+    );
+  });
+
+  test("refuses text-only bailout after read budget until propose-write runs", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: Array.from({ length: 8 }, (_, index) => ({
+              id: `read-${index + 1}`,
+              name: "read_note",
+              arguments: {},
+            })),
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length <= 5) {
+          yield { type: "text-delta", delta: "Here is my plan only." };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [
+            {
+              id: "propose-late",
+              name: "propose",
+              arguments: {},
+            },
+          ],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ContentReadTool());
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-bailout",
+        messages: [{ role: "user", content: "Reorganize notebooks" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(captured.length).toBe(6);
+    expect(
+      captured.filter((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("PROPOSE REQUIRED"),
+        ),
+      ).length,
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  test("does not complete on a text-only plan after the read budget", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: Array.from({ length: 8 }, (_, index) => ({
+              id: `read-${index + 1}`,
+              name: "read_note",
+              arguments: {},
+            })),
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", delta: "Final plan without tools." };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ContentReadTool());
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-no-bailout",
+        messages: [{ role: "user", content: "Reorganize notebooks" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.changeSet).toBeNull();
+    expect(captured.length).toBe(200);
+    expect(result.assistantText).toContain("ChangeReview did not open");
+  });
+
+  test("stores the agent plan on continuation after a propose-write pause", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(_request, _signal) {
+        yield {
+          type: "tool-calls",
+          calls: [
+            {
+              id: "plan-1",
+              name: "set_agent_plan",
+              arguments: {
+                items: [{ id: "1", content: "Improve FWS notes" }],
+              },
+            },
+            {
+              id: "propose-1",
+              name: "propose",
+              arguments: {},
+            },
+          ],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+    };
+    const registry = new ToolRegistry();
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const plans: unknown[] = [];
+    const runner = new AgentRunner(provider, registry, changes, {
+      onPlanUpdated: (plan) => plans.push(plan),
+    });
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-plan",
+        messages: [{ role: "user", content: "Improve all notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(result.continuation?.plan?.items).toEqual([
+      { id: "1", content: "Improve FWS notes", status: "pending" },
+    ]);
+    expect(plans).toHaveLength(1);
   });
 });
 
@@ -373,6 +867,10 @@ class InvalidThenRecoverProvider implements AiProvider {
 
   public async testConnection(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
   }
 }
 

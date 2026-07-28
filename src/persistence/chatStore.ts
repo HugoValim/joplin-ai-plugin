@@ -48,6 +48,9 @@ const ContextSchema = Type.Object(
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
     autoApply: Type.Optional(Type.Boolean()),
+    interactionMode: Type.Optional(
+      Type.Union([Type.Literal("ask"), Type.Literal("agent")]),
+    ),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,
@@ -67,6 +70,14 @@ const RunSummarySchema = Type.Object(
     ]),
     summary: Type.String({ maxLength: 10_000 }),
     completedAt: Type.Number({ minimum: 0 }),
+    promptTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    outputTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    totalTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+    toolNames: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+        maxItems: 100,
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -111,8 +122,9 @@ export type PersistedChat = Omit<
   StoredChatShape,
   "context" | "pendingChangeSet"
 > & {
-  readonly context: Omit<StoredContext, "autoApply"> & {
+  readonly context: Omit<StoredContext, "autoApply" | "interactionMode"> & {
     readonly autoApply: boolean;
+    readonly interactionMode: "ask" | "agent";
   };
   readonly pendingChangeSet: ChangeSet | null;
 };
@@ -156,6 +168,7 @@ export class ChatStore {
         activeNote: true,
         vault: false,
         autoApply: false,
+        interactionMode: "agent",
         attachedNoteIds: [],
       },
       externalRoot: null,
@@ -331,7 +344,11 @@ function stringify(input: unknown): string {
 function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
   return {
     ...chat,
-    context: { ...chat.context, autoApply: chat.context.autoApply ?? false },
+    context: {
+      ...chat.context,
+      autoApply: chat.context.autoApply ?? false,
+      interactionMode: chat.context.interactionMode ?? "agent",
+    },
   };
 }
 

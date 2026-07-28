@@ -5,6 +5,7 @@ import rehypeSanitize from "rehype-sanitize";
 import { safeMarkdownUrlTransform } from "./markdownSecurity";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 import { MessageCard } from "./MessageCard";
+import { runSummaryForMessage } from "./runSummaryMatch";
 import {
   createPagedTranscriptState,
   decideTranscriptScroll,
@@ -26,6 +27,7 @@ type AssistantAction = Extract<
 interface TranscriptProps {
   readonly chatId: string;
   readonly messages: readonly ChatMessage[];
+  readonly runSummaries: ActiveChatView["runSummaries"];
   readonly streamingText: string;
   readonly busy: boolean;
   readonly submissionSequence: number;
@@ -34,6 +36,7 @@ interface TranscriptProps {
     messageId: string,
     action: AssistantAction,
   ) => void;
+  readonly onRegenerate: (messageId: string) => void;
   readonly onSuggestion: (suggestion: string) => void;
   readonly suggestions?: readonly string[];
   readonly noteActionsDisabled: boolean;
@@ -48,11 +51,13 @@ interface TranscriptProps {
 export function Transcript({
   chatId,
   messages,
+  runSummaries,
   streamingText,
   busy,
   submissionSequence,
   onOpenNote,
   onAssistantAction,
+  onRegenerate,
   onSuggestion,
   suggestions = DEFAULT_SUGGESTIONS,
   noteActionsDisabled,
@@ -77,6 +82,13 @@ export function Transcript({
     () => messages.slice(start),
     [messages, start],
   );
+  const latestAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role === "assistant") return message.id;
+    }
+    return null;
+  }, [messages]);
 
   useLayoutEffect(() => {
     const element = viewport.current;
@@ -186,8 +198,13 @@ export function Transcript({
             message={message}
             position={start + index + 1}
             total={messages.length}
+            runSummary={runSummaryForMessage(message, messages, runSummaries)}
+            canRegenerate={
+              !busy && message.id === latestAssistantId && message.role === "assistant"
+            }
             onOpenNote={onOpenNote}
             onAssistantAction={onAssistantAction}
+            onRegenerate={onRegenerate}
             noteActionsDisabled={noteActionsDisabled}
           />
         ))}

@@ -152,6 +152,24 @@ export class OpenAiCompatibleProvider implements AiProvider {
    * @example await provider.testConnection(new AbortController().signal)
    */
   public async testConnection(abortSignal: AbortSignal): Promise<void> {
+    await this.fetchModelsBody(abortSignal);
+  }
+
+  /**
+   * Returns model IDs from `GET /models`.
+   *
+   * @example await provider.listModels(new AbortController().signal)
+   */
+  public async listModels(abortSignal: AbortSignal): Promise<readonly string[]> {
+    const body = await this.fetchModelsBody(abortSignal);
+    const entries = (body as { data: readonly { id?: string }[] }).data;
+    return entries
+      .map((entry) => entry.id?.trim())
+      .filter((id): id is string => Boolean(id))
+      .slice(0, 500);
+  }
+
+  private async fetchModelsBody(abortSignal: AbortSignal): Promise<unknown> {
     const response = await this.transport.fetch(this.endpoint("models"), {
       method: "GET",
       headers: this.headers(false),
@@ -169,6 +187,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     if (!Value.Check(Type.Object({ data: Type.Array(Type.Unknown()) }), body)) {
       throw malformedResponse(body, "a models object with a data array");
     }
+    return body;
   }
 
   private async fetchCompletion(

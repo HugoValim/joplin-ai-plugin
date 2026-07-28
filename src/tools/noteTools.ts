@@ -362,6 +362,52 @@ class ReplaceNoteTool extends NoteTool<ReplaceNoteInput, ProposalOutput> {
   }
 }
 
+interface ReplaceNoteBodyInput {
+  readonly note_id: string;
+  readonly expected_updated_time: number;
+  readonly body: string;
+}
+
+class ReplaceNoteBodyTool extends NoteTool<
+  ReplaceNoteBodyInput,
+  ProposalOutput
+> {
+  public readonly name = "replace_note_body";
+  public readonly description =
+    "Propose replacing an entire note body after reading it. Prefer replace_note_text for small exact edits.";
+  public readonly risk = "propose-write" as const;
+  public readonly inputSchema = Type.Object(
+    {
+      note_id: IdentifierSchema,
+      expected_updated_time: Type.Number({ minimum: 0 }),
+      body: Type.String({ maxLength: 1_000_000 }),
+    },
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = ProposalOutputSchema;
+
+  public constructor(
+    private readonly repository: NoteRepository,
+    private readonly changes: ChangeSetStore,
+  ) {
+    super();
+  }
+
+  public override isAvailable(context: ToolExecutionContext): boolean {
+    return noteScopedToolsEnabled(context);
+  }
+
+  public async execute(
+    input: ReplaceNoteBodyInput,
+    context: ToolExecutionContext,
+  ): Promise<ProposalOutput> {
+    const note = await this.repository.readNote(input.note_id);
+    assertNoteReadable(context, input.note_id, note.parentId);
+    assertNoteVersion(note, input.expected_updated_time);
+    return addNoteUpdate(this.changes, context, note, input.body);
+  }
+}
+
 /**
  * Registers bounded Joplin reads and policy-gated note proposal tools.
  *
@@ -378,6 +424,7 @@ export function registerNoteTools(
   registry.register(new CreateNoteTool(changes));
   registry.register(new AppendNoteTool(repository, changes));
   registry.register(new ReplaceNoteTool(repository, changes));
+  registry.register(new ReplaceNoteBodyTool(repository, changes));
 }
 
 function assertNoteVersion(note: NoteRecord, expected: number): void {

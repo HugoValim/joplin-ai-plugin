@@ -64,6 +64,13 @@ export interface AiProvider {
    * @example await provider.testConnection(new AbortController().signal)
    */
   testConnection(abortSignal: AbortSignal): Promise<void>;
+
+  /**
+   * Lists model IDs from the provider's models endpoint.
+   *
+   * @example await provider.listModels(new AbortController().signal)
+   */
+  listModels(abortSignal: AbortSignal): Promise<readonly string[]>;
 }
 
 export interface HttpTransport {

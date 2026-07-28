@@ -60,6 +60,7 @@ describe("note tool privacy allowlist", () => {
         "create_note",
         "append_note_markdown",
         "replace_note_text",
+        "replace_note_body",
       ]),
     );
   });
@@ -181,5 +182,49 @@ describe("note proposal tools", () => {
       ),
     ).rejects.toThrow("found 2 matches");
     expect(changes.getByRun("run-1")).toBeNull();
+  });
+
+  test("proposes a full note body replacement with version checks", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const registry = new ToolRegistry();
+    registerNoteTools(registry, new FakeNoteRepository(), changes);
+
+    const result = await registry.execute(
+      {
+        id: "call-body",
+        name: "replace_note_body",
+        arguments: {
+          note_id: "note-1",
+          expected_updated_time: 10,
+          body: "Improved prose.",
+        },
+      },
+      toolContext({ readableNoteIds: new Set(["note-1"]) }),
+    );
+    const output = result.output as { change_id: string };
+    expect(typeof output.change_id).toBe("string");
+    expect(output.change_id.length).toBeGreaterThan(0);
+    const batch = changes.getByRun("run-1");
+    expect(batch?.changes).toHaveLength(1);
+    expect(batch?.changes[0]).toMatchObject({
+      operation: "update",
+      after: "Improved prose.",
+      before: "same and same",
+    });
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-stale",
+          name: "replace_note_body",
+          arguments: {
+            note_id: "note-1",
+            expected_updated_time: 9,
+            body: "Stale",
+          },
+        },
+        toolContext({ readableNoteIds: new Set(["note-1"]) }),
+      ),
+    ).rejects.toThrow("expected updated_time 9");
   });
 });

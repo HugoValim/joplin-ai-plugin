@@ -5,6 +5,7 @@ const CONTINUATION: AgentContinuation = {
   messages: [{ role: "user", content: "Original request" }],
   nextStep: 2,
   toolCallCount: 1,
+  plan: null,
 };
 
 describe("AgentContinuationStore", () => {

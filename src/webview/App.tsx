@@ -19,18 +19,22 @@ export function App(): JSX.Element {
   const activeChat = state.snapshot.activeChat;
   const pendingChanges = activeChat?.pendingChangeSet ?? null;
   const hasActivity = Boolean(
-    state.tools.length || state.progress || state.failure,
+    state.tools.length || state.plan.length || state.progress || state.failure,
   );
   const activity = hasActivity ? (
     <RunActivity
       tools={state.tools}
+      plan={state.plan}
       progress={state.progress}
       failure={state.failure}
+      canRetry={Boolean(state.failure && !state.busy && !pendingChanges)}
+      onRetry={controller.retry}
     />
   ) : null;
+  const composerDisabled = state.busy || Boolean(pendingChanges);
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${pendingChanges ? " has-review" : ""}`}>
       <aside
         className="panel-width-guard"
         role="status"
@@ -49,13 +53,15 @@ export function App(): JSX.Element {
         onCreateChat={controller.createChat}
         onClearChat={controller.clearChat}
         onDeleteChat={controller.deleteChat}
+        onRenameChat={controller.renameChat}
+        onSelectModel={controller.selectModel}
       />
       {activeChat ? (
         <ContextSummary
           chat={activeChat}
           activeNote={state.activeNote}
           secretNotebookIds={state.snapshot.secretNotebookIds}
-          disabled={state.busy || Boolean(pendingChanges)}
+          disabled={composerDisabled}
           onUpdate={controller.updateContext}
           onToggleAttached={controller.toggleAttachedNote}
           onSelectFolder={controller.selectFolder}
@@ -65,52 +71,56 @@ export function App(): JSX.Element {
       ) : (
         <div className="context-placeholder" aria-hidden="true" />
       )}
-      {activeChat && pendingChanges ? (
-        <ChangeReview
-          changeSet={pendingChanges}
-          acceptedIds={controller.acceptedIds}
-          disabled={state.busy}
-          phase={state.phase}
-          onToggle={controller.toggleChange}
-          onSelectAll={controller.selectAllChanges}
-          onSelectNone={controller.selectNoChanges}
-          onApply={controller.applyChanges}
-          onDiscard={controller.discardChanges}
+      <div className="main-pane">
+        <Transcript
+          chatId={activeChat?.id ?? "bootstrap"}
+          messages={activeChat?.messages ?? []}
+          runSummaries={activeChat?.runSummaries ?? []}
+          streamingText={state.streamingText}
+          busy={state.busy}
+          submissionSequence={state.submissionSequence}
+          onOpenNote={controller.openNote}
+          onAssistantAction={controller.runAssistantAction}
+          onRegenerate={controller.regenerate}
+          onSuggestion={controller.useSuggestion}
+          suggestions={
+            activeChat
+              ? promptSuggestions(activeChat, state.activeNote)
+              : undefined
+          }
+          noteActionsDisabled={composerDisabled || !state.activeNote}
+          activity={activity}
         />
-      ) : (
-        <>
-          <Transcript
-            chatId={activeChat?.id ?? "bootstrap"}
-            messages={activeChat?.messages ?? []}
-            streamingText={state.streamingText}
-            busy={state.busy}
-            submissionSequence={state.submissionSequence}
-            onOpenNote={controller.openNote}
-            onAssistantAction={controller.runAssistantAction}
-            onSuggestion={controller.useSuggestion}
-            suggestions={
-              activeChat
-                ? promptSuggestions(activeChat, state.activeNote)
-                : undefined
-            }
-            noteActionsDisabled={state.busy || !state.activeNote}
-            activity={activity}
-          />
-          <Composer
-            key={activeChat?.id ?? "bootstrap"}
-            draft={controller.draft}
-            busy={state.busy}
+        {activeChat && pendingChanges ? (
+          <ChangeReview
+            changeSet={pendingChanges}
+            acceptedIds={controller.acceptedIds}
+            disabled={state.busy}
             phase={state.phase}
-            focusSequence={state.focusSequence}
-            lastRunId={state.lastRunId}
-            history={composerHistory(activeChat?.messages ?? [])}
-            onDraftChange={controller.setDraft}
-            onSubmit={controller.submit}
-            onCancel={controller.cancel}
-            onUndo={controller.undo}
+            onToggle={controller.toggleChange}
+            onSelectAll={controller.selectAllChanges}
+            onSelectNone={controller.selectNoChanges}
+            onApply={controller.applyChanges}
+            onDiscard={controller.discardChanges}
+            onOpenReview={controller.openReview}
           />
-        </>
-      )}
+        ) : null}
+      </div>
+      <Composer
+        key={activeChat?.id ?? "bootstrap"}
+        draft={controller.draft}
+        busy={state.busy}
+        disabled={composerDisabled}
+        phase={pendingChanges ? "Resolve proposed changes to continue" : state.phase}
+        focusSequence={state.focusSequence}
+        lastRunId={state.lastRunId}
+        lastUsage={state.lastUsage}
+        history={composerHistory(activeChat?.messages ?? [])}
+        onDraftChange={controller.setDraft}
+        onSubmit={controller.submit}
+        onCancel={controller.cancel}
+        onUndo={controller.undo}
+      />
       <RunLiveRegion announcement={state.phase} />
     </main>
   );

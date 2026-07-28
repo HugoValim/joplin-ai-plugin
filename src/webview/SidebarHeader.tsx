@@ -8,6 +8,8 @@ interface SidebarHeaderProps {
   readonly onCreateChat: () => void;
   readonly onClearChat: () => void;
   readonly onDeleteChat: () => void;
+  readonly onRenameChat: (title: string) => void;
+  readonly onSelectModel: (model: string) => void;
 }
 
 /**
@@ -44,14 +46,50 @@ export function SidebarHeader(props: SidebarHeaderProps): JSX.Element {
         </button>
         <HeaderMenu {...props} />
       </div>
-      <div
-        className={`connection-status status-${props.snapshot.endpointStatus}`}
-        aria-label={`Connection ${props.snapshot.endpointStatus}`}
-      >
+      <ModelStatus {...props} />
+    </header>
+  );
+}
+
+function ModelStatus(props: SidebarHeaderProps): JSX.Element {
+  const picker = useRef<HTMLDetailsElement>(null);
+  const models = props.snapshot.availableModels;
+  const current = props.snapshot.modelName || "model not set";
+  const close = (): void => {
+    if (picker.current) picker.current.open = false;
+  };
+  return (
+    <details
+      ref={picker}
+      className={`connection-status status-${props.snapshot.endpointStatus} model-picker`}
+      onKeyDown={(event) => closeOnEscape(event, picker, close)}
+    >
+      <summary aria-label={`Connection ${props.snapshot.endpointStatus}, model ${current}`}>
         <span aria-hidden="true">●</span>
         {statusText(props.snapshot)}
-      </div>
-    </header>
+      </summary>
+      {models.length ? (
+        <div className="model-picker-popover" role="listbox" aria-label="Available models">
+          {models.map((model) => (
+            <button
+              type="button"
+              key={model}
+              role="option"
+              aria-selected={model === props.snapshot.modelName}
+              disabled={props.busy}
+              onClick={() => {
+                close();
+                props.onSelectModel(model);
+              }}
+            >
+              {model}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="model-picker-empty">Configure a model in plugin settings.</p>
+      )}
+    </details>
   );
 }
 
@@ -68,6 +106,13 @@ function HeaderMenu(props: SidebarHeaderProps): JSX.Element {
     >
       <summary aria-label="More options">•••</summary>
       <div className="header-menu-popover">
+        <button
+          type="button"
+          disabled={!props.snapshot.activeChat || props.busy}
+          onClick={() => renameChat(close, props.onRenameChat)}
+        >
+          Rename chat
+        </button>
         <button
           type="button"
           disabled={!props.snapshot.activeChat || props.busy}
@@ -100,6 +145,12 @@ function closeOnEscape(
   if (event.key !== "Escape") return;
   close();
   menu.current?.querySelector("summary")?.focus();
+}
+
+function renameChat(close: () => void, rename: (title: string) => void): void {
+  close();
+  const title = prompt("Rename chat:", "")?.trim();
+  if (title) rename(title);
 }
 
 function confirmClear(close: () => void, clear: () => void): void {

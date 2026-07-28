@@ -21,17 +21,30 @@ export interface RunFailure {
   readonly message: string;
 }
 
+export interface UsageSnapshot {
+  readonly promptTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+}
+
+export type AgentPlanItemView = Extract<
+  PluginEvent,
+  { type: "run.plan" }
+>["payload"]["items"][number];
+
 export interface SidebarState {
   readonly snapshot: SidebarSnapshot;
   readonly activeNote: ActiveNoteSummary;
   readonly activeRunId: string | null;
   readonly lastRunId: string | null;
+  readonly lastUsage: UsageSnapshot | null;
   readonly streamingText: string;
   readonly busy: boolean;
   readonly failure: RunFailure | null;
   readonly progress: string;
   readonly phase: string;
   readonly tools: readonly ToolActivity[];
+  readonly plan: readonly AgentPlanItemView[];
   readonly submissionSequence: number;
   readonly focusSequence: number;
 }
@@ -55,6 +68,7 @@ export const EMPTY_SNAPSHOT: SidebarSnapshot = {
   modelName: "",
   privacyNotice: "Loading privacy information…",
   secretNotebookIds: [],
+  availableModels: [],
 };
 
 export const INITIAL_SIDEBAR_STATE: SidebarState = {
@@ -62,12 +76,14 @@ export const INITIAL_SIDEBAR_STATE: SidebarState = {
   activeNote: null,
   activeRunId: null,
   lastRunId: null,
+  lastUsage: null,
   streamingText: "",
   busy: false,
   failure: null,
   progress: "",
   phase: "Ready",
   tools: [],
+  plan: [],
   submissionSequence: 0,
   focusSequence: 0,
 };
@@ -111,6 +127,8 @@ function reducePluginEvent(
       progress: event.payload.label,
       phase: event.payload.label,
     };
+  if (event.type === "run.plan")
+    return { ...state, plan: event.payload.items };
   return reduceToolOrTerminalEvent(state, event);
 }
 
@@ -125,20 +143,43 @@ function reduceToolOrTerminalEvent(
         | "composer.prefill"
         | "run.started"
         | "assistant.delta"
-        | "run.progress";
+        | "run.progress"
+        | "run.plan";
     }
   >,
 ): SidebarState {
   if (event.type === "tool.started") return startTool(state, event);
   if (event.type === "tool.completed") return completeTool(state, event);
-  if (event.type === "changes.proposed")
-    return finishRun(state, "Waiting for approval", null);
+  if (event.type === "changes.proposed") {
+    const next = finishRun(state, "Waiting for approval", null, null);
+    return { ...next, plan: state.plan };
+  }
   if (event.type === "run.failed") return failRun(state, event);
   return finishRun(
     state,
     event.payload.summary,
     event.payload.undoRunId ?? null,
+    usageFromCompleted(event.payload),
   );
+}
+
+function usageFromCompleted(
+  payload: Extract<PluginEvent, { type: "run.completed" }>["payload"],
+): UsageSnapshot | null {
+  if (
+    payload.promptTokens === undefined &&
+    payload.outputTokens === undefined &&
+    payload.totalTokens === undefined
+  ) {
+    return null;
+  }
+  return {
+    promptTokens: payload.promptTokens ?? 0,
+    outputTokens: payload.outputTokens ?? 0,
+    totalTokens:
+      payload.totalTokens ??
+      (payload.promptTokens ?? 0) + (payload.outputTokens ?? 0),
+  };
 }
 
 function receiveSnapshot(
@@ -153,12 +194,14 @@ function receiveSnapshot(
       snapshot: event.payload,
       activeRunId: null,
       lastRunId: null,
+      lastUsage: null,
       streamingText: "",
       busy: false,
       failure: null,
       progress: "",
       phase: "Ready",
       tools: [],
+      plan: [],
       focusSequence: state.focusSequence + 1,
     };
   }
@@ -182,6 +225,7 @@ function beginRun(
     phase: action.phase,
     streamingText: "",
     tools: [],
+    plan: [],
     submissionSequence: state.submissionSequence + (action.submission ? 1 : 0),
     focusSequence: state.focusSequence + 1,
   };
@@ -196,6 +240,7 @@ function startRun(state: SidebarState, runId: string): SidebarState {
     phase: "Thinking",
     streamingText: "",
     tools: [],
+    plan: [],
   };
 }
 
@@ -241,7 +286,7 @@ function failRun(
 ): SidebarState {
   const cancelled = event.payload.code === "ABORTED";
   return {
-    ...finishRun(state, cancelled ? "Cancelled" : "Run failed", null),
+    ...finishRun(state, cancelled ? "Cancelled" : "Run failed", null, null),
     failure: cancelled ? null : event.payload,
   };
 }
@@ -250,22 +295,25 @@ function finishRun(
   state: SidebarState,
   summary: string,
   lastRunId: string | null,
+  lastUsage: UsageSnapshot | null,
 ): SidebarState {
   return {
     ...state,
     activeRunId: null,
     busy: false,
     lastRunId,
+    lastUsage: lastUsage ?? state.lastUsage,
     streamingText: "",
     progress: summary,
     phase: summary,
+    plan: [],
     focusSequence: state.focusSequence + 1,
   };
 }
 
 function failPost(state: SidebarState, message: string): SidebarState {
   return {
-    ...finishRun(state, "Request failed", null),
+    ...finishRun(state, "Request failed", null, null),
     failure: { code: "WEBVIEW", message },
   };
 }

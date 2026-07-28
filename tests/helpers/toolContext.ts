@@ -15,6 +15,7 @@ export function toolContext(
     vault: false,
     readableNoteIds: new Set<string>(),
     secretNotebookIds: new Set<string>(),
+    agentPlan: { plan: null },
     ...overrides,
   };
 }

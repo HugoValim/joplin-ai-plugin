@@ -47,12 +47,14 @@ describe("panel protocol", () => {
         activeNote: true,
         vault: false,
         autoApply: false,
+        interactionMode: "agent",
         attachedNoteIds: ["note-1"],
       },
     ],
     ["folder.select", {}],
     ["changes.apply", { changeSetId: "changes-1", acceptedIds: ["change-1"], applyToken: "a".repeat(64) }],
     ["changes.discard", { changeSetId: "changes-1" }],
+    ["review.open", { changeSetId: "changes-1" }],
     ["run.undo", { targetRunId: "run-old" }],
     ["note.open", { noteId: "note-1" }],
     ["secrets.mark", { notebookId: "nb-1" }],
@@ -61,6 +63,7 @@ describe("panel protocol", () => {
     const runId =
       type.startsWith("run.") ||
       type.startsWith("changes.") ||
+      type === "review.open" ||
       type === "assistant.action"
         ? "run-1"
         : null;
@@ -107,6 +110,7 @@ describe("plugin protocol", () => {
           {
             id: "change-1",
             kind: "notebook",
+            operation: "rename",
             targetId: "folder-1",
             targetLabel: "Projects",
             before: "Title: Projects",
@@ -131,6 +135,7 @@ describe("plugin protocol", () => {
         modelName: "",
         privacyNotice: "Context is opt-in.",
         secretNotebookIds: [],
+        availableModels: [],
       },
     ],
     [
@@ -153,6 +158,15 @@ describe("plugin protocol", () => {
     ],
     ["changes.proposed", { changeSetId: "changes-1", applyToken: "f".repeat(64), changes: [] }],
     ["run.progress", { current: 1, total: 2, label: "Reviewing" }],
+    [
+      "run.plan",
+      {
+        items: [
+          { id: "1", content: "Improve FWS notes", status: "pending" },
+          { id: "2", content: "Tighten roadmap", status: "completed" },
+        ],
+      },
+    ],
     ["run.failed", { code: "PROVIDER", message: "Provider failed." }],
     ["run.completed", { summary: "Done" }],
   ])("accepts %s events", (type, payload) => {

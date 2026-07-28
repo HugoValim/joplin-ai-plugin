@@ -44,6 +44,7 @@ export function toActiveChat(
           applyTokenForPending?.(pending.id) ?? "",
         )
       : null,
+    runSummaries: chat.runSummaries,
   };
 }
 
@@ -55,6 +56,7 @@ export function toChangeSetView(
     changeSetId: changeSet.id,
     runId: changeSet.runId,
     applyToken,
+    ...(changeSet.reviewNoteId ? { reviewNoteId: changeSet.reviewNoteId } : {}),
     changes: changeSet.changes.map(toChangeView),
   };
 }
@@ -62,7 +64,7 @@ export function toChangeSetView(
 function toChangeView(
   change: ProposedChange,
 ): ChangeSetView["changes"][number] {
-  return {
+  const base = {
     id: change.id,
     kind: change.kind,
     targetId: changeTargetId(change),
@@ -73,6 +75,10 @@ function toChangeView(
     status: change.status,
     ...(change.message ? { message: change.message } : {}),
   };
+  if (change.kind === "file") {
+    return { ...base, operation: "replace" as const };
+  }
+  return { ...base, operation: change.operation };
 }
 
 function changeTargetId(change: ProposedChange): string {

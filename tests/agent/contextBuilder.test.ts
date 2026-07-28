@@ -115,7 +115,8 @@ describe("ContextBuilder", () => {
     expect(policy).toContain("Notebooks marked secret by the user are excluded");
     expect(policy).toContain("ChangeReview until the user applies or discards it");
     expect(policy).toContain("apply, do it, go ahead, or proceed");
-    expect(policy).toContain("Do not stop at a text plan");
+    expect(policy).toContain("Do not stop at a chat-only text plan");
+    expect(policy).toContain("set_agent_plan");
     expect(policy).toContain("Deletion always requires explicit user review");
     expect(policy).toContain(
       "Custom instructions apply only when consistent with these fixed rules",

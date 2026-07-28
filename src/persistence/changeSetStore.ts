@@ -131,6 +131,7 @@ export interface ChangeSet {
   readonly createdAt: number;
   readonly status: "proposed" | "applied" | "partial" | "discarded";
   readonly changes: readonly ProposedChange[];
+  readonly reviewNoteId?: string;
 }
 
 export interface ChangeSetScope {
@@ -294,6 +295,7 @@ export const ChangeSetSchema = Type.Object(
       ]),
       { maxItems: 50 },
     ),
+    reviewNoteId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   },
   { additionalProperties: false },
 );
@@ -312,6 +314,7 @@ export interface ChangeSetStore {
     changeSetId: string,
     results: readonly ProposedChange[],
   ): ChangeSet;
+  attachReviewNote(changeSetId: string, reviewNoteId: string): ChangeSet;
   restore(changeSet: ChangeSet): void;
 }
 
@@ -403,6 +406,21 @@ export class InMemoryChangeSetStore implements ChangeSetStore {
       status: allApplied ? "applied" : "partial",
       changes: [...results],
     };
+    this.sets.set(changeSetId, next);
+    return cloneChangeSet(next);
+  }
+
+  /**
+   * Records the temporary Review Note id for a pending batch.
+   *
+   * @example store.attachReviewNote(changeSetId, noteId)
+   */
+  public attachReviewNote(
+    changeSetId: string,
+    reviewNoteId: string,
+  ): ChangeSet {
+    const current = this.require(changeSetId);
+    const next = { ...current, reviewNoteId };
     this.sets.set(changeSetId, next);
     return cloneChangeSet(next);
   }

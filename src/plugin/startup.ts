@@ -19,6 +19,7 @@ import { ChatStore, type JsonFilePort } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
 import { SecretNotebookStore, type JsonFilePort as SecretNotebookJsonPort } from "../persistence/secretNotebookStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
+import { registerAgentPlanTools } from "../tools/agentPlanTools";
 import { registerFileTools } from "../tools/fileTools";
 import { registerNoteOrganizationTools } from "../tools/noteOrganizationTools";
 import { registerNoteTools } from "../tools/noteTools";
@@ -41,6 +42,7 @@ import {
   PerChatWorkspaceResolver,
 } from "./workspaceAdapters";
 import { AssistantOutputActions } from "./assistantOutputActions";
+import { ReviewNoteService } from "./reviewNoteService";
 
 type FsExtraBundle = JoplinFsExtra & PersistenceFsExtra;
 
@@ -85,6 +87,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
   registerNoteTools(tools, notes, changes);
   registerNoteOrganizationTools(tools, notes, changes);
   registerFileTools(tools, workspaces, changes);
+  registerAgentPlanTools(tools);
   const dataDirectory = await joplin.plugins.dataDir();
   const secretNotebooks = new SecretNotebookStore(
     createSecretNotebookJsonPort(dataDirectory, jsonFiles),
@@ -113,6 +116,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     new AssistantOutputActions(chats, activeSource, notes, commands),
     secretNotebooks,
     (config) => new OpenAiCompatibleProvider(config),
+    new ReviewNoteService(notes, secretNotebooks, commands),
   );
   await panel.initialize((request) => controller.handle(request));
   await registerToggleSidebarShortcut(

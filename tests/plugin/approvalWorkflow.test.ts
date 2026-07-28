@@ -22,7 +22,7 @@ import type {
   NotebookRecord,
   UpdateNoteBodyInput,
 } from "../../src/notes/retriever";
-import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
+import { InMemoryChangeSetStore, type ChangeSet } from "../../src/persistence/changeSetStore";
 import { ChatStore } from "../../src/persistence/chatStore";
 import { ApprovalWorkflow } from "../../src/plugin/approvalWorkflow";
 import type { PanelPort } from "../../src/plugin/panelPort";
@@ -30,6 +30,10 @@ import { PluginEventSender } from "../../src/plugin/pluginEventSender";
 import { RunCancellationRegistry } from "../../src/plugin/runCancellationRegistry";
 import type { PluginEvent } from "../../src/shared/protocol";
 import { ToolRegistry } from "../../src/tools/toolRegistry";
+import {
+  NoOpReviewNotePort,
+  type ReviewNotePort,
+} from "../../src/plugin/reviewNoteService";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
 class MutableNoteRepository implements NoteRepository {
@@ -186,6 +190,10 @@ class FinalTextProvider implements AiProvider {
   public async testConnection(): Promise<void> {
     return Promise.resolve();
   }
+
+  public async listModels(): Promise<readonly string[]> {
+    return [];
+  }
 }
 
 class RecordingPanelPort implements PanelPort {
@@ -205,6 +213,33 @@ function proposedApplyToken(event: PluginEvent | undefined): string {
     throw new Error("Expected changes.proposed event");
   }
   return event.payload.applyToken;
+}
+
+class RecordingReviewNotePort implements ReviewNotePort {
+  public readonly opened: Array<{ changeSetId: string; chatTitle: string }> =
+    [];
+  public readonly disposed: string[] = [];
+  private nextId = 1;
+
+  public async openForChangeSet(
+    changeSet: ChangeSet,
+    chatTitle: string,
+  ): Promise<string> {
+    this.opened.push({ changeSetId: changeSet.id, chatTitle });
+    return `review-note-${this.nextId++}`;
+  }
+
+  public async ensureOpen(
+    changeSet: ChangeSet,
+    chatTitle: string,
+  ): Promise<string> {
+    if (changeSet.reviewNoteId) return changeSet.reviewNoteId;
+    return this.openForChangeSet(changeSet, chatTitle);
+  }
+
+  public async dispose(noteId: string): Promise<void> {
+    this.disposed.push(noteId);
+  }
 }
 
 describe("ApprovalWorkflow", () => {
@@ -239,6 +274,7 @@ describe("ApprovalWorkflow", () => {
     const notes = new MutableNoteRepository();
     const provider = new FinalTextProvider();
     const panel = new RecordingPanelPort();
+    const reviewNotes = new RecordingReviewNotePort();
     const workflow = new ApprovalWorkflow(
       chats,
       changes,
@@ -252,6 +288,7 @@ describe("ApprovalWorkflow", () => {
       { connectWithConfirmation: async () => ({ provider }) },
       new PluginEventSender(panel),
       new RunCancellationRegistry(),
+      reviewNotes,
     );
     workflow.remember(
       changeSet,
@@ -259,6 +296,7 @@ describe("ApprovalWorkflow", () => {
         messages: [{ role: "user", content: "Improve the guide" }],
         nextStep: 2,
         toolCallCount: 1,
+        plan: null,
       },
       chat.id,
       false,
@@ -271,6 +309,12 @@ describe("ApprovalWorkflow", () => {
     await workflow.resolveProposedChanges(changeSet, false);
     expect(notes.note.body).toBe("Old");
     expect(panel.events.at(-1)?.type).toBe("changes.proposed");
+    expect(reviewNotes.opened).toEqual([
+      { changeSetId: changeSet.id, chatTitle: "Review" },
+    ]);
+    expect((await chats.get(chat.id))?.pendingChangeSet?.reviewNoteId).toBe(
+      "review-note-1",
+    );
 
     await workflow.apply({
       version: 2,
@@ -286,6 +330,7 @@ describe("ApprovalWorkflow", () => {
     });
 
     expect(notes.note.body).toBe("New");
+    expect(reviewNotes.disposed).toEqual(["review-note-1"]);
     expect(
       provider.lastRequest?.messages.some((message) =>
         message.content.includes('"status":"applied"'),
@@ -303,7 +348,7 @@ describe("ApprovalWorkflow", () => {
     ]);
   });
 
-  test("requires manual review for note proposals even when auto-apply is enabled", async () => {
+  test("automatically applies note proposals when bypass permissions is enabled", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await chats.create("Automatic notes");
     const changes = new InMemoryChangeSetStore();
@@ -337,12 +382,16 @@ describe("ApprovalWorkflow", () => {
       },
       new PluginEventSender(panel),
       new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
     );
 
     await workflow.resolveProposedChanges(changeSet, true);
 
-    expect(notes.note.body).toBe("Old");
-    expect(panel.events.map((event) => event.type)).toEqual(["changes.proposed"]);
+    expect(notes.note.body).toBe("Updated");
+    expect(panel.events.map((event) => event.type)).toEqual([
+      "run.progress",
+      "run.completed",
+    ]);
   });
 
   test("automatically applies file-only proposals without review", async () => {
@@ -378,6 +427,7 @@ describe("ApprovalWorkflow", () => {
       },
       new PluginEventSender(panel),
       new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
     );
 
     await workflow.resolveProposedChanges(changeSet, true);
@@ -425,6 +475,7 @@ describe("ApprovalWorkflow", () => {
       },
       new PluginEventSender(panel),
       new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
     );
 
     await workflow.resolveProposedChanges(changeSet, true);
@@ -436,8 +487,10 @@ describe("ApprovalWorkflow", () => {
   });
 
   test("rejects forged apply requests without a plugin token", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Forged");
     const changes = new InMemoryChangeSetStore();
-    const proposed = changes.add("chat-1", "run-forged", {
+    const proposed = changes.add(chat.id, "run-forged", {
       kind: "note",
       operation: "update",
       noteId: "note-1",
@@ -449,7 +502,7 @@ describe("ApprovalWorkflow", () => {
     const changeSet = changes.getByRun("run-forged");
     if (!changeSet) throw new Error("Expected change set");
     const workflow = new ApprovalWorkflow(
-      new ChatStore("/plugin", new MemoryJsonFilePort()),
+      chats,
       changes,
       new ChangeApplier(
         changes,
@@ -461,6 +514,7 @@ describe("ApprovalWorkflow", () => {
       { connectWithConfirmation: async () => ({ provider: new FinalTextProvider() }) },
       new PluginEventSender(new RecordingPanelPort()),
       new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
     );
     await workflow.resolveProposedChanges(changeSet, false);
 
@@ -468,7 +522,7 @@ describe("ApprovalWorkflow", () => {
       workflow.apply({
         version: 2,
         messageId: "message-1",
-        chatId: "chat-1",
+        chatId: chat.id,
         runId: "run-forged",
         type: "changes.apply",
         payload: {

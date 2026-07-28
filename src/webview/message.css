@@ -214,31 +214,72 @@
   border-radius: 7px;
   background: var(--joplin-background-color2);
   color: var(--joplin-color2);
-  padding: 7px 9px;
-  font-size: 0.78rem;
+  padding: 5px 8px;
+  font-size: 0.74rem;
 }
 
-.run-activity p {
-  margin: 0;
+.run-activity-details {
+  min-width: 0;
 }
 
-.run-activity ul {
+.run-activity-summary {
+  overflow: hidden;
+  cursor: pointer;
+  list-style-position: inside;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-activity-list {
   display: grid;
   gap: 3px;
-  margin: 5px 0 0;
+  max-height: 8rem;
+  margin: 4px 0 0;
+  overflow-y: auto;
   padding-left: 20px;
 }
 
-.run-activity li span {
+.run-activity-list li span {
   display: block;
 }
 
+.run-plan-list li[data-status="completed"] span {
+  opacity: 0.72;
+  text-decoration: line-through;
+}
+
+.run-plan-list li[data-status="cancelled"] span {
+  opacity: 0.55;
+}
+
 .run-error {
+  display: grid;
+  gap: 4px;
   border: 1px solid var(--joplin-color-error);
   border-radius: 6px;
   padding: 6px;
 }
 
+.run-error button {
+  justify-self: start;
+}
+
 .run-error p {
   white-space: pre-wrap;
+}
+
+.run-timeline {
+  margin-top: 4px;
+  border-top: 1px solid var(--joplin-divider-color);
+  padding-top: 4px;
+  font-size: 0.72rem;
+}
+
+.run-timeline > summary {
+  cursor: pointer;
+}
+
+.run-timeline-tools {
+  margin: 4px 0 0;
+  color: var(--joplin-color2);
 }

@@ -21,6 +21,7 @@ export interface ProviderSession {
 export interface EndpointCheck {
   readonly status: EndpointStatus;
   readonly modelName: string;
+  readonly availableModels: readonly string[];
 }
 
 export class ProviderConnector {
@@ -55,12 +56,50 @@ export class ProviderConnector {
   public async check(): Promise<EndpointCheck> {
     try {
       const config = await loadProviderConfig(this.settings);
-      if (!config.model) return { status: "unconfigured", modelName: "" };
-      const status = await this.testProvider(config);
-      return { status, modelName: config.model };
+      if (!config.model) {
+        return { status: "unconfigured", modelName: "", availableModels: [] };
+      }
+      const { status, models } = await this.testProvider(config);
+      return { status, modelName: config.model, availableModels: models };
     } catch {
-      return { status: "offline", modelName: "" };
+      return { status: "offline", modelName: "", availableModels: [] };
     }
+  }
+
+  /**
+   * Lists models from the configured provider without mutating settings.
+   *
+   * @example await connector.listModels()
+   */
+  public async listModels(): Promise<readonly string[]> {
+    try {
+      const session = await this.connectWithConfirmation();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), session.config.timeoutMs);
+      try {
+        return await session.provider.listModels(controller.signal);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Persists a new model selection in plugin settings.
+   *
+   * @example await connector.selectModel('llama3')
+   */
+  public async selectModel(model: string): Promise<void> {
+    const trimmed = model.trim();
+    if (!trimmed) {
+      throw new DomainError(
+        "VALIDATION",
+        `Invalid model ${JSON.stringify(model)}; expected a non-empty model name`,
+      );
+    }
+    await this.settings.setValue("joplinAiAgent.model", trimmed);
   }
 
   private async confirmRemoteHttp(
@@ -81,12 +120,18 @@ export class ProviderConnector {
     return { provider: this.factory(config), config };
   }
 
-  private async testProvider(config: ProviderConfig): Promise<EndpointStatus> {
+  private async testProvider(
+    config: ProviderConfig,
+  ): Promise<{ readonly status: EndpointStatus; readonly models: readonly string[] }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.timeoutMs);
     try {
-      await this.factory(config).testConnection(controller.signal);
-      return "online";
+      const provider = this.factory(config);
+      await provider.testConnection(controller.signal);
+      const models = await provider.listModels(controller.signal);
+      return { status: "online", models };
+    } catch {
+      return { status: "offline", models: [] };
     } finally {
       clearTimeout(timer);
     }

@@ -4,8 +4,10 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { safeMarkdownUrlTransform } from "./markdownSecurity";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
+import { RunTimeline } from "./RunTimeline";
 
 type ChatMessage = ActiveChatView["messages"][number];
+type RunSummary = ActiveChatView["runSummaries"][number];
 type AssistantAction = Extract<
   PanelRequest,
   { type: "assistant.action" }
@@ -15,11 +17,14 @@ interface MessageCardProps {
   readonly message: ChatMessage;
   readonly position: number;
   readonly total: number;
+  readonly runSummary: RunSummary | null;
+  readonly canRegenerate: boolean;
   readonly onOpenNote: (noteId: string) => void;
   readonly onAssistantAction: (
     messageId: string,
     action: AssistantAction,
   ) => void;
+  readonly onRegenerate?: (messageId: string) => void;
   readonly noteActionsDisabled: boolean;
 }
 
@@ -100,6 +105,15 @@ export const MessageCard = memo(function MessageCard(
           <button type="button" onClick={copyContent}>
             {copyLabel}
           </button>
+          {props.canRegenerate && props.onRegenerate ? (
+            <button
+              type="button"
+              disabled={props.noteActionsDisabled}
+              onClick={() => props.onRegenerate?.(message.id)}
+            >
+              Regenerate
+            </button>
+          ) : null}
           <details
             ref={actionMenu}
             onKeyDown={(event) => {
@@ -123,6 +137,9 @@ export const MessageCard = memo(function MessageCard(
             </div>
           </details>
         </footer>
+      ) : null}
+      {message.role === "assistant" && props.runSummary ? (
+        <RunTimeline summary={props.runSummary} />
       ) : null}
     </article>
   );
@@ -206,6 +223,8 @@ function sameMessageCard(
     previous.message.citations === next.message.citations &&
     previous.position === next.position &&
     previous.total === next.total &&
+    previous.runSummary === next.runSummary &&
+    previous.canRegenerate === next.canRegenerate &&
     previous.noteActionsDisabled === next.noteActionsDisabled
   );
 }

@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
+import { formatUsageSummary } from "./usageFormat";
+import type { UsageSnapshot } from "./sidebarState";
 
 interface ComposerProps {
   readonly draft: string;
   readonly busy: boolean;
+  readonly disabled: boolean;
   readonly phase: string;
   readonly focusSequence: number;
   readonly lastRunId: string | null;
+  readonly lastUsage: UsageSnapshot | null;
   readonly history: readonly string[];
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: () => void;
@@ -39,11 +43,16 @@ export function Composer(props: ComposerProps): JSX.Element {
       onSubmit={(event) => {
         event.preventDefault();
         browse.current = null;
-        props.onSubmit();
+        if (!props.disabled) props.onSubmit();
       }}
     >
       <div className="composer-status" id="composer-status">
         <span>{props.phase}</span>
+        {!props.busy && formatUsageSummary(props.lastUsage) ? (
+          <span className="usage-summary" aria-label="Token usage">
+            {formatUsageSummary(props.lastUsage)}
+          </span>
+        ) : null}
         {props.lastRunId && !props.busy ? (
           <button type="button" onClick={props.onUndo}>
             Undo
@@ -59,6 +68,7 @@ export function Composer(props: ComposerProps): JSX.Element {
           id="prompt"
           rows={1}
           value={props.draft}
+          disabled={props.disabled}
           aria-describedby="composer-status"
           placeholder="Ask about enabled context…"
           onChange={(event) => {
@@ -80,7 +90,7 @@ export function Composer(props: ComposerProps): JSX.Element {
           <button
             type="submit"
             className="primary composer-submit"
-            disabled={!props.draft.trim()}
+            disabled={props.disabled || !props.draft.trim()}
           >
             Send
           </button>
@@ -98,7 +108,7 @@ function handleComposerKey(
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     browse.current = null;
-    if (!props.busy) props.onSubmit();
+    if (!props.busy && !props.disabled) props.onSubmit();
     return;
   }
   if (event.key === "ArrowUp") {

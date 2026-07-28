@@ -23,11 +23,13 @@ function renderTranscript(
     <Transcript
       chatId="chat-1"
       messages={transcriptMessages}
+      runSummaries={[]}
       streamingText={streamingText}
       busy={Boolean(streamingText)}
       submissionSequence={0}
       onOpenNote={jest.fn()}
       onAssistantAction={jest.fn()}
+      onRegenerate={jest.fn()}
       onSuggestion={jest.fn()}
       noteActionsDisabled={false}
     />,
@@ -69,11 +71,13 @@ describe("Transcript", () => {
       <Transcript
         chatId="chat-1"
         messages={messages(10)}
+        runSummaries={[]}
         streamingText="New response"
         busy
         submissionSequence={0}
         onOpenNote={jest.fn()}
         onAssistantAction={jest.fn()}
+        onRegenerate={jest.fn()}
         onSuggestion={jest.fn()}
         noteActionsDisabled={false}
       />,
@@ -96,11 +100,13 @@ describe("Transcript", () => {
       <Transcript
         chatId="chat-2"
         messages={messages(250)}
+        runSummaries={[]}
         streamingText=""
         busy={false}
         submissionSequence={0}
         onOpenNote={jest.fn()}
         onAssistantAction={jest.fn()}
+        onRegenerate={jest.fn()}
         onSuggestion={jest.fn()}
         noteActionsDisabled={false}
       />,

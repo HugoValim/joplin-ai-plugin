@@ -10,10 +10,11 @@ interface ChangeReviewProps {
   readonly onSelectNone: () => void;
   readonly onApply: () => void;
   readonly onDiscard: () => void;
+  readonly onOpenReview: () => void;
 }
 
 /**
- * Renders one bounded approval workspace with fixed batch actions.
+ * Renders a slim approval strip; diffs live in the Review Note.
  *
  * @example <ChangeReview changeSet={pending} acceptedIds={ids} {...actions} />
  */
@@ -23,7 +24,7 @@ export function ChangeReview(props: ChangeReviewProps): JSX.Element {
       <ReviewHeader {...props} />
       <div className="review-list" aria-label="Proposed changes">
         {props.changeSet.changes.map((change) => (
-          <ChangeDiff
+          <ChangeRow
             key={change.id}
             change={change}
             accepted={props.acceptedIds.has(change.id)}
@@ -47,7 +48,14 @@ function ReviewHeader(props: ChangeReviewProps): JSX.Element {
         </h2>
         <p>{props.phase}</p>
       </div>
-      <div className="selection-controls" aria-label="Batch selection">
+      <div className="selection-controls" aria-label="Review controls">
+        <button
+          type="button"
+          disabled={props.disabled}
+          onClick={props.onOpenReview}
+        >
+          Open review
+        </button>
         <button
           type="button"
           disabled={props.disabled}
@@ -67,7 +75,7 @@ function ReviewHeader(props: ChangeReviewProps): JSX.Element {
   );
 }
 
-function ChangeDiff({
+function ChangeRow({
   change,
   accepted,
   disabled,
@@ -79,31 +87,27 @@ function ChangeDiff({
   readonly onToggle: (changeId: string) => void;
 }): JSX.Element {
   return (
-    <details className={`change change-${change.status}`} open>
-      <summary>
-        <input
-          type="checkbox"
-          checked={accepted}
-          disabled={disabled || change.status !== "proposed"}
-          onChange={() => onToggle(change.id)}
-          onClick={(event) => event.stopPropagation()}
-          aria-label={`Accept ${change.targetLabel}`}
-        />
-        <span title={change.targetLabel}>{change.targetLabel}</span>
-        <small>{change.kind}</small>
-        <StatusBadge status={change.status} />
-      </summary>
+    <label className={`change-row change-${change.status}`}>
+      <input
+        type="checkbox"
+        checked={accepted}
+        disabled={disabled || change.status !== "proposed"}
+        onChange={() => onToggle(change.id)}
+        aria-label={`Accept ${change.targetLabel}`}
+      />
+      <span className="change-label" title={change.targetLabel}>
+        {change.targetLabel}
+      </span>
+      <small className="change-meta">
+        {change.operation ?? "change"} · {change.kind}
+      </small>
+      <StatusBadge status={change.status} />
       {change.message ? (
-        <p className="change-message">{change.message}</p>
+        <span className="change-message" title={change.message}>
+          {change.message}
+        </span>
       ) : null}
-      <pre
-        className="diff"
-        tabIndex={0}
-        aria-label={`Diff for ${change.targetLabel}`}
-      >
-        {change.diff}
-      </pre>
-    </details>
+    </label>
   );
 }
 

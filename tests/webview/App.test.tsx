@@ -46,15 +46,18 @@ function snapshotEvent(): PluginEvent {
           activeNote: true,
           vault: false,
           autoApply: false,
+          interactionMode: "agent",
           attachedNoteIds: [],
         },
         externalRoot: null,
         pendingChangeSet: null,
+        runSummaries: [],
       },
       endpointStatus: "online",
       modelName: "glm-5.2:cloud",
       privacyNotice: "Only enabled context is sent.",
       secretNotebookIds: [],
+      availableModels: ["glm-5.2:cloud"],
     },
   };
 }
@@ -241,10 +244,10 @@ describe("App shell", () => {
     const { api } = await renderReadyApp();
     fireEvent.click(screen.getByLabelText("Context settings"));
     const toggle = screen.getByRole("checkbox", {
-      name: /Auto-apply changes/,
+      name: /Bypass permissions/,
     });
     expect(
-      screen.getByText(/Note and notebook changes always require ChangeReview/),
+      screen.getByText(/Deletions still require ChangeReview/),
     ).toBeTruthy();
 
     fireEvent.click(toggle);
@@ -263,11 +266,15 @@ describe("App shell", () => {
     expect(guard.textContent).toContain("Minimum width: 280px");
   });
 
-  test("replaces composer with review workspace and posts accepted changes", async () => {
+  test("keeps transcript visible with docked review and disables composer until resolved", async () => {
     const { api } = await renderReadyApp();
     await act(async () => api.emit(pendingSnapshotEvent()));
 
-    expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
+    expect(screen.getByRole("feed", { name: "Messages" })).toBeTruthy();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    expect(composer.disabled).toBe(true);
     expect(screen.getByText("1 accepted")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
@@ -288,8 +295,9 @@ describe("App shell", () => {
       }),
     );
     await act(async () => api.emit(snapshotEvent()));
-    const composer = screen.getByRole("textbox", { name: "Message" });
-    expect(document.activeElement).toBe(composer);
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Message" }),
+    );
     expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
   });
 

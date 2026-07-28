@@ -50,7 +50,12 @@ export interface SidebarController {
   readonly selectNoChanges: () => void;
   readonly applyChanges: () => void;
   readonly discardChanges: () => void;
+  readonly openReview: () => void;
   readonly undo: () => void;
+  readonly retry: () => void;
+  readonly regenerate: (messageId: string) => void;
+  readonly renameChat: (title: string) => void;
+  readonly selectModel: (model: string) => void;
   readonly useSuggestion: (suggestion: string) => void;
 }
 
@@ -256,7 +261,12 @@ function createActions(
     selectNoChanges: () => input.setAcceptedIds(new Set()),
     applyChanges: () => applyChanges(input),
     discardChanges: () => discardChanges(input),
+    openReview: () => openReview(input),
     undo: () => undoRun(input),
+    retry: () => retryRun(input),
+    regenerate: (messageId) => regenerateMessage(input, messageId),
+    renameChat: (title) => renameChat(input, title),
+    selectModel: (model) => selectModel(input, model),
     useSuggestion: (suggestion) => {
       input.setDraft(suggestion);
       input.dispatch({ type: "focus" });
@@ -429,6 +439,17 @@ function discardChanges(input: ActionInput): void {
   });
 }
 
+function openReview(input: ActionInput): void {
+  if (!input.pending) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "review.open",
+    payload: { changeSetId: input.pending.changeSetId },
+  });
+}
+
 function undoRun(input: ActionInput): void {
   if (!input.state.lastRunId) return;
   const runId = identifier();
@@ -443,6 +464,53 @@ function undoRun(input: ActionInput): void {
     runId,
     type: "run.undo",
     payload: { targetRunId: input.state.lastRunId },
+  });
+}
+
+function retryRun(input: ActionInput): void {
+  if (!input.activeChat || input.state.busy || input.pending) return;
+  const runId = identifier();
+  input.dispatch({ type: "begin", runId, phase: "Retrying", submission: false });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "chat.retry",
+    payload: {},
+  });
+}
+
+function regenerateMessage(input: ActionInput, messageId: string): void {
+  if (!input.activeChat || input.state.busy || input.pending) return;
+  const runId = identifier();
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Regenerating",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "chat.regenerate",
+    payload: { messageId },
+  });
+}
+
+function renameChat(input: ActionInput, title: string): void {
+  if (!input.activeChat || input.state.busy) return;
+  input.send({
+    ...input.envelope(),
+    type: "chat.rename",
+    payload: { title },
+  });
+}
+
+function selectModel(input: ActionInput, model: string): void {
+  if (input.state.busy) return;
+  input.send({
+    ...input.envelope(),
+    type: "model.select",
+    payload: { model },
   });
 }
 

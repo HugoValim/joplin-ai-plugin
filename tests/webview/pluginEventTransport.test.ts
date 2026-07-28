@@ -13,6 +13,7 @@ const SNAPSHOT_EVENT: PluginEvent = {
     modelName: "",
     privacyNotice: "Context is opt-in.",
     secretNotebookIds: [],
+    availableModels: [],
   },
 };
 
