@@ -313,3 +313,29 @@ describe("App shell", () => {
     expect(serious).toEqual([]);
   });
 });
+
+describe("App compact config chrome", () => {
+  test("renders Mode control near the composer without expanding context details", async () => {
+    await renderReadyApp();
+
+    // Mode buttons should be visible (Ask/Agent) without opening a details panel.
+    const modeGroup = screen.getByRole("group", { name: "Interaction mode" });
+    expect(modeGroup).toBeTruthy();
+    expect(screen.getAllByText("Agent").length).toBeGreaterThan(0);
+  });
+
+  test("secondary context settings are reachable from an overflow control", async () => {
+    await renderReadyApp();
+
+    // The context summary should be a collapsed <details> by default.
+    const summary = screen.getByLabelText("Context settings");
+    expect(summary.closest("details")?.open).toBe(false);
+    // Vault RAG toggle is inside the collapsed details — the details element
+    // is closed by default, so the overflow content is not expanded.
+    const vaultToggle = screen.queryByText("Vault RAG");
+    if (vaultToggle) {
+      const details = vaultToggle.closest("details");
+      expect(details?.open).toBe(false);
+    }
+  });
+});

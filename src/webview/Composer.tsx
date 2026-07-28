@@ -79,6 +79,7 @@ export function Composer(props: ComposerProps): JSX.Element {
         <textarea
           ref={textarea}
           id="prompt"
+          aria-label="Message"
           rows={1}
           value={props.draft}
           disabled={props.disabled}

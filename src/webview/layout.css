@@ -177,6 +177,42 @@
   font-size: 0.78rem;
 }
 
+
+.mode-control {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.mode-control button {
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 6px;
+  background: var(--joplin-background-color);
+  color: var(--joplin-color);
+  padding: 2px 10px;
+  font-size: 0.75rem;
+}
+
+.mode-control button[aria-pressed="true"] {
+  background: var(--joplin-background-color2);
+  font-weight: 600;
+}
+
+.queued-indicator {
+  display: inline-block;
+  border: 1px solid var(--joplin-divider-color);
+  border-radius: 999px;
+  background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
 .context-summary {
   min-width: 0;
   border: 1px solid var(--joplin-divider-color);

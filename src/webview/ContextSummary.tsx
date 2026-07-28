@@ -39,9 +39,6 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         />
         <ContextChip label={`${secretCount} secret`} />
         <ContextChip
-          label={props.chat.context.interactionMode === "ask" ? "Ask" : "Agent"}
-        />
-        <ContextChip
           label={props.chat.context.autoApply ? "Bypass on" : "Writes review"}
         />
         <ContextChip
@@ -50,30 +47,6 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         />
       </summary>
       <div className="context-details">
-        <div className="context-control mode-switch" role="group" aria-label="Interaction mode">
-          <div>
-            <strong>Mode</strong>
-            <p>Ask is read-only. Agent can propose note and file changes.</p>
-          </div>
-          <div className="mode-switch-buttons">
-            <button
-              type="button"
-              disabled={props.disabled}
-              aria-pressed={props.chat.context.interactionMode === "ask"}
-              onClick={() => props.onUpdate({ interactionMode: "ask" })}
-            >
-              Ask
-            </button>
-            <button
-              type="button"
-              disabled={props.disabled}
-              aria-pressed={props.chat.context.interactionMode === "agent"}
-              onClick={() => props.onUpdate({ interactionMode: "agent" })}
-            >
-              Agent
-            </button>
-          </div>
-        </div>
         <ContextToggle
           label="Active Note"
           description="Include a fresh snapshot of the selected note for each turn."

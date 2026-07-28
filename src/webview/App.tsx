@@ -106,6 +106,13 @@ export function App(): JSX.Element {
           />
         ) : null}
       </div>
+      {activeChat ? (
+        <ModeControl
+          mode={activeChat.context.interactionMode}
+          disabled={composerDisabled}
+          onUpdate={controller.updateContext}
+        />
+      ) : null}
       <Composer
         key={activeChat?.id ?? "bootstrap"}
         draft={controller.draft}
@@ -134,6 +141,37 @@ export function App(): JSX.Element {
  *
  * @example composerHistory(chat.messages)
  */
+function ModeControl({
+  mode,
+  disabled,
+  onUpdate,
+}: {
+  readonly mode: "ask" | "agent";
+  readonly disabled: boolean;
+  readonly onUpdate: (next: { interactionMode: "ask" | "agent" }) => void;
+}): JSX.Element {
+  return (
+    <div className="mode-control" role="group" aria-label="Interaction mode">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={mode === "ask"}
+        onClick={() => onUpdate({ interactionMode: "ask" })}
+      >
+        Ask
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={mode === "agent"}
+        onClick={() => onUpdate({ interactionMode: "agent" })}
+      >
+        Agent
+      </button>
+    </div>
+  );
+}
+
 function composerHistory(
   messages: ActiveChatView["messages"],
 ): readonly string[] {

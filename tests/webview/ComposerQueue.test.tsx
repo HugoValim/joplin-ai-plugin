@@ -30,7 +30,7 @@ function composerProps(
 describe("Composer follow-up queue", () => {
   test("accepts typing while busy", () => {
     render(<Composer {...composerProps({ draft: "queued text", busy: true })} />);
-    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message" });
     expect(textarea.value).toBe("queued text");
     expect(textarea.disabled).toBe(false);
   });
