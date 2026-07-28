@@ -321,4 +321,17 @@ describe("FileWorkspaceRepository", () => {
     ).rejects.toThrow("Replacement for guide.md");
     expect(writer.writeCount).toBe(0);
   });
+
+  test("rejects sensitive credential-like filenames", async () => {
+    const repository = new FileWorkspaceRepository(
+      "/workspace",
+      new MemoryFileSystemPort(),
+      new FixedFileCandidateFinder(["passwords.md"]),
+      new UnusedAtomicWritePort(),
+    );
+
+    await expect(repository.readTextFile("passwords.md")).rejects.toThrow(
+      "Blocked file path",
+    );
+  });
 });

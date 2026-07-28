@@ -70,7 +70,7 @@ const EXCLUDED_DIRECTORIES = new Set([
   ".venv",
 ]);
 const SENSITIVE_NAME =
-  /(?:^|[-_.])(api[-_]?key|certificate|certificates|credential|credentials|password|private[-_]?key|secret|secrets|token|id_rsa|id_ed25519)(?:[-_.]|$)/i;
+  /(?:^|[-_.])(api[-_]?keys?|certificates?|credentials?|passwd|passwds?|passwords?|private[-_]?keys?|secrets?|tokens?|id_rsa|id_ed25519|keystore|keychain|\.env)(?:[-_.]|$)/i;
 const SENSITIVE_EXTENSION = new Set([
   ".pem",
   ".key",
@@ -78,6 +78,8 @@ const SENSITIVE_EXTENSION = new Set([
   ".pfx",
   ".crt",
   ".cer",
+  ".keystore",
+  ".jks",
 ]);
 
 export class FileWorkspaceRepository {
