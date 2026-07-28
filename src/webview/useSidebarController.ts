@@ -30,6 +30,7 @@ export interface SidebarController {
   readonly acceptedIds: ReadonlySet<string>;
   readonly setDraft: (value: string) => void;
   readonly submit: () => void;
+  readonly queueMessage: (text: string) => void;
   readonly cancel: () => void;
   readonly selectChat: (chatId: string) => void;
   readonly createChat: () => void;
@@ -81,7 +82,58 @@ export function useSidebarController(): SidebarController {
     acceptedIds,
     setAcceptedIds,
   );
+  useQueuedFollowUp(
+    state,
+    dispatch,
+    draft,
+    setDraft,
+    submissionLock,
+    state.snapshot.activeChat?.id ?? null,
+    actions.submit,
+  );
   return { state, draft, acceptedIds, setDraft, ...actions };
+}
+
+
+function useQueuedFollowUp(
+  state: SidebarState,
+  dispatch: StateDispatch,
+  draft: string,
+  setDraft: React.Dispatch<React.SetStateAction<string>>,
+  submissionLock: React.MutableRefObject<boolean>,
+  activeChatId: string | null,
+  submit: () => void,
+): void {
+  const queuedRef = useRef<string | null>(null);
+  queuedRef.current = state.queuedMessage;
+
+  useEffect(() => {
+    if (state.busy || state.queuedMessage || !activeChatId) return;
+    // Nothing queued — nothing to fire.
+    if (!queuedRef.current) return;
+  }, [state.busy, state.queuedMessage, activeChatId]);
+
+  // When a run finishes (busy false) and there is a queued message with no
+  // pending changes, load it into the draft and submit.
+  useEffect(() => {
+    if (state.busy || !state.queuedMessage) return;
+    if (state.snapshot.activeChat?.pendingChangeSet) return;
+    if (submissionLock.current) return;
+    const text = state.queuedMessage;
+    dispatch({ type: "clear-queue" });
+    setDraft(text);
+    // Submit on the next tick so the draft is set before submit reads it.
+    // useSubmitAction reads draft from its closure, so we use a microtask.
+    void Promise.resolve().then(() => submit());
+  }, [
+    state.busy,
+    state.queuedMessage,
+    state.snapshot.activeChat?.pendingChangeSet,
+    dispatch,
+    setDraft,
+    submissionLock,
+    submit,
+  ]);
 }
 
 function usePanelEvents(
@@ -224,6 +276,7 @@ function createActions(
 ): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
   return {
     submit: input.submit,
+    queueMessage: (text) => queueMessage(input, text),
     cancel: () => cancelRun(input),
     selectChat: (chatId) => selectChat(input, chatId),
     createChat: () =>
@@ -314,6 +367,12 @@ function useSubmitAction(
     state.busy,
     submissionLock,
   ]);
+}
+
+function queueMessage(input: ActionInput, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed || !input.activeChat) return;
+  input.dispatch({ type: "queue", text: trimmed });
 }
 
 function cancelRun(input: ActionInput): void {

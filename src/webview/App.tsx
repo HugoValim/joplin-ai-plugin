@@ -116,6 +116,8 @@ export function App(): JSX.Element {
         lastRunId={state.lastRunId}
         lastUsage={state.lastUsage}
         contextWindowMax={state.snapshot.contextWindowMax}
+        queuedMessage={state.queuedMessage}
+        onQueue={controller.queueMessage}
         history={composerHistory(activeChat?.messages ?? [])}
         onDraftChange={controller.setDraft}
         onSubmit={controller.submit}

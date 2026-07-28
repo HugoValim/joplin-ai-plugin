@@ -11,6 +11,8 @@ interface ComposerProps {
   readonly lastRunId: string | null;
   readonly lastUsage: UsageSnapshot | null;
   readonly contextWindowMax: number | null;
+  readonly queuedMessage: string | null;
+  readonly onQueue: (text: string) => void;
   readonly history: readonly string[];
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: () => void;
@@ -44,6 +46,11 @@ export function Composer(props: ComposerProps): JSX.Element {
       onSubmit={(event) => {
         event.preventDefault();
         browse.current = null;
+        if (props.busy) {
+          const text = props.draft.trim();
+          if (text) props.onQueue(text);
+          return;
+        }
         if (!props.disabled) props.onSubmit();
       }}
     >
@@ -52,6 +59,11 @@ export function Composer(props: ComposerProps): JSX.Element {
         {!props.busy && formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined }) ? (
           <span className="usage-summary" aria-label="Token usage">
             {formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined })}
+          </span>
+        ) : null}
+        {props.queuedMessage ? (
+          <span className="queued-indicator" aria-label="Queued follow-up">
+            Queued: {props.queuedMessage}
           </span>
         ) : null}
         {props.lastRunId && !props.busy ? (
@@ -109,7 +121,12 @@ function handleComposerKey(
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     browse.current = null;
-    if (!props.busy && !props.disabled) props.onSubmit();
+    if (props.busy) {
+      const text = props.draft.trim();
+      if (text) props.onQueue(text);
+      return;
+    }
+    if (!props.disabled) props.onSubmit();
     return;
   }
   if (event.key === "ArrowUp") {

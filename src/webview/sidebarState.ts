@@ -47,6 +47,7 @@ export interface SidebarState {
   readonly plan: readonly AgentPlanItemView[];
   readonly submissionSequence: number;
   readonly focusSequence: number;
+  readonly queuedMessage: string | null;
 }
 
 export type SidebarAction =
@@ -59,6 +60,8 @@ export type SidebarAction =
     }
   | { readonly type: "cancelling" }
   | { readonly type: "focus" }
+  | { readonly type: "queue"; readonly text: string }
+  | { readonly type: "clear-queue" }
   | { readonly type: "post-failed"; readonly message: string };
 
 export const EMPTY_SNAPSHOT: SidebarSnapshot = {
@@ -87,6 +90,7 @@ export const INITIAL_SIDEBAR_STATE: SidebarState = {
   plan: [],
   submissionSequence: 0,
   focusSequence: 0,
+  queuedMessage: null,
 };
 
 /**
@@ -104,6 +108,10 @@ export function sidebarReducer(
     return { ...state, phase: "Cancellation requested" };
   if (action.type === "focus")
     return { ...state, focusSequence: state.focusSequence + 1 };
+  if (action.type === "queue")
+    return { ...state, queuedMessage: action.text };
+  if (action.type === "clear-queue")
+    return { ...state, queuedMessage: null };
   return failPost(state, action.message);
 }
 
@@ -203,6 +211,7 @@ function receiveSnapshot(
       phase: "Ready",
       tools: [],
       plan: [],
+      queuedMessage: null,
       focusSequence: state.focusSequence + 1,
     };
   }

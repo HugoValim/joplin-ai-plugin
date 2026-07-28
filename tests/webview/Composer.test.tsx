@@ -14,6 +14,8 @@ function composer(
     lastRunId: null,
     lastUsage: null,
     contextWindowMax: null,
+    queuedMessage: null,
+    onQueue: jest.fn(),
     disabled: false,
     history: [],
     onDraftChange: jest.fn(),
