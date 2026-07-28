@@ -4,7 +4,7 @@ Desktop-only Joplin 3.6+ plugin for persistent AI chats, opt-in note
 retrieval, and controlled note/text-file edits.
 
 Plugin ID: `com.hugovalim.joplin-ai-agent`
-Version: `0.5.0`
+Version: `0.6.0`
 
 ## Features
 
