@@ -175,6 +175,18 @@ const ChangesDiscardSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ChangesDenySchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.deny"),
+    payload: Type.Object(
+      { changeSetId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const ReviewOpenSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -270,6 +282,7 @@ const PanelRequestSchema = Type.Union([
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
+  ChangesDenySchema,
   ReviewOpenSchema,
   RunUndoSchema,
   NoteOpenSchema,
@@ -332,6 +345,7 @@ const RunSummaryViewSchema = Type.Object(
       Type.Literal("cancelled"),
       Type.Literal("awaiting-approval"),
       Type.Literal("applied"),
+      Type.Literal("denied"),
     ]),
     summary: Type.String({ maxLength: 10_000 }),
     completedAt: Type.Number({ minimum: 0 }),

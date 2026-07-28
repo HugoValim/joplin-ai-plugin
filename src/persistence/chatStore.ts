@@ -67,6 +67,7 @@ const RunSummarySchema = Type.Object(
       Type.Literal("cancelled"),
       Type.Literal("awaiting-approval"),
       Type.Literal("applied"),
+      Type.Literal("denied"),
     ]),
     summary: Type.String({ maxLength: 10_000 }),
     completedAt: Type.Number({ minimum: 0 }),

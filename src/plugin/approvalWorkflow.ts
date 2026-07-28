@@ -9,7 +9,7 @@ import type { ContextCitation } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
 import type { AiProvider } from "../providers/types";
-import { DomainError } from "../shared/errors";
+import { DomainError, safeValue } from "../shared/errors";
 import { PROTOCOL_VERSION, type PanelRequest } from "../shared/protocol";
 import type { ToolExecutionResult, ToolRegistry } from "../tools/toolRegistry";
 import {
@@ -114,8 +114,15 @@ export class ApprovalWorkflow {
     if (autoApply && !requiresManualReview(changeSet)) {
       this.postAutomaticProgress(changeSet);
       const applyToken = this.applyTokens.issue(changeSet.id);
+      const chat = await requireChat(this.chats, changeSet.chatId);
+      const reviewNoteId = await this.reviewNotes.openForChangeSet(
+        changeSet,
+        chat.title,
+      );
+      const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
+      await this.chats.save({ ...chat, pendingChangeSet: reviewed });
       await this.applyRequest(
-        automaticApplyRequest(changeSet, applyToken),
+        automaticApplyRequest(reviewed, applyToken),
         true,
       );
       return;
@@ -215,6 +222,55 @@ export class ApprovalWorkflow {
       request.chatId,
       {
         summary: `Restored ${result.restored}; conflicts ${result.conflicts.length}`,
+      },
+      request.runId,
+    );
+  }
+
+  /**
+   * Denies an applied change set: restores pre-change content for each
+   * accepted change and resolves the change set. Used when Bypass auto-applied
+   * changes and the user wants to review and undo the batch.
+   *
+   * @example await workflow.deny(request)
+   */
+  public async deny(
+    request: Extract<PanelRequest, { type: "changes.deny" }>,
+  ): Promise<void> {
+    const changeSet = this.changes.get(request.payload.changeSetId);
+    if (!changeSet) {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(request.payload.changeSetId)} not found; expected an applied or pending change set`,
+      );
+    }
+    if (changeSet.status === "proposed") {
+      this.changes.discard(request.payload.changeSetId, {
+        chatId: request.chatId,
+        runId: request.runId,
+      });
+      this.applyTokens.revoke(request.payload.changeSetId);
+      this.continuations.delete(request.payload.changeSetId);
+      await this.clearPending(request.chatId, request.runId, "denied");
+      this.events.post(
+        "run.completed",
+        request.chatId,
+        { summary: "Changes denied before apply" },
+        request.runId,
+      );
+      return;
+    }
+    const result = await this.applier.undo(changeSet.runId, request.chatId);
+    this.changes.discard(request.payload.changeSetId, {
+      chatId: request.chatId,
+      runId: request.runId,
+    });
+    await this.clearPending(request.chatId, request.runId, "denied");
+    this.events.post(
+      "run.completed",
+      request.chatId,
+      {
+        summary: `Denied and restored ${result.restored}; conflicts ${result.conflicts.length}`,
       },
       request.runId,
     );

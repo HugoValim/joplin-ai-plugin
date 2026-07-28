@@ -51,6 +51,7 @@ export interface SidebarController {
   readonly selectNoChanges: () => void;
   readonly applyChanges: () => void;
   readonly discardChanges: () => void;
+  readonly denyChanges: () => void;
   readonly openReview: () => void;
   readonly undo: () => void;
   readonly retry: () => void;
@@ -314,6 +315,7 @@ function createActions(
     selectNoChanges: () => input.setAcceptedIds(new Set()),
     applyChanges: () => applyChanges(input),
     discardChanges: () => discardChanges(input),
+    denyChanges: () => denyChanges(input),
     openReview: () => openReview(input),
     undo: () => undoRun(input),
     retry: () => retryRun(input),
@@ -494,6 +496,23 @@ function discardChanges(input: ActionInput): void {
     ...input.envelope(),
     runId,
     type: "changes.discard",
+    payload: { changeSetId: input.pending.changeSetId },
+  });
+}
+
+function denyChanges(input: ActionInput): void {
+  if (!input.pending) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Denying and restoring changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.deny",
     payload: { changeSetId: input.pending.changeSetId },
   });
 }

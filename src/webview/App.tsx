@@ -102,6 +102,7 @@ export function App(): JSX.Element {
             onSelectNone={controller.selectNoChanges}
             onApply={controller.applyChanges}
             onDiscard={controller.discardChanges}
+            onDeny={controller.denyChanges}
             onOpenReview={controller.openReview}
           />
         ) : null}

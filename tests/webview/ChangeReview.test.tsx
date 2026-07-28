@@ -54,6 +54,7 @@ describe("ChangeReview", () => {
         onSelectNone={onSelectNone}
         onApply={onApply}
         onDiscard={onDiscard}
+        onDeny={jest.fn()}
         onOpenReview={onOpenReview}
       />,
     );

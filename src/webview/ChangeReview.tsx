@@ -10,6 +10,7 @@ interface ChangeReviewProps {
   readonly onSelectNone: () => void;
   readonly onApply: () => void;
   readonly onDiscard: () => void;
+  readonly onDeny: () => void;
   readonly onOpenReview: () => void;
 }
 
@@ -138,6 +139,14 @@ function ReviewFooter(props: ChangeReviewProps): JSX.Element {
           disabled={props.disabled}
         >
           Discard
+        </button>
+        <button
+          type="button"
+          className="danger-action"
+          onClick={props.onDeny}
+          disabled={props.disabled}
+        >
+          Deny &amp; Restore
         </button>
       </div>
     </footer>

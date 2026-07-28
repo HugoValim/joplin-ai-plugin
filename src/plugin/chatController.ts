@@ -154,6 +154,10 @@ export class ChatController {
         await this.approvals.discard(request);
         await this.sendSnapshot();
         return;
+      case "changes.deny":
+        await this.approvals.deny(request);
+        await this.sendSnapshot();
+        return;
       case "review.open":
         await this.approvals.openReview(request);
         await this.sendSnapshot();
