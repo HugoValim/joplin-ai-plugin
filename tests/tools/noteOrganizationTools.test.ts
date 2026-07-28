@@ -8,6 +8,7 @@ import type {
   UpdateNoteMetadataInput,
   UpdateNotebookMetadataInput,
 } from "../../src/notes/retriever";
+import { toolContext } from "../helpers/toolContext";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import { registerNoteOrganizationTools } from "../../src/tools/noteOrganizationTools";
 import { ToolRegistry } from "../../src/tools/toolRegistry";
@@ -89,7 +90,7 @@ describe("note organization proposal tools", () => {
         name: "read_notebook",
         arguments: { notebook_id: "folder-1" },
       },
-      { chatId: "chat-1", runId: "run-read", hasFileWorkspace: false },
+      toolContext({ runId: "run-read" }),
     );
 
     expect(result.output).toEqual({
@@ -114,7 +115,7 @@ describe("note organization proposal tools", () => {
         name: "list_notebook_notes",
         arguments: { notebook_id: "folder-1", limit: 25 },
       },
-      { chatId: "chat-1", runId: "run-list", hasFileWorkspace: false },
+      toolContext({ runId: "run-list" }),
     );
 
     expect(result.output).toEqual({
@@ -144,7 +145,7 @@ describe("note organization proposal tools", () => {
         name: "create_notebook",
         arguments: { title: "Archive", parent_id: "folder-1" },
       },
-      { chatId: "chat-1", runId: "run-1", hasFileWorkspace: false },
+      toolContext({ runId: "run-1" }),
     );
 
     expect(result.risk).toBe("propose-write");
@@ -177,7 +178,7 @@ describe("note organization proposal tools", () => {
           title: "Published",
         },
       },
-      { chatId: "chat-1", runId: "run-rename", hasFileWorkspace: false },
+      toolContext({ runId: "run-rename", readableNoteIds: new Set(["note-1"]) }),
     );
 
     expect(changes.getByRun("run-rename")?.changes).toEqual([
@@ -210,7 +211,7 @@ describe("note organization proposal tools", () => {
           parent_id: "folder-2",
         },
       },
-      { chatId: "chat-1", runId: "run-move", hasFileWorkspace: false },
+      toolContext({ runId: "run-move", readableNoteIds: new Set(["note-1"]) }),
     );
 
     expect(changes.getByRun("run-move")?.changes).toEqual([
@@ -221,6 +222,31 @@ describe("note organization proposal tools", () => {
         parentId: "folder-2",
       }),
     ]);
+  });
+
+  test("moves notes without active or attached allowlist when notebook is not secret", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      changes,
+    );
+
+    await registry.execute(
+      {
+        id: "call-move-note-open",
+        name: "move_note",
+        arguments: {
+          note_id: "note-1",
+          expected_updated_time: 10,
+          parent_id: "folder-2",
+        },
+      },
+      toolContext({ runId: "run-move-open", readableNoteIds: new Set() }),
+    );
+
+    expect(changes.getByRun("run-move-open")?.changes).toHaveLength(1);
   });
 
   test("proposes changing a note's manual order", async () => {
@@ -242,7 +268,7 @@ describe("note organization proposal tools", () => {
           order: 250,
         },
       },
-      { chatId: "chat-1", runId: "run-reorder", hasFileWorkspace: false },
+      toolContext({ runId: "run-reorder", readableNoteIds: new Set(["note-1"]) }),
     );
 
     expect(changes.getByRun("run-reorder")?.changes).toEqual([
@@ -270,7 +296,7 @@ describe("note organization proposal tools", () => {
         name: "delete_note",
         arguments: { note_id: "note-1", expected_updated_time: 10 },
       },
-      { chatId: "chat-1", runId: "run-delete", hasFileWorkspace: false },
+      toolContext({ runId: "run-delete", readableNoteIds: new Set(["note-1"]) }),
     );
 
     expect(changes.getByRun("run-delete")?.changes).toEqual([
@@ -301,11 +327,7 @@ describe("note organization proposal tools", () => {
           title: "Active projects",
         },
       },
-      {
-        chatId: "chat-1",
-        runId: "run-rename-notebook",
-        hasFileWorkspace: false,
-      },
+      toolContext({ runId: "run-rename-notebook" }),
     );
 
     expect(changes.getByRun("run-rename-notebook")?.changes).toEqual([
@@ -340,11 +362,7 @@ describe("note organization proposal tools", () => {
           parent_id: "",
         },
       },
-      {
-        chatId: "chat-1",
-        runId: "run-move-notebook-root",
-        hasFileWorkspace: false,
-      },
+      toolContext({ runId: "run-move-notebook-root" }),
     );
 
     expect(changes.getByRun("run-move-notebook-root")?.changes).toEqual([
@@ -378,11 +396,7 @@ describe("note organization proposal tools", () => {
           expected_updated_time: 40,
         },
       },
-      {
-        chatId: "chat-1",
-        runId: "run-move-notebook-omit",
-        hasFileWorkspace: false,
-      },
+      toolContext({ runId: "run-move-notebook-omit" }),
     );
 
     expect(changes.getByRun("run-move-notebook-omit")?.changes).toEqual([
@@ -413,11 +427,7 @@ describe("note organization proposal tools", () => {
             parent_id: "folder-1",
           },
         },
-        {
-          chatId: "chat-1",
-          runId: "run-move-self",
-          hasFileWorkspace: false,
-        },
+        toolContext({ runId: "run-move-self" }),
       ),
     ).rejects.toThrow("expected a different notebook ID or root");
   });
@@ -441,11 +451,7 @@ describe("note organization proposal tools", () => {
             parent_id: "",
           },
         },
-        {
-          chatId: "chat-1",
-          runId: "run-move-note-root",
-          hasFileWorkspace: false,
-        },
+        toolContext({ runId: "run-move-note-root", readableNoteIds: new Set(["note-1"]) }),
       ),
     ).rejects.toThrow("expected schema for tool move_note");
   });
@@ -469,11 +475,7 @@ describe("note organization proposal tools", () => {
           parent_id: "folder-2",
         },
       },
-      {
-        chatId: "chat-1",
-        runId: "run-move-string-time",
-        hasFileWorkspace: false,
-      },
+      toolContext({ runId: "run-move-string-time", readableNoteIds: new Set(["note-1"]) }),
     );
 
     expect(changes.getByRun("run-move-string-time")?.changes).toEqual([
@@ -505,11 +507,7 @@ describe("note organization proposal tools", () => {
             parent_id: "folder-2",
           },
         },
-        {
-          chatId: "chat-1",
-          runId: "run-stale-move",
-          hasFileWorkspace: false,
-        },
+        toolContext({ runId: "run-stale-move", readableNoteIds: new Set(["note-1"]) }),
       ),
     ).rejects.toThrow("expected updated_time 999");
   });
@@ -532,11 +530,7 @@ describe("note organization proposal tools", () => {
           expected_updated_time: 40,
         },
       },
-      {
-        chatId: "chat-1",
-        runId: "run-delete-notebook",
-        hasFileWorkspace: false,
-      },
+      toolContext({ runId: "run-delete-notebook" }),
     );
 
     expect(changes.getByRun("run-delete-notebook")?.changes).toEqual([
@@ -546,5 +540,27 @@ describe("note organization proposal tools", () => {
         notebookId: "folder-1",
       }),
     ]);
+  });
+});
+
+describe("note organization secret notebooks", () => {
+  test("rejects reading a secret notebook", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-secret-notebook",
+          name: "read_notebook",
+          arguments: { notebook_id: "folder-1" },
+        },
+        toolContext({ secretNotebookIds: new Set(["folder-1"]) }),
+      ),
+    ).rejects.toThrow("marked secret");
   });
 });

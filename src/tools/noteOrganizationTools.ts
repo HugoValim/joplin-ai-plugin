@@ -3,6 +3,11 @@ import type { NoteOrganizationRepository } from "../notes/retriever";
 import type { ChangeSetStore } from "../persistence/changeSetStore";
 import type { ToolExecutionContext, ToolRegistry } from "./toolRegistry";
 import {
+  assertNoteOrgAllowed,
+  assertNotebookAllowed,
+  vaultOrgToolsEnabled,
+} from "./noteAccessPolicy";
+import {
   OrganizationIdentifierSchema,
   OrganizationProposalOutputSchema,
   OrganizationTool,
@@ -50,7 +55,15 @@ class ReadNotebookTool extends OrganizationTool<
     super();
   }
 
-  public async execute(input: ReadNotebookInput): Promise<ReadNotebookOutput> {
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
+  public async execute(
+    input: ReadNotebookInput,
+    context: ToolExecutionContext,
+  ): Promise<ReadNotebookOutput> {
+    assertNotebookAllowed(context, input.notebook_id);
     const notebook = await this.repository.readNotebook(input.notebook_id);
     return {
       id: notebook.id,
@@ -111,9 +124,15 @@ class ListNotebookNotesTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public async execute(
     input: ListNotebookNotesInput,
+    context: ToolExecutionContext,
   ): Promise<ListNotebookNotesOutput> {
+    assertNotebookAllowed(context, input.notebook_id);
     const notes = await this.repository.listNotebookNotes(
       input.notebook_id,
       input.limit ?? 100,
@@ -155,11 +174,16 @@ class CreateNotebookTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public execute(
     input: CreateNotebookInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
     const parentId = input.parent_id ?? "";
+    if (parentId) assertNotebookAllowed(context, parentId);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "notebook",
       operation: "create",
@@ -204,11 +228,16 @@ class RenameNoteTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public async execute(
     input: RenameNoteInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
     const note = await readVersionedNoteMetadata(this.repository, input);
+    assertNoteOrgAllowed(context, note.parentId);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "note",
       operation: "rename",
@@ -254,11 +283,17 @@ class MoveNoteTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public async execute(
     input: MoveNoteInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
+    assertNotebookAllowed(context, input.parent_id);
     const note = await readVersionedNoteMetadata(this.repository, input);
+    assertNoteOrgAllowed(context, note.parentId);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "note",
       operation: "move",
@@ -304,11 +339,16 @@ class ReorderNoteTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public async execute(
     input: ReorderNoteInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
     const note = await readVersionedNoteMetadata(this.repository, input);
+    assertNoteOrgAllowed(context, note.parentId);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "note",
       operation: "reorder",
@@ -352,11 +392,16 @@ class DeleteNoteTool extends OrganizationTool<
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public async execute(
     input: DeleteNoteInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
     const note = await readVersionedNoteMetadata(this.repository, input);
+    assertNoteOrgAllowed(context, note.parentId);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "note",
       operation: "delete",

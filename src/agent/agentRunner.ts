@@ -13,12 +13,16 @@ import type {
 
 const MAX_MODEL_STEPS = 24;
 const MAX_TOOL_CALLS = 100;
+const READ_BUDGET_NUDGE_THRESHOLD = 4;
 
 export interface AgentRunRequest {
   readonly chatId: string;
   readonly runId: string;
   readonly messages: readonly ProviderMessage[];
   readonly hasFileWorkspace: boolean;
+  readonly vault: boolean;
+  readonly readableNoteIds: ReadonlySet<string>;
+  readonly secretNotebookIds: ReadonlySet<string>;
 }
 
 export interface AgentObserver {
@@ -101,10 +105,15 @@ export class AgentRunner {
     const context = toolContext(request);
     let toolCallCount = initialToolCallCount;
     let assistantText = "";
+    let consecutiveReadOnlySteps = 0;
 
     for (let step = firstStep; step <= MAX_MODEL_STEPS; step += 1) {
       assertNotAborted(abortSignal);
       this.observer.onStep?.(step, MAX_MODEL_STEPS);
+      if (consecutiveReadOnlySteps >= READ_BUDGET_NUDGE_THRESHOLD) {
+        messages.push(readBudgetNudgeMessage(this.tools, context));
+        consecutiveReadOnlySteps = 0;
+      }
       const modelStep = await this.runModelStep(messages, context, abortSignal);
       assistantText += modelStep.text;
       messages.push(toAssistantMessage(modelStep));
@@ -119,6 +128,7 @@ export class AgentRunner {
         context,
         abortSignal,
       );
+      consecutiveReadOnlySteps = proposed ? 0 : consecutiveReadOnlySteps + 1;
       if (proposed) {
         return {
           status: "awaiting-approval",
@@ -199,7 +209,35 @@ function toolContext(request: AgentRunRequest): ToolExecutionContext {
     chatId: request.chatId,
     runId: request.runId,
     hasFileWorkspace: request.hasFileWorkspace,
+    vault: request.vault,
+    readableNoteIds: request.readableNoteIds,
+    secretNotebookIds: request.secretNotebookIds,
   };
+}
+
+function readBudgetNudgeMessage(
+  tools: ToolRegistry,
+  context: ToolExecutionContext,
+): ProviderMessage {
+  const content = hasProposeWriteTools(tools, context)
+    ? [
+        "READ BUDGET: You have completed several read-only tool steps without proposing changes.",
+        "If the user asked for edits, reorganization, or new notes/files, use the available propose-write tools now.",
+        "Do not ask the user for opaque ID lists; discover targets with search and list tools.",
+      ].join(" ")
+    : [
+        "READ BUDGET: You have completed several read-only tool steps without proposing changes.",
+        "Secret notebooks are excluded. Note body tools require active or attached notes.",
+        "Do not ask the user to paste notebook or note ID lists.",
+      ].join(" ");
+  return { role: "system", content };
+}
+
+function hasProposeWriteTools(
+  tools: ToolRegistry,
+  context: ToolExecutionContext,
+): boolean {
+  return tools.hasProposeWriteTools(context);
 }
 
 function toAssistantMessage(step: ModelStep): ProviderMessage {

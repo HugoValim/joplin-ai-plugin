@@ -17,7 +17,7 @@ describe("chat change-set view", () => {
     const changeSet = changes.getByRun("run-1");
     if (!changeSet) throw new Error("Expected change set");
 
-    expect(toChangeSetView(changeSet).changes[0]).toMatchObject({
+    expect(toChangeSetView(changeSet, "b".repeat(64)).changes[0]).toMatchObject({
       kind: "notebook",
       targetId: "folder-1",
       targetLabel: "Projects",

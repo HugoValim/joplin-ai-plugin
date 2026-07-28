@@ -5,10 +5,13 @@ type ActiveChat = NonNullable<SidebarSnapshot["activeChat"]>;
 interface ContextSummaryProps {
   readonly chat: ActiveChat;
   readonly activeNote: ActiveNoteSummary;
+  readonly secretNotebookIds: readonly string[];
   readonly disabled: boolean;
   readonly onUpdate: (next: Partial<ActiveChat["context"]>) => void;
   readonly onToggleAttached: () => void;
   readonly onSelectFolder: () => void;
+  readonly onMarkSecret: (notebookId: string) => void;
+  readonly onUnmarkSecret: (notebookId: string) => void;
 }
 
 /**
@@ -18,6 +21,11 @@ interface ContextSummaryProps {
  */
 export function ContextSummary(props: ContextSummaryProps): JSX.Element {
   const attached = props.chat.context.attachedNoteIds.length;
+  const secretCount = props.secretNotebookIds.length;
+  const activeNotebookId = props.activeNote?.parentNotebookId ?? "";
+  const activeNotebookSecret =
+    Boolean(activeNotebookId) &&
+    props.secretNotebookIds.includes(activeNotebookId);
   return (
     <details className="context-summary">
       <summary aria-label="Context settings">
@@ -29,6 +37,7 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         <ContextChip
           label={`Vault ${props.chat.context.vault ? "on" : "off"}`}
         />
+        <ContextChip label={`${secretCount} secret`} />
         <ContextChip
           label={props.chat.context.autoApply ? "Writes auto" : "Writes review"}
         />
@@ -61,14 +70,35 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         </div>
         <ContextToggle
           label="Vault RAG"
-          description="Search note snippets relevant to each prompt."
+          description="Search note snippets relevant to each prompt. Secret notebooks are excluded."
           checked={props.chat.context.vault}
           disabled={props.disabled}
           onChange={(checked) => props.onUpdate({ vault: checked })}
         />
+        <div className="context-control">
+          <div>
+            <strong>Secret notebook</strong>
+            <p>
+              Exclude the active note&apos;s notebook from agent tools and Vault
+              RAG. Attach does not bypass secret notebooks.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={!activeNotebookId || props.disabled}
+            aria-pressed={activeNotebookSecret}
+            onClick={() =>
+              activeNotebookSecret
+                ? props.onUnmarkSecret(activeNotebookId)
+                : props.onMarkSecret(activeNotebookId)
+            }
+          >
+            {activeNotebookSecret ? "Unmark secret" : "Mark secret"}
+          </button>
+        </div>
         <ContextToggle
           label="Auto-apply changes"
-          description="Apply non-delete model proposals without review. Deletions still require manual review."
+          description="Apply file proposals without review. Note and notebook changes always require ChangeReview."
           checked={props.chat.context.autoApply}
           disabled={props.disabled}
           onChange={(checked) => props.onUpdate({ autoApply: checked })}

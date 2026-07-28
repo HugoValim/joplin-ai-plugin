@@ -109,7 +109,11 @@ describe("JoplinPanelPort", () => {
       chatId: "chat-1",
       runId: "run-1",
       type: "changes.apply",
-      payload: { changeSetId: "changes-1", acceptedIds: [] },
+      payload: {
+        changeSetId: "changes-1",
+        acceptedIds: [],
+        applyToken: "d".repeat(64),
+      },
     });
 
     expect(panels.posted).toContainEqual(

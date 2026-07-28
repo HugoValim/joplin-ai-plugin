@@ -12,6 +12,9 @@ export interface ToolExecutionContext {
   readonly chatId: string;
   readonly runId: string;
   readonly hasFileWorkspace: boolean;
+  readonly vault: boolean;
+  readonly readableNoteIds: ReadonlySet<string>;
+  readonly secretNotebookIds: ReadonlySet<string>;
 }
 
 export interface AgentTool<TInput, TOutput> {
@@ -83,6 +86,17 @@ export class ToolRegistry {
         description: tool.description,
         parameters: tool.inputSchema,
       }));
+  }
+
+  /**
+   * Returns whether any propose-write tools are available for the context.
+   *
+   * @example registry.hasProposeWriteTools(context)
+   */
+  public hasProposeWriteTools(context: ToolExecutionContext): boolean {
+    return [...this.tools.values()].some(
+      (tool) => tool.risk === "propose-write" && tool.isAvailable(context),
+    );
   }
 
   /**

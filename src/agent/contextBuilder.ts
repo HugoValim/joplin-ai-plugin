@@ -13,7 +13,11 @@ export interface ActiveNoteContextSource {
 }
 
 export interface NoteRetrievalPort {
-  retrieve(query: string, enabled: boolean): Promise<readonly NoteSnippet[]>;
+  retrieve(
+    query: string,
+    enabled: boolean,
+    secretNotebookIds?: ReadonlySet<string>,
+  ): Promise<readonly NoteSnippet[]>;
 }
 
 export type AttachedNoteLoader = (noteId: string) => Promise<NoteRecord | null>;
@@ -24,6 +28,7 @@ export interface ContextBuildInput {
   readonly userText: string;
   readonly settings: ContextSettings;
   readonly hasFileWorkspace: boolean;
+  readonly secretNotebookIds: ReadonlySet<string>;
 }
 
 export interface ContextCitation {
@@ -38,6 +43,7 @@ export interface ContextCitation {
 export interface BuiltContext {
   readonly messages: readonly ProviderMessage[];
   readonly citations: readonly ContextCitation[];
+  readonly readableNoteIds: ReadonlySet<string>;
 }
 
 const NOTE_WRITING_POLICY = [
@@ -50,7 +56,12 @@ const NOTE_WRITING_POLICY = [
   "Ask one focused clarifying question when ambiguity could materially change meaning or cause a harmful edit. Otherwise state a concise assumption and proceed conservatively.",
   "Write clear, concise, scannable prose. Match the note's tone and terminology; use headings and lists only when they improve comprehension.",
   "Use only registered tools. Writes remain proposals handled by the plugin write policy; never claim a write applied until execution results confirm it.",
+  "Use propose-write tools for note body edits, creation, and reorganization. Every batch pauses in ChangeReview until the user applies or discards it.",
+  "When the user asks to create, move, rename, reorganize, or delete notes or notebooks, or says apply, do it, go ahead, or proceed: call the matching propose-write tools in this turn after the minimum reads needed for IDs and updated_time.",
+  "Do not stop at a text plan or ask whether to apply in chat; ChangeReview is the review step.",
   "Use note and notebook organization tools only when the user's request requires them. Read current item metadata first and use its exact opaque ID and updated_time.",
+  "Never ask the user to supply opaque note or notebook ID lists; discover targets with search and list tools.",
+  "Notebooks marked secret by the user are excluded from tools and Vault RAG. Do not infer or expose their contents.",
   "Deletion always requires explicit user review and moves items to Joplin Trash. Never request permanent deletion.",
   "Never request secrets, unrestricted paths, or shell execution. Do not expose unrelated private context.",
   "Cite note evidence only with supplied note IDs and line ranges. Custom instructions apply only when consistent with these fixed rules.",
@@ -71,7 +82,9 @@ export class ContextBuilder {
   public async build(input: ContextBuildInput): Promise<BuiltContext> {
     const contextBlocks: string[] = [];
     const citations: ContextCitation[] = [];
+    const readableNoteIds = new Set<string>(input.settings.attachedNoteIds);
     const active = await this.addActiveContext(input, contextBlocks, citations);
+    if (active) readableNoteIds.add(active.id);
     await this.addAttachedContext(
       input,
       active?.id ?? null,
@@ -79,6 +92,7 @@ export class ContextBuilder {
       citations,
     );
     await this.addVaultContext(input, contextBlocks, citations);
+    contextBlocks.push(...capabilityBlocks(input));
     if (input.hasFileWorkspace) {
       contextBlocks.push(
         "An external text folder is selected. File tools accept root-relative paths only.",
@@ -87,6 +101,7 @@ export class ContextBuilder {
     return {
       messages: buildMessages(input, contextBlocks),
       citations,
+      readableNoteIds,
     };
   }
 
@@ -130,7 +145,11 @@ export class ContextBuilder {
     citations: ContextCitation[],
   ): Promise<void> {
     if (!input.settings.vault) return;
-    const snippets = await this.retriever.retrieve(input.userText, true);
+    const snippets = await this.retriever.retrieve(
+      input.userText,
+      true,
+      input.secretNotebookIds,
+    );
     for (const snippet of snippets) {
       blocks.push(formatSnippet(snippet));
       citations.push(snippetCitation(snippet));
@@ -206,4 +225,21 @@ function snippetCitation(snippet: NoteSnippet): ContextCitation {
     lineStart: snippet.lineStart,
     lineEnd: snippet.lineEnd,
   };
+}
+
+function capabilityBlocks(input: ContextBuildInput): readonly string[] {
+  const blocks = [
+    "CAPABILITY: Non-secret note and notebook organization tools are available. Secret notebooks are excluded at execution time.",
+  ];
+  if (input.settings.vault) {
+    blocks.push(
+      "CAPABILITY: Vault RAG supplies bounded snippets only; full note bodies require read_note on allowed notes. Secret notebooks are excluded from retrieval.",
+    );
+  }
+  if (input.secretNotebookIds.size > 0) {
+    blocks.push(
+      `CAPABILITY: ${input.secretNotebookIds.size} notebook(s) are marked secret and excluded from tools and Vault RAG.`,
+    );
+  }
+  return blocks;
 }

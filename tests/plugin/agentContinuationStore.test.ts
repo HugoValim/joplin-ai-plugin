@@ -13,16 +13,18 @@ describe("AgentContinuationStore", () => {
     store.save("changes-1", {
       chatId: "chat-1",
       hasFileWorkspace: true,
+      vault: true,
+      readableNoteIds: new Set<string>(),
+      secretNotebookIds: new Set<string>(),
       continuation: CONTINUATION,
       citations: [],
     });
 
-    expect(store.take("changes-1")).toEqual({
-      chatId: "chat-1",
-      hasFileWorkspace: true,
-      continuation: CONTINUATION,
-      citations: [],
-    });
+    const pending = store.take("changes-1");
+    expect(pending?.chatId).toBe("chat-1");
+    expect(pending?.hasFileWorkspace).toBe(true);
+    expect(pending?.vault).toBe(true);
+    expect(pending?.continuation).toEqual(CONTINUATION);
     expect(store.take("changes-1")).toBeNull();
   });
 
@@ -31,6 +33,9 @@ describe("AgentContinuationStore", () => {
     store.save("changes-1", {
       chatId: "chat-1",
       hasFileWorkspace: true,
+      vault: true,
+      readableNoteIds: new Set<string>(),
+      secretNotebookIds: new Set<string>(),
       continuation: CONTINUATION,
       citations: [],
     });

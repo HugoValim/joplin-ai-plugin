@@ -7,6 +7,7 @@ import { ChangeReview } from "../../src/webview/ChangeReview";
 const CHANGE_SET: ChangeSetView = {
   changeSetId: "changes-1",
   runId: "run-1",
+  applyToken: "g".repeat(64),
   changes: [
     {
       id: "change-1",

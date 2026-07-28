@@ -31,14 +31,16 @@ import type { AssistantOutputActions } from "./assistantOutputActions";
 import type { CommandPort, DialogPort, ProviderFactory } from "./types";
 import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
+import type { SecretNotebookStore } from "../persistence/secretNotebookStore";
 
 const AUTO_APPLY_WARNING =
-  "Security warning: Auto-apply will apply every non-delete model-proposed note, notebook, and file change without review. Deletions always require manual review. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
+  "Security warning: Auto-apply will apply every model-proposed file change in the selected folder without review. Note and notebook proposals always require manual review. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
 
 export class ChatController {
   private activeChatId: string | null = null;
   private endpointStatus: EndpointStatus = "unconfigured";
   private modelName = "";
+  private secretNotebookIds: ReadonlySet<string> = new Set();
   private readonly activeRuns = new RunCancellationRegistry();
   private readonly providerConnector: ProviderConnector;
   private readonly events: PluginEventSender;
@@ -56,6 +58,7 @@ export class ChatController {
     private readonly dialogs: DialogPort,
     private readonly commands: CommandPort,
     private readonly assistantActions: AssistantOutputActions,
+    private readonly secretNotebooks: SecretNotebookStore,
     createProvider: ProviderFactory,
   ) {
     this.providerConnector = new ProviderConnector(
@@ -148,24 +151,42 @@ export class ChatController {
           request.runId,
         );
         return;
+      case "secrets.mark":
+        this.secretNotebookIds = await this.secretNotebooks.mark(
+          request.payload.notebookId,
+        );
+        await this.sendSnapshot();
+        return;
+      case "secrets.unmark":
+        this.secretNotebookIds = await this.secretNotebooks.unmark(
+          request.payload.notebookId,
+        );
+        await this.sendSnapshot();
+        return;
     }
   }
 
   /** Publishes active-note identity without its body. Example: workspaceChanged(note). */
   public workspaceChanged(
-    activeNote: { readonly id: string; readonly title: string } | null,
+    activeNote: {
+      readonly id: string;
+      readonly title: string;
+      readonly parentNotebookId: string;
+    } | null,
   ): void {
     const chatId = this.activeChatId ?? "bootstrap";
     const summary = activeNote
       ? {
           id: activeNote.id,
           title: activeNote.title.trim().slice(0, 500) || "Untitled note",
+          parentNotebookId: activeNote.parentNotebookId,
         }
       : null;
     this.events.post("workspace.changed", chatId, { activeNote: summary });
   }
 
   private async handleReady(): Promise<void> {
+    this.secretNotebookIds = await this.secretNotebooks.list();
     const summaries = await this.chats.list();
     let selected: PersistedChat | null = null;
     for (const summary of summaries) {
@@ -240,6 +261,7 @@ export class ChatController {
       userText: request.payload.text,
       settings: chat.context,
       hasFileWorkspace: Boolean(chat.externalRoot),
+      secretNotebookIds: this.secretNotebookIds,
     });
     const saved = await this.appendUserMessage(chat, request.payload.text);
     const runner = new AgentRunner(
@@ -254,6 +276,9 @@ export class ChatController {
         runId: request.runId,
         messages: mergeHistory(context.messages, chat.messages),
         hasFileWorkspace: Boolean(chat.externalRoot),
+        vault: chat.context.vault,
+        readableNoteIds: context.readableNoteIds,
+        secretNotebookIds: this.secretNotebookIds,
       },
       abortSignal,
     );
@@ -271,6 +296,9 @@ export class ChatController {
       outcome.continuation,
       chat.id,
       Boolean(chat.externalRoot),
+      chat.context.vault,
+      context.readableNoteIds,
+      this.secretNotebookIds,
       context.citations,
     );
     await this.emitOutcome(
@@ -463,10 +491,15 @@ export class ChatController {
     const chatId = active?.id ?? "bootstrap";
     this.events.post("state.snapshot", chatId, {
       chats: summaries,
-      activeChat: active ? toActiveChat(active, this.changes) : null,
+      activeChat: active
+        ? toActiveChat(active, this.changes, (changeSetId) =>
+            this.approvals.applyTokenForChangeSet(changeSetId),
+          )
+        : null,
       endpointStatus: this.endpointStatus,
       modelName: this.modelName,
       privacyNotice: PRIVACY_NOTICE,
+      secretNotebookIds: [...this.secretNotebookIds],
     });
   }
 }

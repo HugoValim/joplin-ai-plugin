@@ -54,6 +54,7 @@ export const EMPTY_SNAPSHOT: SidebarSnapshot = {
   endpointStatus: "unconfigured",
   modelName: "",
   privacyNotice: "Loading privacy information…",
+  secretNotebookIds: [],
 };
 
 export const INITIAL_SIDEBAR_STATE: SidebarState = {

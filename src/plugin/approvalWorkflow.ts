@@ -19,6 +19,7 @@ import {
 import { persistRunOutcome, requireChat } from "./chatLifecycle";
 import { toChangeSetView } from "./chatView";
 import { DeltaBatcher } from "./deltaBatcher";
+import { ApplyTokenStore } from "./applyTokenStore";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import { summarizeToolResult } from "./toolActivity";
@@ -29,6 +30,7 @@ interface ContinuationProviderPort {
 
 export class ApprovalWorkflow {
   private readonly continuations = new AgentContinuationStore();
+  private readonly applyTokens = new ApplyTokenStore();
 
   public constructor(
     private readonly chats: ChatStore,
@@ -45,12 +47,18 @@ export class ApprovalWorkflow {
     continuation: AgentContinuation | null,
     chatId: string,
     hasFileWorkspace: boolean,
+    vault: boolean,
+    readableNoteIds: ReadonlySet<string>,
+    secretNotebookIds: ReadonlySet<string>,
     citations: readonly ContextCitation[],
   ): void {
     if (!changeSet || !continuation) return;
     this.continuations.save(changeSet.id, {
       chatId,
       hasFileWorkspace,
+      vault,
+      readableNoteIds,
+      secretNotebookIds,
       continuation,
       citations,
     });
@@ -58,6 +66,15 @@ export class ApprovalWorkflow {
 
   public abandonChat(chatId: string): void {
     this.continuations.deleteChat(chatId);
+  }
+
+  /**
+   * Ensures a pending change set has a plugin-issued apply token for snapshots.
+   *
+   * @example workflow.applyTokenForChangeSet("changes-1")
+   */
+  public applyTokenForChangeSet(changeSetId: string): string {
+    return this.applyTokens.ensure(changeSetId);
   }
 
   /**
@@ -71,13 +88,18 @@ export class ApprovalWorkflow {
   ): Promise<void> {
     if (autoApply && !requiresManualReview(changeSet)) {
       this.postAutomaticProgress(changeSet);
-      await this.applyRequest(automaticApplyRequest(changeSet), true);
+      const applyToken = this.applyTokens.issue(changeSet.id);
+      await this.applyRequest(
+        automaticApplyRequest(changeSet, applyToken),
+        true,
+      );
       return;
     }
+    const applyToken = this.applyTokens.issue(changeSet.id);
     this.events.post(
       "changes.proposed",
       changeSet.chatId,
-      toChangeSetView(changeSet),
+      toChangeSetView(changeSet, applyToken),
       changeSet.runId,
     );
   }
@@ -105,6 +127,18 @@ export class ApprovalWorkflow {
     request: Extract<PanelRequest, { type: "changes.apply" }>,
     automatic: boolean,
   ): Promise<void> {
+    if (
+      !this.applyTokens.verify(
+        request.payload.changeSetId,
+        request.payload.applyToken,
+      )
+    ) {
+      throw new DomainError(
+        "SECURITY",
+        `Invalid apply token for change set ${request.payload.changeSetId}; expected a plugin-issued token`,
+      );
+    }
+    this.applyTokens.revoke(request.payload.changeSetId);
     const result = await this.applier.apply(
       request.payload.changeSetId,
       request.payload.acceptedIds,
@@ -126,6 +160,7 @@ export class ApprovalWorkflow {
       chatId: request.chatId,
       runId: request.runId,
     });
+    this.applyTokens.revoke(request.payload.changeSetId);
     this.continuations.delete(request.payload.changeSetId);
     await this.clearPending(request.chatId, request.runId, "completed");
     this.events.post(
@@ -209,6 +244,9 @@ export class ApprovalWorkflow {
         runId,
         messages: [],
         hasFileWorkspace: pending.hasFileWorkspace,
+        vault: pending.vault,
+        readableNoteIds: pending.readableNoteIds,
+        secretNotebookIds: pending.secretNotebookIds,
       },
       pending.continuation,
       approvalSummary(applied, automatic),
@@ -228,6 +266,9 @@ export class ApprovalWorkflow {
       outcome.continuation,
       pending.chatId,
       pending.hasFileWorkspace,
+      pending.vault,
+      pending.readableNoteIds,
+      pending.secretNotebookIds,
       pending.citations,
     );
     await this.postContinuationOutcome(
@@ -374,13 +415,12 @@ export class ApprovalWorkflow {
 }
 
 function requiresManualReview(changeSet: ChangeSet): boolean {
-  return changeSet.changes.some(
-    (change) => "operation" in change && change.operation === "delete",
-  );
+  return changeSet.changes.some((change) => change.kind !== "file");
 }
 
 function automaticApplyRequest(
   changeSet: ChangeSet,
+  applyToken: string,
 ): Extract<PanelRequest, { type: "changes.apply" }> {
   return {
     version: PROTOCOL_VERSION,
@@ -391,6 +431,7 @@ function automaticApplyRequest(
     payload: {
       changeSetId: changeSet.id,
       acceptedIds: changeSet.changes.map((change) => change.id),
+      applyToken,
     },
   };
 }

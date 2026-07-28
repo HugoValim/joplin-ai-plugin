@@ -31,6 +31,11 @@ notes or folders.
 - [ ] Vault RAG off: no automatic search.
 - [ ] Vault RAG on: bounded note citations appear.
 - [ ] Attach/detach current note updates that chat only.
+- [ ] **Mark secret** on the active note's notebook excludes it from search,
+      list, read, organization tools, and Vault RAG.
+- [ ] Secret count chip reflects marked notebooks globally.
+- [ ] **Unmark secret** restores normal tool access for that notebook.
+- [ ] Attaching a note in a secret notebook does not bypass the exclusion.
 
 ## Note-writing rules
 
@@ -60,10 +65,9 @@ notes or folders.
 - [ ] Enabling **Auto-apply changes** shows a warning; cancelling keeps review
       mode.
 - [ ] Confirming affects only the current chat and persists after restart.
-- [ ] Every non-delete proposal batch applies without opening review, including
-      a second batch proposed during model continuation.
-- [ ] Note and notebook deletion proposals always open review despite
-      auto-apply.
+- [ ] File proposal batches apply without opening review, including a second
+      batch proposed during model continuation.
+- [ ] Note and notebook proposals always open ChangeReview despite auto-apply.
 - [ ] Concurrently modified notes/files remain untouched and report conflicts.
 - [ ] Supported updates expose **Undo**; created notes are not auto-deleted.
 - [ ] Disabling auto-apply requires no warning and restores review mode.

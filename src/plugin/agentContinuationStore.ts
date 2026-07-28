@@ -4,6 +4,9 @@ import type { ContextCitation } from "../agent/contextBuilder";
 export interface PendingAgentContinuation {
   readonly chatId: string;
   readonly hasFileWorkspace: boolean;
+  readonly vault: boolean;
+  readonly readableNoteIds: ReadonlySet<string>;
+  readonly secretNotebookIds: ReadonlySet<string>;
   readonly continuation: AgentContinuation;
   readonly citations: readonly ContextCitation[];
 }

@@ -3,6 +3,13 @@ import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
 describe("ChatStore", () => {
+  test("defaults vault RAG off for new chats", async () => {
+    const store = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await store.create("Vault default");
+
+    expect(chat.context.vault).toBe(false);
+  });
+
   test("defaults automatic apply off and persists the per-chat opt-in", async () => {
     const store = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await store.create("Safe by default");

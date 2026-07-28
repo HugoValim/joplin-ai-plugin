@@ -12,6 +12,7 @@ const SNAPSHOT_EVENT: PluginEvent = {
     endpointStatus: "unconfigured",
     modelName: "",
     privacyNotice: "Context is opt-in.",
+    secretNotebookIds: [],
   },
 };
 

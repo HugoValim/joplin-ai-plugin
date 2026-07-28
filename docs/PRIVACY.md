@@ -13,6 +13,12 @@ For each submitted turn, the plugin sends:
 - up to six bounded vault snippets only when **Vault RAG** is enabled;
 - tool results requested by the model from Joplin or the selected chat folder.
 
+When **Vault RAG** is off, note body read/write tools are limited to the active
+note (when enabled) and explicitly attached notes. Vault-wide search, notebook
+listing, and organization tools remain available for non-secret notebooks.
+Notebooks marked **Secret** in the sidebar are excluded globally from agent
+tools and Vault RAG; attaching a note does not bypass a secret notebook.
+
 The selected folder's absolute root is displayed in the sidebar and persisted
 locally, but model file tools receive root-relative paths.
 
@@ -45,11 +51,12 @@ LF/CRLF, final-newline presence, and permission mode.
 
 Model tools never directly write notes, notebooks, or files. They collect
 proposals for a single batch. Review is required by default. A persisted
-per-chat **Auto-apply changes** toggle can apply non-delete proposals without
-displaying the review batch after an explicit warning. Note and notebook
-deletions always require manual review and use recoverable Joplin Trash, never
-permanent deletion. Applying in either mode rechecks every item's
-`updated_time` or SHA-256. Conflicting items are not overwritten.
+per-chat **Auto-apply changes** toggle can apply file proposals in the selected
+folder without displaying the review batch after an explicit warning. Note and
+notebook proposals always require manual review. Note and notebook deletions use
+recoverable Joplin Trash, never permanent deletion. Applying in either mode
+rechecks every item's `updated_time` or SHA-256. Conflicting items are not
+overwritten.
 
 Assistant response buttons are separate explicit user actions. Insert and
 replace use Joplin editor commands; append rechecks the active note
@@ -65,7 +72,8 @@ Trash.
 Fixed instructions tell the model to treat note/file contents as untrusted data,
 preserve meaning and Markdown, avoid fabricated facts or citations, and keep
 custom instructions subordinate to those rules. These instructions reduce risk
-but do not make model output inherently trustworthy; review important content.
+but do not replace hard tool gates or human review; model output is not
+inherently trustworthy.
 
 ## Endpoint transport
 

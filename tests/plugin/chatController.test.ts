@@ -42,6 +42,7 @@ import {
 } from "../../src/shared/protocol";
 import { ToolRegistry } from "../../src/tools/toolRegistry";
 import { registerNoteTools } from "../../src/tools/noteTools";
+import { SecretNotebookStore } from "../../src/persistence/secretNotebookStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
 class BlockingProvider implements AiProvider {
@@ -261,6 +262,7 @@ const SETTINGS_VALUES: Readonly<Record<string, unknown>> = {
   "joplinAiAgent.maxOutputTokens": 2_000,
   "joplinAiAgent.timeoutMs": 120_000,
   "joplinAiAgent.allowInsecureRemote": false,
+  "joplinAiAgent.allowedInsecureOrigin": "",
 };
 
 function submission(
@@ -276,6 +278,16 @@ function submission(
     type: "chat.submit",
     payload: { text },
   };
+}
+
+function createSecretNotebookStore(): SecretNotebookStore {
+  const files = new Map<string, string>();
+  return new SecretNotebookStore({
+    read: async (path) => files.get(path) ?? null,
+    write: async (path, content) => {
+      files.set(path, content);
+    },
+  });
 }
 
 describe("ChatController", () => {
@@ -311,13 +323,22 @@ describe("ChatController", () => {
       new EmptyDialogs(),
       commands,
       new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
       () => provider,
     );
-    controller.workspaceChanged({ id: "note-1", title: "Project brief" });
+    controller.workspaceChanged({
+      id: "note-1",
+      title: "Project brief",
+      parentNotebookId: "nb-1",
+    });
     expect(panel.events.at(-1)).toMatchObject({
       type: "workspace.changed",
       payload: {
-        activeNote: { id: "note-1", title: "Project brief" },
+        activeNote: {
+          id: "note-1",
+          title: "Project brief",
+          parentNotebookId: "nb-1",
+        },
       },
     });
     expect(JSON.stringify(panel.events.at(-1))).not.toContain("body");
@@ -340,12 +361,12 @@ describe("ChatController", () => {
     await first;
   });
 
-  test("automatically applies every proposal batch and continues the model", async () => {
+  test("requires review for note proposals even when auto-apply is enabled", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await chats.create("Automatic");
     await chats.save({
       ...chat,
-      context: { ...chat.context, autoApply: true },
+      context: { ...chat.context, autoApply: true, vault: true },
     });
     const provider = new ProposalThenCompletionProvider();
     const notes = new EmptyNoteRepository();
@@ -377,30 +398,18 @@ describe("ChatController", () => {
       new EmptyDialogs(),
       commands,
       new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
       () => provider,
     );
 
     await controller.handle(submission(chat.id, "run-auto", "Create a note"));
 
-    expect(notes.createdNotes.map((note) => note.body)).toEqual([
-      "Applied batch 1 without review.",
-      "Applied batch 2 without review.",
-    ]);
-    expect(provider.callCount).toBe(3);
-    expect(
-      provider.requests[1]?.messages.some((message) =>
-        message.content.includes("automatic application was enabled"),
-      ),
-    ).toBe(true);
-    expect(JSON.stringify(provider.requests)).not.toContain("user reviewed");
-    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+    expect(notes.createdNotes).toHaveLength(0);
+    expect(provider.callCount).toBe(1);
     expect(
       panel.events.some((event) => event.type === "changes.proposed"),
-    ).toBe(false);
-    expect(panel.events.at(-2)).toMatchObject({
-      type: "run.completed",
-      payload: { summary: "Changes applied; continuation completed" },
-    });
+    ).toBe(true);
+    expect((await chats.get(chat.id))?.pendingChangeSet).not.toBeNull();
   });
 
   test("requires trusted confirmation before enabling automatic apply", async () => {
@@ -441,6 +450,7 @@ describe("ChatController", () => {
         notes,
         commands,
       ),
+      createSecretNotebookStore(),
       () => new ProposalThenCompletionProvider(),
     );
     const update = (autoApply: boolean): PanelRequest => ({
@@ -466,9 +476,9 @@ describe("ChatController", () => {
     await controller.handle(update(false));
     expect((await chats.get(chat.id))?.context.autoApply).toBe(false);
     expect(dialogs.messages).toHaveLength(2);
-    expect(dialogs.messages[0]).toContain("non-delete model-proposed");
+    expect(dialogs.messages[0]).toContain("file change");
     expect(dialogs.messages[0]).toContain(
-      "Deletions always require manual review",
+      "Note and notebook proposals always require manual review",
     );
   });
 });

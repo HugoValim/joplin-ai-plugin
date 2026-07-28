@@ -1,2 +1,2 @@
 export const PRIVACY_NOTICE =
-  "Only enabled note context and tool-selected text files are sent to the configured endpoint. Retrieved content is treated as untrusted data. API keys never enter this sidebar or chat files.";
+  "Only enabled note context and allowlisted note tools are sent to the configured endpoint. Active and attached notes supply scoped read/write tools; secret notebooks are excluded globally. Vault RAG adds bounded snippets only. Auto-apply covers file proposals only; note and notebook changes always require ChangeReview. Retrieved content is treated as untrusted data. API keys never enter this sidebar or chat files.";

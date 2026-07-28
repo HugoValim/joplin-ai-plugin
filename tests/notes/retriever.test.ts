@@ -110,4 +110,33 @@ describe("NoteRetriever", () => {
 
     expect(snippets[0]?.noteId).toBe("note-2");
   });
+
+  test("excludes notes in secret notebooks from retrieval", async () => {
+    const repository = new FakeNoteRepository();
+    const open: NoteRecord = {
+      id: "note-open",
+      parentId: "nb-open",
+      title: "Open note",
+      body: "# Topic\nVisible content.",
+      updatedTime: 10,
+    };
+    const secret: NoteRecord = {
+      id: "note-secret",
+      parentId: "nb-secret",
+      title: "Secret note",
+      body: "# Hidden\nSecret content.",
+      updatedTime: 11,
+    };
+    repository.searchHits = [open, secret];
+    repository.notes.set(open.id, open);
+    repository.notes.set(secret.id, secret);
+
+    const snippets = await new NoteRetriever(repository).retrieve(
+      "content",
+      true,
+      new Set(["nb-secret"]),
+    );
+
+    expect(snippets.map((snippet) => snippet.noteId)).toEqual(["note-open"]);
+  });
 });

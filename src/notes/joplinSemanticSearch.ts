@@ -68,7 +68,7 @@ export class JoplinSemanticNoteSearch implements SemanticNoteSearch {
     const output: NoteSnippet[] = [];
     for (const hit of input.slice(0, limit)) {
       const note = await this.notes.readNote(hit.noteId);
-      output.push(toSnippet(note.title, note.body, hit));
+      output.push(toSnippet(note.title, note.body, note.parentId, hit));
     }
     return output;
   }
@@ -86,6 +86,7 @@ function hasSearch(candidate: unknown): candidate is JoplinAiSearchPort {
 function toSnippet(
   title: string,
   body: string,
+  parentNotebookId: string,
   hit: (typeof ResultsSchema.static)[number],
 ): NoteSnippet {
   const characterIndex = body.indexOf(hit.chunkText);
@@ -96,6 +97,7 @@ function toSnippet(
   const lineEnd = lineStart + hit.chunkText.split(/\r?\n/).length - 1;
   return {
     noteId: hit.noteId,
+    parentNotebookId,
     title,
     heading: `Semantic chunk ${hit.chunkIndex + 1}`,
     lineStart,

@@ -2,6 +2,7 @@ export interface NoteSearchHit {
   readonly id: string;
   readonly title: string;
   readonly updatedTime: number;
+  readonly parentId?: string;
 }
 
 export interface NoteRecord extends NoteSearchHit {
@@ -94,6 +95,7 @@ export interface NoteOrganizationRepository {
 
 export interface NoteSnippet {
   readonly noteId: string;
+  readonly parentNotebookId: string;
   readonly title: string;
   readonly heading: string;
   readonly lineStart: number;
@@ -123,21 +125,31 @@ export class NoteRetriever {
   public async retrieve(
     query: string,
     enabled: boolean,
+    secretNotebookIds: ReadonlySet<string> = new Set(),
   ): Promise<readonly NoteSnippet[]> {
     if (!enabled) return [];
     const hits = await this.repository.searchNotes(query, 20);
-    const keyword = await this.loadKeywordSnippets(hits, query);
-    const semantic = await this.loadSemanticSnippets(query);
+    const allowedHits = hits.filter(
+      (hit) => !isSecretParent(secretNotebookIds, hit.parentId),
+    );
+    const keyword = await this.loadKeywordSnippets(
+      allowedHits,
+      query,
+      secretNotebookIds,
+    );
+    const semantic = await this.loadSemanticSnippets(query, secretNotebookIds);
     return boundSnippets(mergeRanks(keyword, semantic));
   }
 
   private async loadKeywordSnippets(
     hits: readonly NoteSearchHit[],
     query: string,
+    secretNotebookIds: ReadonlySet<string>,
   ): Promise<NoteSnippet[]> {
     const snippets: NoteSnippet[] = [];
     for (const hit of hits) {
       const note = await this.repository.readNote(hit.id);
+      if (isSecretParent(secretNotebookIds, note.parentId)) continue;
       for (const chunk of chunkMarkdown(note.body)) {
         snippets.push(toSnippet(note, chunk, query));
       }
@@ -147,10 +159,14 @@ export class NoteRetriever {
 
   private async loadSemanticSnippets(
     query: string,
+    secretNotebookIds: ReadonlySet<string>,
   ): Promise<readonly NoteSnippet[]> {
     if (!this.semanticSearch) return [];
     try {
-      return await this.semanticSearch.search(query, 20);
+      const snippets = await this.semanticSearch.search(query, 20);
+      return snippets.filter(
+        (snippet) => !isSecretParent(secretNotebookIds, snippet.parentNotebookId),
+      );
     } catch {
       return [];
     }
@@ -213,6 +229,7 @@ function toSnippet(
     scoreText(chunk.text, terms, 1);
   return {
     noteId: note.id,
+    parentNotebookId: note.parentId,
     title: note.title,
     heading: chunk.heading,
     lineStart: chunk.lineStart,
@@ -290,4 +307,11 @@ function addRankedSnippets(
       score: (existing?.score ?? 0) + contribution,
     });
   }
+}
+
+function isSecretParent(
+  secretNotebookIds: ReadonlySet<string>,
+  parentNotebookId?: string,
+): boolean {
+  return Boolean(parentNotebookId && secretNotebookIds.has(parentNotebookId));
 }

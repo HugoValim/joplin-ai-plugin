@@ -51,10 +51,12 @@ describe("panel protocol", () => {
       },
     ],
     ["folder.select", {}],
-    ["changes.apply", { changeSetId: "changes-1", acceptedIds: ["change-1"] }],
+    ["changes.apply", { changeSetId: "changes-1", acceptedIds: ["change-1"], applyToken: "a".repeat(64) }],
     ["changes.discard", { changeSetId: "changes-1" }],
     ["run.undo", { targetRunId: "run-old" }],
     ["note.open", { noteId: "note-1" }],
+    ["secrets.mark", { notebookId: "nb-1" }],
+    ["secrets.unmark", { notebookId: "nb-1" }],
   ])("accepts %s requests", (type, payload) => {
     const runId =
       type.startsWith("run.") ||
@@ -100,6 +102,7 @@ describe("plugin protocol", () => {
       payload: {
         changeSetId: "changes-1",
         runId: "run-1",
+        applyToken: "e".repeat(64),
         changes: [
           {
             id: "change-1",
@@ -127,11 +130,18 @@ describe("plugin protocol", () => {
         endpointStatus: "unconfigured",
         modelName: "",
         privacyNotice: "Context is opt-in.",
+        secretNotebookIds: [],
       },
     ],
     [
       "workspace.changed",
-      { activeNote: { id: "note-1", title: "Project brief" } },
+      {
+        activeNote: {
+          id: "note-1",
+          title: "Project brief",
+          parentNotebookId: "nb-1",
+        },
+      },
     ],
     ["composer.prefill", { text: "selected note text" }],
     ["run.started", { startedAt: 1 }],
@@ -141,7 +151,7 @@ describe("plugin protocol", () => {
       "tool.completed",
       { toolCallId: "tool-1", name: "read_note", ok: true, summary: "Read" },
     ],
-    ["changes.proposed", { changeSetId: "changes-1", changes: [] }],
+    ["changes.proposed", { changeSetId: "changes-1", applyToken: "f".repeat(64), changes: [] }],
     ["run.progress", { current: 1, total: 2, label: "Reviewing" }],
     ["run.failed", { code: "PROVIDER", message: "Provider failed." }],
     ["run.completed", { summary: "Done" }],

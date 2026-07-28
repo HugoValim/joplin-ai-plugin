@@ -47,6 +47,7 @@ describe("ContextBuilder", () => {
       userText: "Summarise.",
       settings: { activeNote: false, vault: false, attachedNoteIds: [] },
       hasFileWorkspace: false,
+      secretNotebookIds: new Set(),
     });
 
     expect(source.activeNoteCount).toBe(0);
@@ -75,6 +76,7 @@ describe("ContextBuilder", () => {
       userText: "Which model are you?",
       settings: { activeNote: false, vault: false, attachedNoteIds: [] },
       hasFileWorkspace: false,
+      secretNotebookIds: new Set(),
     });
 
     expect(context.messages[0]?.content).toContain(
@@ -98,6 +100,7 @@ describe("ContextBuilder", () => {
       userText: "Improve this note.",
       settings: { activeNote: false, vault: false, attachedNoteIds: [] },
       hasFileWorkspace: false,
+      secretNotebookIds: new Set(),
     });
     const policy = context.messages[0]?.content ?? "";
 
@@ -106,8 +109,13 @@ describe("ContextBuilder", () => {
     expect(policy).toContain("Markdown structure");
     expect(policy).toContain("Ask one focused clarifying question");
     expect(policy).toContain(
-      "Use note and notebook organization tools only when the user's request requires them",
+      "Use propose-write tools for note body edits, creation, and reorganization",
     );
+    expect(policy).toContain("Never ask the user to supply opaque note or notebook ID lists");
+    expect(policy).toContain("Notebooks marked secret by the user are excluded");
+    expect(policy).toContain("ChangeReview until the user applies or discards it");
+    expect(policy).toContain("apply, do it, go ahead, or proceed");
+    expect(policy).toContain("Do not stop at a text plan");
     expect(policy).toContain("Deletion always requires explicit user review");
     expect(policy).toContain(
       "Custom instructions apply only when consistent with these fixed rules",

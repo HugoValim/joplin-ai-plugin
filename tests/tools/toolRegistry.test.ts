@@ -40,7 +40,7 @@ class EchoAgentTool implements AgentTool<EchoInput, EchoOutput> {
 const CONTEXT: ToolExecutionContext = {
   chatId: "chat-1",
   runId: "run-1",
-  hasFileWorkspace: false,
+  hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
 };
 
 describe("ToolRegistry", () => {

@@ -38,6 +38,8 @@ export interface SidebarController {
   readonly updateContext: (next: Partial<ActiveChat["context"]>) => void;
   readonly toggleAttachedNote: () => void;
   readonly selectFolder: () => void;
+  readonly markSecretNotebook: (notebookId: string) => void;
+  readonly unmarkSecretNotebook: (notebookId: string) => void;
   readonly openNote: (noteId: string) => void;
   readonly runAssistantAction: (
     messageId: string,
@@ -229,6 +231,18 @@ function createActions(
     toggleAttachedNote: () => toggleAttachedNote(input),
     selectFolder: () =>
       input.send({ ...input.envelope(), type: "folder.select", payload: {} }),
+    markSecretNotebook: (notebookId) =>
+      input.send({
+        ...input.envelope(),
+        type: "secrets.mark",
+        payload: { notebookId },
+      }),
+    unmarkSecretNotebook: (notebookId) =>
+      input.send({
+        ...input.envelope(),
+        type: "secrets.unmark",
+        payload: { notebookId },
+      }),
     openNote: (noteId) =>
       input.send({
         ...input.envelope(),
@@ -393,6 +407,7 @@ function applyChanges(input: ActionInput): void {
     payload: {
       changeSetId: input.pending.changeSetId,
       acceptedIds: [...input.acceptedIds],
+      applyToken: input.pending.applyToken,
     },
   });
 }

@@ -8,6 +8,14 @@ import type {
   ToolExecutionContext,
   ToolRisk,
 } from "./toolRegistry";
+import {
+  assertNoteReadable,
+  assertNotebookAllowed,
+  filterAllowedNotebooks,
+  filterAllowedNotes,
+  noteScopedToolsEnabled,
+  vaultOrgToolsEnabled,
+} from "./noteAccessPolicy";
 
 const IdentifierSchema = Type.String({ minLength: 1, maxLength: 128 });
 const ProposalOutputSchema = Type.Object(
@@ -26,9 +34,7 @@ abstract class NoteTool<TInput, TOutput> implements AgentTool<TInput, TOutput> {
   public abstract readonly inputSchema: TSchema;
   public abstract readonly outputSchema: TSchema;
 
-  public isAvailable(_context: ToolExecutionContext): boolean {
-    return true;
-  }
+  public abstract isAvailable(context: ToolExecutionContext): boolean;
 
   public abstract execute(
     input: TInput,
@@ -75,11 +81,22 @@ class SearchNotesTool extends NoteTool<SearchNotesInput, SearchNotesOutput> {
     super();
   }
 
-  public async execute(input: SearchNotesInput): Promise<SearchNotesOutput> {
-    const notes = await this.repository.searchNotes(
-      input.query,
-      input.limit ?? 10,
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
+  public async execute(
+    input: SearchNotesInput,
+    context: ToolExecutionContext,
+  ): Promise<SearchNotesOutput> {
+    const hits = await this.repository.searchNotes(input.query, input.limit ?? 10);
+    const enriched = await Promise.all(
+      hits.map(async (hit) => {
+        const note = await this.repository.readNote(hit.id);
+        return { ...hit, parentId: note.parentId };
+      }),
     );
+    const notes = filterAllowedNotes(context, enriched);
     return {
       notes: notes.map((note) => ({
         id: note.id,
@@ -122,8 +139,16 @@ class ReadNoteTool extends NoteTool<ReadNoteInput, ReadNoteOutput> {
     super();
   }
 
-  public async execute(input: ReadNoteInput): Promise<ReadNoteOutput> {
+  public override isAvailable(context: ToolExecutionContext): boolean {
+    return noteScopedToolsEnabled(context);
+  }
+
+  public async execute(
+    input: ReadNoteInput,
+    context: ToolExecutionContext,
+  ): Promise<ReadNoteOutput> {
     const note = await this.repository.readNote(input.note_id);
+    assertNoteReadable(context, input.note_id, note.parentId);
     return {
       id: note.id,
       title: note.title,
@@ -167,8 +192,18 @@ class ListNotebooksTool extends NoteTool<
     super();
   }
 
-  public async execute(): Promise<NotebookOutput> {
-    const notebooks = await this.repository.listNotebooks();
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
+  public async execute(
+    _input: Record<string, never>,
+    context: ToolExecutionContext,
+  ): Promise<NotebookOutput> {
+    const notebooks = filterAllowedNotebooks(
+      context,
+      await this.repository.listNotebooks(),
+    );
     return {
       notebooks: notebooks.map((notebook) => ({
         id: notebook.id,
@@ -204,10 +239,15 @@ class CreateNoteTool extends NoteTool<CreateNoteToolInput, ProposalOutput> {
     super();
   }
 
+  public override isAvailable(_context: ToolExecutionContext): boolean {
+    return vaultOrgToolsEnabled();
+  }
+
   public execute(
     input: CreateNoteToolInput,
     context: ToolExecutionContext,
   ): Promise<ProposalOutput> {
+    assertNotebookAllowed(context, input.parent_id);
     const change = this.changes.add(context.chatId, context.runId, {
       kind: "note",
       operation: "create",
@@ -249,11 +289,16 @@ class AppendNoteTool extends NoteTool<AppendNoteInput, ProposalOutput> {
     super();
   }
 
+  public override isAvailable(context: ToolExecutionContext): boolean {
+    return noteScopedToolsEnabled(context);
+  }
+
   public async execute(
     input: AppendNoteInput,
     context: ToolExecutionContext,
   ): Promise<ProposalOutput> {
     const note = await this.repository.readNote(input.note_id);
+    assertNoteReadable(context, input.note_id, note.parentId);
     assertNoteVersion(note, input.expected_updated_time);
     const separator = note.body.endsWith("\n") ? "" : "\n";
     return addNoteUpdate(
@@ -297,11 +342,16 @@ class ReplaceNoteTool extends NoteTool<ReplaceNoteInput, ProposalOutput> {
     super();
   }
 
+  public override isAvailable(context: ToolExecutionContext): boolean {
+    return noteScopedToolsEnabled(context);
+  }
+
   public async execute(
     input: ReplaceNoteInput,
     context: ToolExecutionContext,
   ): Promise<ProposalOutput> {
     const note = await this.repository.readNote(input.note_id);
+    assertNoteReadable(context, input.note_id, note.parentId);
     assertNoteVersion(note, input.expected_updated_time);
     const matches = exactMatchCount(note.body, input.search);
     assertReplacementCount(input, matches);

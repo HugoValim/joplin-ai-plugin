@@ -149,7 +149,7 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Loop forever" }],
-          hasFileWorkspace: false,
+          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
@@ -173,7 +173,7 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Many tools" }],
-          hasFileWorkspace: false,
+          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
@@ -193,7 +193,7 @@ describe("AgentRunner", () => {
         chatId: "chat-1",
         runId: "run-1",
         messages: [{ role: "user", content: "Improve the guide" }],
-        hasFileWorkspace: true,
+        hasFileWorkspace: true, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
       },
       new AbortController().signal,
     );
@@ -214,6 +214,9 @@ describe("AgentRunner", () => {
       runId: "run-1",
       messages: [{ role: "user" as const, content: "Improve the guide" }],
       hasFileWorkspace: true,
+      vault: true,
+      readableNoteIds: new Set<string>(),
+      secretNotebookIds: new Set<string>(),
     };
     const paused = await runner.run(request, new AbortController().signal);
     if (!paused.continuation) throw new Error("Expected continuation");
@@ -252,7 +255,7 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Do not run" }],
-          hasFileWorkspace: false,
+          hasFileWorkspace: false, vault: true, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
         },
         controller.signal,
       ),
@@ -277,6 +280,9 @@ describe("AgentRunner", () => {
         runId: "run-soft-tool",
         messages: [{ role: "user", content: "move note to root" }],
         hasFileWorkspace: false,
+        vault: true,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
       },
       new AbortController().signal,
     );
@@ -290,6 +296,52 @@ describe("AgentRunner", () => {
     if (toolMessage?.role !== "tool") throw new Error("Expected tool message");
     expect(toolMessage.content).toContain("VALIDATION");
     expect(provider.callCount).toBe(2);
+  });
+
+  test("injects a read-budget nudge after four consecutive read-only steps", async () => {
+    const captured: StreamChatRequest[] = [];
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        yield {
+          type: "tool-calls",
+          calls: [{ id: `call-${captured.length}`, name: "echo", arguments: {} }],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+    };
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    const runner = new AgentRunner(
+      provider,
+      registry,
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      runner.run(
+        {
+          chatId: "chat-1",
+          runId: "run-nudge",
+          messages: [{ role: "user", content: "Keep reading" }],
+          hasFileWorkspace: false,
+          vault: false,
+          readableNoteIds: new Set<string>(),
+          secretNotebookIds: new Set<string>(),
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("24 model steps");
+
+    const fifthRequest = captured[4];
+    expect(
+      fifthRequest?.messages.some(
+        (message) =>
+          message.role === "system" &&
+          message.content.includes("READ BUDGET"),
+      ),
+    ).toBe(true);
   });
 });
 

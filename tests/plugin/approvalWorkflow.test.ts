@@ -10,6 +10,11 @@ import {
   type FileWorkspaceWriteResolver,
 } from "../../src/agent/changeApplier";
 import type {
+  FileRollbackSnapshot,
+  TextFileSnapshot,
+  TextSearchMatch,
+} from "../../src/fileWorkspace/fileWorkspaceRepository";
+import type {
   CreateNoteInput,
   NoteRecord,
   NoteRepository,
@@ -70,6 +75,97 @@ class MutableNoteRepository implements NoteRepository {
   }
 }
 
+class FakeFileWorkspace implements FileWorkspaceWritePort {
+  public readonly files = new Map<string, TextFileSnapshot>();
+
+  public constructor() {
+    this.files.set(
+      "good.md",
+      snapshot("good.md", "Good original", "good-hash"),
+    );
+  }
+
+  public async listTextFiles(): Promise<readonly TextFileSnapshot[]> {
+    return [...this.files.values()];
+  }
+
+  public async readTextFile(relativePath: string): Promise<TextFileSnapshot> {
+    const file = this.files.get(relativePath);
+    if (!file) throw new Error(`Missing file ${relativePath}`);
+    return file;
+  }
+
+  public async searchTextFiles(): Promise<readonly TextSearchMatch[]> {
+    return [];
+  }
+
+  public async writeTextFile(
+    relativePath: string,
+    replacement: string,
+    expectedSha256: string,
+  ): Promise<TextFileSnapshot> {
+    const current = await this.readTextFile(relativePath);
+    if (current.sha256 !== expectedSha256) {
+      throw new Error("Concurrent file change");
+    }
+    const next = snapshot(relativePath, replacement, `${expectedSha256}-next`);
+    this.files.set(relativePath, next);
+    return next;
+  }
+
+  public async captureRollback(
+    relativePath: string,
+  ): Promise<FileRollbackSnapshot> {
+    const current = await this.readTextFile(relativePath);
+    return {
+      relativePath,
+      bytesBase64: Buffer.from(current.content).toString("base64"),
+      sha256: current.sha256,
+      mode: current.mode,
+    };
+  }
+
+  public async restoreRollback(
+    rollback: FileRollbackSnapshot,
+    expectedSha256: string,
+  ): Promise<TextFileSnapshot> {
+    const current = await this.readTextFile(rollback.relativePath);
+    if (current.sha256 !== expectedSha256) throw new Error("undo conflict");
+    const restored = snapshot(
+      rollback.relativePath,
+      Buffer.from(rollback.bytesBase64, "base64").toString(),
+      rollback.sha256,
+    );
+    this.files.set(rollback.relativePath, restored);
+    return restored;
+  }
+}
+
+function snapshot(
+  relativePath: string,
+  content: string,
+  sha256: string,
+): TextFileSnapshot {
+  return {
+    relativePath,
+    content,
+    byteLength: Buffer.byteLength(content),
+    sha256,
+    hasBom: false,
+    lineEnding: "LF",
+    hasFinalNewline: false,
+    mode: 0o644,
+  };
+}
+
+class FakeFileWorkspaceResolver implements FileWorkspaceWriteResolver {
+  public constructor(private readonly workspace: FileWorkspaceWritePort) {}
+
+  public resolve(): FileWorkspaceWritePort | null {
+    return this.workspace;
+  }
+}
+
 class EmptyWorkspaceResolver implements FileWorkspaceWriteResolver {
   public resolve(): FileWorkspaceWritePort | null {
     return null;
@@ -102,6 +198,13 @@ class RecordingPanelPort implements PanelPort {
   public post(event: PluginEvent): void {
     this.events.push(event);
   }
+}
+
+function proposedApplyToken(event: PluginEvent | undefined): string {
+  if (event?.type !== "changes.proposed") {
+    throw new Error("Expected changes.proposed event");
+  }
+  return event.payload.applyToken;
 }
 
 describe("ApprovalWorkflow", () => {
@@ -159,6 +262,9 @@ describe("ApprovalWorkflow", () => {
       },
       chat.id,
       false,
+      true,
+      new Set<string>(),
+      new Set<string>(),
       [],
     );
 
@@ -172,7 +278,11 @@ describe("ApprovalWorkflow", () => {
       chatId: chat.id,
       runId: "run-1",
       type: "changes.apply",
-      payload: { changeSetId: changeSet.id, acceptedIds: [change.id] },
+      payload: {
+        changeSetId: changeSet.id,
+        acceptedIds: [change.id],
+        applyToken: proposedApplyToken(panel.events.at(-1)),
+      },
     });
 
     expect(notes.note.body).toBe("New");
@@ -193,9 +303,9 @@ describe("ApprovalWorkflow", () => {
     ]);
   });
 
-  test("automatically applies every proposed change without review", async () => {
+  test("requires manual review for note proposals even when auto-apply is enabled", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
-    const chat = await chats.create("Automatic");
+    const chat = await chats.create("Automatic notes");
     const changes = new InMemoryChangeSetStore();
     changes.add(chat.id, "run-auto", {
       kind: "note",
@@ -206,31 +316,8 @@ describe("ApprovalWorkflow", () => {
       after: "Updated",
       expectedUpdatedTime: 10,
     });
-    changes.add(chat.id, "run-auto", {
-      kind: "note",
-      operation: "create",
-      parentId: "folder-1",
-      title: "Summary",
-      targetLabel: "Summary",
-      before: "",
-      after: "Created",
-    });
-    changes.add(chat.id, "run-auto", {
-      kind: "note",
-      operation: "update",
-      noteId: "note-stale",
-      targetLabel: "Stale note",
-      before: "Old",
-      after: "Must not apply",
-      expectedUpdatedTime: 999,
-    });
     const changeSet = changes.getByRun("run-auto");
     if (!changeSet) throw new Error("Expected automatic change set");
-    await chats.save({
-      ...chat,
-      context: { ...chat.context, autoApply: true },
-      pendingChangeSet: changeSet,
-    });
     const notes = new MutableNoteRepository();
     const panel = new RecordingPanelPort();
     const workflow = new ApprovalWorkflow(
@@ -254,21 +341,54 @@ describe("ApprovalWorkflow", () => {
 
     await workflow.resolveProposedChanges(changeSet, true);
 
-    expect(notes.note.body).toBe("Updated");
-    expect(notes.createdNotes[0]?.body).toBe("Created");
-    expect(
-      changes.getByRun("run-auto")?.changes.map((change) => change.status),
-    ).toEqual(["applied", "applied", "conflict"]);
-    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+    expect(notes.note.body).toBe("Old");
+    expect(panel.events.map((event) => event.type)).toEqual(["changes.proposed"]);
+  });
+
+  test("automatically applies file-only proposals without review", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Automatic files");
+    const changes = new InMemoryChangeSetStore();
+    changes.add(chat.id, "run-file", {
+      kind: "file",
+      relativePath: "good.md",
+      targetLabel: "good.md",
+      before: "Good original",
+      after: "Good improved",
+      expectedSha256: "good-hash",
+    });
+    const changeSet = changes.getByRun("run-file");
+    if (!changeSet) throw new Error("Expected file change set");
+    const workspace = new FakeFileWorkspace();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new FakeFileWorkspaceResolver(workspace),
+        new InMemoryRollbackStore(),
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+    );
+
+    await workflow.resolveProposedChanges(changeSet, true);
+
+    expect(workspace.files.get("good.md")?.content).toBe("Good improved");
     expect(panel.events.map((event) => event.type)).toEqual([
       "run.progress",
       "run.completed",
     ]);
     expect(panel.events[0]).toMatchObject({
-      payload: { label: "Auto-applying 3 proposed changes" },
-    });
-    expect(panel.events[1]).toMatchObject({
-      payload: { undoRunId: "run-auto" },
+      payload: { label: "Auto-applying 1 proposed changes" },
     });
   });
 
@@ -287,11 +407,6 @@ describe("ApprovalWorkflow", () => {
     });
     const changeSet = changes.getByRun("run-delete");
     if (!changeSet) throw new Error("Expected deletion change set");
-    await chats.save({
-      ...chat,
-      context: { ...chat.context, autoApply: true },
-      pendingChangeSet: changeSet,
-    });
     const panel = new RecordingPanelPort();
     const workflow = new ApprovalWorkflow(
       chats,
@@ -318,5 +433,50 @@ describe("ApprovalWorkflow", () => {
       "changes.proposed",
     ]);
     expect(changes.getByRun("run-delete")?.status).toBe("proposed");
+  });
+
+  test("rejects forged apply requests without a plugin token", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-forged", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "New",
+      expectedUpdatedTime: 10,
+    });
+    const changeSet = changes.getByRun("run-forged");
+    if (!changeSet) throw new Error("Expected change set");
+    const workflow = new ApprovalWorkflow(
+      new ChatStore("/plugin", new MemoryJsonFilePort()),
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new EmptyWorkspaceResolver(),
+        new InMemoryRollbackStore(),
+      ),
+      new ToolRegistry(),
+      { connectWithConfirmation: async () => ({ provider: new FinalTextProvider() }) },
+      new PluginEventSender(new RecordingPanelPort()),
+      new RunCancellationRegistry(),
+    );
+    await workflow.resolveProposedChanges(changeSet, false);
+
+    await expect(
+      workflow.apply({
+        version: 2,
+        messageId: "message-1",
+        chatId: "chat-1",
+        runId: "run-forged",
+        type: "changes.apply",
+        payload: {
+          changeSetId: changeSet.id,
+          acceptedIds: [proposed.id],
+          applyToken: "0".repeat(64),
+        },
+      }),
+    ).rejects.toThrow("Invalid apply token");
   });
 });

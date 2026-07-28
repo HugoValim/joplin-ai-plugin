@@ -6,6 +6,7 @@ import type {
 } from "../notes/retriever";
 import { DomainError } from "../shared/errors";
 import type { AgentTool, ToolExecutionContext, ToolRisk } from "./toolRegistry";
+import { vaultOrgToolsEnabled } from "./noteAccessPolicy";
 
 export const OrganizationIdentifierSchema = Type.String({
   minLength: 1,
@@ -41,7 +42,7 @@ export abstract class OrganizationTool<TInput, TOutput> implements AgentTool<
   public abstract readonly outputSchema: TSchema;
 
   public isAvailable(_context: ToolExecutionContext): boolean {
-    return true;
+    return vaultOrgToolsEnabled();
   }
 
   public abstract execute(

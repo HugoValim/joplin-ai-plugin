@@ -28,6 +28,7 @@ export function mergeHistory(
 export function toActiveChat(
   chat: PersistedChat,
   changes: ChangeSetStore,
+  applyTokenForPending?: (changeSetId: string) => string,
 ): ActiveChatView {
   const pending = chat.pendingChangeSet;
   if (pending) changes.restore(pending);
@@ -37,14 +38,23 @@ export function toActiveChat(
     messages: chat.messages,
     context: chat.context,
     externalRoot: chat.externalRoot,
-    pendingChangeSet: pending ? toChangeSetView(pending) : null,
+    pendingChangeSet: pending
+      ? toChangeSetView(
+          pending,
+          applyTokenForPending?.(pending.id) ?? "",
+        )
+      : null,
   };
 }
 
-export function toChangeSetView(changeSet: ChangeSet): ChangeSetView {
+export function toChangeSetView(
+  changeSet: ChangeSet,
+  applyToken: string,
+): ChangeSetView {
   return {
     changeSetId: changeSet.id,
     runId: changeSet.runId,
+    applyToken,
     changes: changeSet.changes.map(toChangeView),
   };
 }

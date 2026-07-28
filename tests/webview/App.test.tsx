@@ -54,6 +54,7 @@ function snapshotEvent(): PluginEvent {
       endpointStatus: "online",
       modelName: "glm-5.2:cloud",
       privacyNotice: "Only enabled context is sent.",
+      secretNotebookIds: [],
     },
   };
 }
@@ -84,6 +85,7 @@ function pendingSnapshotEvent(): PluginEvent {
         pendingChangeSet: {
           changeSetId: "changes-1",
           runId: "run-1",
+          applyToken: "c".repeat(64),
           changes: [
             {
               id: "change-1",
@@ -179,7 +181,13 @@ describe("App shell", () => {
         messageId: "workspace-1",
         chatId: "chat-1",
         type: "workspace.changed",
-        payload: { activeNote: { id: "note-1", title: "Project brief" } },
+        payload: {
+          activeNote: {
+            id: "note-1",
+            title: "Project brief",
+            parentNotebookId: "nb-1",
+          },
+        },
       }),
     );
 
@@ -236,7 +244,7 @@ describe("App shell", () => {
       name: /Auto-apply changes/,
     });
     expect(
-      screen.getByText(/Deletions still require manual review/),
+      screen.getByText(/Note and notebook changes always require ChangeReview/),
     ).toBeTruthy();
 
     fireEvent.click(toggle);

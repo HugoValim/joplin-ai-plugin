@@ -3,6 +3,7 @@ import type { NoteOrganizationRepository } from "../notes/retriever";
 import type { ChangeSetStore } from "../persistence/changeSetStore";
 import { DomainError, safeValue } from "../shared/errors";
 import type { ToolExecutionContext, ToolRegistry } from "./toolRegistry";
+import { assertNotebookAllowed } from "./noteAccessPolicy";
 import {
   OrganizationIdentifierSchema,
   OrganizationProposalOutputSchema,
@@ -47,6 +48,7 @@ class RenameNotebookTool extends OrganizationTool<
     input: RenameNotebookInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
+    assertNotebookAllowed(context, input.notebook_id);
     const notebook = await readVersionedNotebookMetadata(
       this.repository,
       input,
@@ -102,6 +104,8 @@ class MoveNotebookTool extends OrganizationTool<
   ): Promise<OrganizationProposalOutput> {
     const parentId = input.parent_id ?? "";
     assertDistinctNotebookParent(input.notebook_id, parentId);
+    assertNotebookAllowed(context, input.notebook_id);
+    if (parentId) assertNotebookAllowed(context, parentId);
     const notebook = await readVersionedNotebookMetadata(
       this.repository,
       input,
@@ -153,6 +157,7 @@ class DeleteNotebookTool extends OrganizationTool<
     input: DeleteNotebookInput,
     context: ToolExecutionContext,
   ): Promise<OrganizationProposalOutput> {
+    assertNotebookAllowed(context, input.notebook_id);
     const notebook = await readVersionedNotebookMetadata(
       this.repository,
       input,

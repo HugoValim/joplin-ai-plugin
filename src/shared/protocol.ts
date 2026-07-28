@@ -110,6 +110,7 @@ const ChangesApplySchema = Type.Object(
           maxItems: 50,
           uniqueItems: true,
         }),
+        applyToken: Type.String({ minLength: 32, maxLength: 128 }),
       },
       { additionalProperties: false },
     ),
@@ -174,6 +175,30 @@ const AssistantActionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SecretsMarkSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("secrets.mark"),
+    payload: Type.Object(
+      { notebookId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const SecretsUnmarkSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("secrets.unmark"),
+    payload: Type.Object(
+      { notebookId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const PanelRequestSchema = Type.Union([
   PanelReadySchema,
   ChatCreateSchema,
@@ -188,6 +213,8 @@ const PanelRequestSchema = Type.Union([
   RunUndoSchema,
   NoteOpenSchema,
   AssistantActionSchema,
+  SecretsMarkSchema,
+  SecretsUnmarkSchema,
 ]);
 export type PanelRequest = Static<typeof PanelRequestSchema>;
 const CitationSchema = Type.Object(
@@ -258,6 +285,7 @@ const ChangeSetViewSchema = Type.Object(
   {
     changeSetId: IdentifierSchema,
     runId: Type.Optional(IdentifierSchema),
+    applyToken: Type.String({ minLength: 32, maxLength: 128 }),
     changes: Type.Array(ChangeViewSchema, { maxItems: 50 }),
   },
   { additionalProperties: false },
@@ -304,6 +332,10 @@ const StateSnapshotSchema = Type.Object(
         ]),
         modelName: Type.String({ maxLength: 500 }),
         privacyNotice: Type.String({ minLength: 1, maxLength: 2_000 }),
+        secretNotebookIds: Type.Array(IdentifierSchema, {
+          maxItems: 500,
+          uniqueItems: true,
+        }),
       },
       { additionalProperties: false },
     ),
@@ -322,6 +354,7 @@ const WorkspaceChangedSchema = Type.Object(
             {
               id: IdentifierSchema,
               title: Type.String({ minLength: 1, maxLength: 500 }),
+              parentNotebookId: Type.String({ maxLength: 128 }),
             },
             { additionalProperties: false },
           ),

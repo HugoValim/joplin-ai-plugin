@@ -15,8 +15,9 @@ import {
   JoplinJsonFileAdapter,
   type PersistenceFsExtra,
 } from "../persistence/adapters";
-import { ChatStore } from "../persistence/chatStore";
+import { ChatStore, type JsonFilePort } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
+import { SecretNotebookStore, type JsonFilePort as SecretNotebookJsonPort } from "../persistence/secretNotebookStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
 import { registerFileTools } from "../tools/fileTools";
 import { registerNoteOrganizationTools } from "../tools/noteOrganizationTools";
@@ -85,6 +86,9 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
   registerNoteOrganizationTools(tools, notes, changes);
   registerFileTools(tools, workspaces, changes);
   const dataDirectory = await joplin.plugins.dataDir();
+  const secretNotebooks = new SecretNotebookStore(
+    createSecretNotebookJsonPort(dataDirectory, jsonFiles),
+  );
   const chats = new ChatStore(dataDirectory, jsonFiles, structuredWarning);
   const applier = new ChangeApplier(
     changes,
@@ -107,6 +111,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     dialogs,
     commands,
     new AssistantOutputActions(chats, activeSource, notes, commands),
+    secretNotebooks,
     (config) => new OpenAiCompatibleProvider(config),
   );
   await panel.initialize((request) => controller.handle(request));
@@ -139,9 +144,28 @@ function publishActiveNoteSummary(
 
 async function activeNoteSummary(
   source: JoplinActiveNoteContextSource,
-): Promise<{ readonly id: string; readonly title: string } | null> {
+): Promise<{
+  readonly id: string;
+  readonly title: string;
+  readonly parentNotebookId: string;
+} | null> {
   const note = await source.activeNote();
-  return note ? { id: note.id, title: note.title } : null;
+  return note
+    ? { id: note.id, title: note.title, parentNotebookId: note.parentId }
+    : null;
+}
+
+function createSecretNotebookJsonPort(
+  dataDirectory: string,
+  files: JsonFilePort,
+): SecretNotebookJsonPort {
+  return {
+    read: (fileName) => files.readText(`${dataDirectory}/${fileName}`),
+    write: async (fileName, content) => {
+      await files.ensureDirectory(dataDirectory);
+      await files.writeTextAtomic(`${dataDirectory}/${fileName}`, content);
+    },
+  };
 }
 
 function requireFsExtra(joplin: Joplin): FsExtraBundle {

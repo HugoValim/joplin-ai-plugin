@@ -54,10 +54,13 @@ export function App(): JSX.Element {
         <ContextSummary
           chat={activeChat}
           activeNote={state.activeNote}
+          secretNotebookIds={state.snapshot.secretNotebookIds}
           disabled={state.busy || Boolean(pendingChanges)}
           onUpdate={controller.updateContext}
           onToggleAttached={controller.toggleAttachedNote}
           onSelectFolder={controller.selectFolder}
+          onMarkSecret={controller.markSecretNotebook}
+          onUnmarkSecret={controller.unmarkSecretNotebook}
         />
       ) : (
         <div className="context-placeholder" aria-hidden="true" />

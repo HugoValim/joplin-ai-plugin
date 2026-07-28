@@ -2,6 +2,7 @@ import type {
   TextFileSnapshot,
   TextSearchMatch,
 } from "../../src/fileWorkspace/fileWorkspaceRepository";
+import { toolContext } from "../helpers/toolContext";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import {
   registerFileTools,
@@ -65,7 +66,7 @@ describe("file proposal tools", () => {
           ],
         },
       },
-      { chatId: "chat-1", runId: "run-1", hasFileWorkspace: true },
+      toolContext({ hasFileWorkspace: true }),
     );
 
     expect(result.output).toMatchObject({ file_count: 1, total_bytes: 17 });
@@ -92,7 +93,7 @@ describe("file proposal tools", () => {
           name: "review_text_files",
           arguments: { edits: [duplicate, duplicate] },
         },
-        { chatId: "chat-1", runId: "run-1", hasFileWorkspace: true },
+        toolContext({ hasFileWorkspace: true }),
       ),
     ).rejects.toThrow("expected one replacement per file");
   });
@@ -120,7 +121,7 @@ describe("file proposal tools", () => {
             replacement: "# Guide\n```ts\nconst value = 2;\n```\nClear text.",
           },
         },
-        { chatId: "chat-1", runId: "run-1", hasFileWorkspace: true },
+        toolContext({ hasFileWorkspace: true }),
       ),
     ).rejects.toThrow("protected Markdown structure");
   });
