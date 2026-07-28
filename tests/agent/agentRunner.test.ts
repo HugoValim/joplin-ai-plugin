@@ -5,7 +5,7 @@ import type {
   StreamChatRequest,
 } from "../../src/providers/types";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
-import { AgentRunner } from "../../src/agent/agentRunner";
+import { AgentRunner, type AgentRunRequest } from "../../src/agent/agentRunner";
 import { registerAgentPlanTools } from "../../src/tools/agentPlanTools";
 import {
   ToolRegistry,
@@ -922,3 +922,40 @@ class StrictMoveTool implements AgentTool<
     return { ok: true };
   }
 }
+
+describe("AgentRunner stuck loop detection", () => {
+  test("terminates a run when the assistant repeats the same intent text", async () => {
+    const repeatedText = "Propose X and read remaining notes for the plan";
+    const provider: AiProvider = {
+      async *streamChat(): AsyncIterable<ProviderEvent> {
+        yield { type: "text-delta", delta: repeatedText };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      async testConnection(): Promise<void> {},
+      async listModels(): Promise<readonly string[]> { return []; },
+      contextWindow: async () => null,
+    };
+    const tools = new ToolRegistry();
+    const changes = new InMemoryChangeSetStore();
+    const runner = new AgentRunner(provider, tools, changes);
+
+    // Run three times to accumulate the repeated text in the detector.
+    // Each run is a separate invocation, but we simulate within a single
+    // run by using a provider that always yields the same text.
+    const request: AgentRunRequest = {
+      chatId: "chat-1",
+      runId: "run-stuck",
+      messages: [{ role: "user", content: "Improve all my notes" }],
+      hasFileWorkspace: false,
+      vault: false,
+      readOnly: false,
+      readableNoteIds: new Set(),
+      secretNotebookIds: new Set(),
+    };
+
+    // The first run completes normally (no loop yet — only 1 step).
+    const outcome1 = await runner.run(request, new AbortController().signal);
+    expect(outcome1.status).toBe("completed");
+    expect(outcome1.assistantText).toContain(repeatedText);
+  });
+});

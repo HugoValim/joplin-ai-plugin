@@ -11,6 +11,7 @@ import type {
 } from "../providers/types";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import { DomainError } from "../shared/errors";
+import { StuckLoopDetector } from "./stuckLoopDetector";
 import type {
   ToolRegistry,
   ToolExecutionContext,
@@ -140,6 +141,7 @@ export class AgentRunner {
     let proposeOnly = false;
     let usage: TokenUsage | null = null;
     const toolNames: string[] = [];
+    const loopDetector = new StuckLoopDetector();
 
     for (let step = firstStep; step <= MAX_MODEL_STEPS; step += 1) {
       assertNotAborted(abortSignal);
@@ -162,6 +164,15 @@ export class AgentRunner {
       usage = mergeUsage(usage, modelStep.usage);
       assistantText += modelStep.text;
       messages.push(toAssistantMessage(modelStep));
+      if (context.agentPlan.plan && loopDetector.addStep(modelStep.text)) {
+        this.observer.onStep?.(step, MAX_MODEL_STEPS);
+        return completedOutcome(
+          messages,
+          withStuckLoopNotice(assistantText),
+          usage,
+          toolNames,
+        );
+      }
       if (!modelStep.toolCalls.length) {
         const bailout = textOnlyBailoutMessage(
           proposeOnly,
@@ -491,6 +502,14 @@ function hasAgentPlanTools(
   return tools
     .providerDefinitions(context)
     .some((tool) => tool.name === "set_agent_plan");
+}
+
+function withStuckLoopNotice(assistantText: string): string {
+  return [
+    assistantText,
+    "",
+    "[STUCK LOOP DETECTED] The agent repeated the same intent across consecutive steps without advancing the plan. The run was terminated to avoid wasting steps. Review the plan and start a new run with a different approach.",
+  ].join("\n");
 }
 
 function withMissingProposalNotice(assistantText: string): string {
