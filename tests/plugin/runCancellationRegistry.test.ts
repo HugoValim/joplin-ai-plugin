@@ -43,3 +43,22 @@ describe("RunCancellationRegistry", () => {
     expect(second.signal.aborted).toBe(false);
   });
 });
+
+describe("RunCancellationRegistry.has", () => {
+  test("reports true while a run is active and false after it clears", () => {
+    const registry = new RunCancellationRegistry();
+    const controller = new AbortController();
+
+    expect(registry.has("chat-1")).toBe(false);
+    registry.replace("chat-1", "run-1", controller);
+    expect(registry.has("chat-1")).toBe(true);
+
+    registry.clearIfCurrent("chat-1", controller);
+    expect(registry.has("chat-1")).toBe(false);
+  });
+
+  test("reports false for a chat that never started a run", () => {
+    const registry = new RunCancellationRegistry();
+    expect(registry.has("chat-unknown")).toBe(false);
+  });
+});

@@ -521,7 +521,9 @@ export class ChatController {
       error instanceof DomainError
         ? error
         : new DomainError("PROVIDER", "Unexpected agent failure", error);
-    if (domain.code !== "ABORTED") this.endpointStatus = "offline";
+    if (domain.code !== "ABORTED" && !this.activeRuns.has(chatId)) {
+      this.endpointStatus = "offline";
+    }
     const chat = await this.chats.get(chatId);
     if (chat) {
       const summary: PersistedRunSummary = {
@@ -616,8 +618,19 @@ export class ChatController {
     const check = await this.providerConnector.check();
     this.modelName = check.modelName;
     this.availableModels = check.availableModels;
-    this.endpointStatus = check.status;
+    if (check.status !== "offline" || !this.hasActiveRun()) {
+      this.endpointStatus = check.status;
+    }
     await this.sendSnapshot();
+  }
+
+  /**
+   * Reports whether any chat currently has an active run.
+   *
+   * @example if (this.hasActiveRun()) keepConnectionOnline()
+   */
+  private hasActiveRun(): boolean {
+    return this.activeRuns.has(this.activeChatId ?? "");
   }
 
   private async sendSnapshot(): Promise<void> {

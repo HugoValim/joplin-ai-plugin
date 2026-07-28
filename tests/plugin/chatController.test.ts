@@ -7,6 +7,7 @@ import {
   ChangeApplier,
   InMemoryRollbackStore,
 } from "../../src/agent/changeApplier";
+import { DomainError } from "../../src/shared/errors";
 import type {
   AtomicWritePort,
   FileCandidateFinder,
@@ -557,4 +558,86 @@ describe("ChatController", () => {
       "Deletions still require manual ChangeReview",
     );
   });
+
+  test("keeps endpoint status online through a provider error during a busy run", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("StatusLock");
+    const provider = new (class implements AiProvider {
+      public async *streamChat(): AsyncIterable<ProviderEvent> {
+        yield { type: "text-delta", delta: "partial" };
+        throw new DomainError("PROVIDER", "transient provider failure");
+      }
+      public async testConnection(): Promise<void> {
+        return Promise.resolve();
+      }
+      public async listModels(): Promise<readonly string[]> {
+        return ["glm-5.2:cloud"];
+      }
+    })();
+    const notes = new EmptyNoteRepository();
+    const source = new EmptyActiveNoteSource();
+    const changes = new InMemoryChangeSetStore();
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
+      () => provider,
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-status",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    panel.events.length = 0;
+
+    // Run throws a PROVIDER error mid-stream. recordFailure runs while the run
+    // is still registered (clearIfCurrent happens in finally, after). The
+    // snapshot emitted by recordFailure must NOT report offline while busy.
+    await controller.handle(submission(chat.id, "run-status", "Summarize"));
+
+    const snapshots = panel.events.filter(
+      (event) => event.type === "state.snapshot",
+    );
+    const failureSnapshot = snapshots.at(-1);
+    if (failureSnapshot?.type !== "state.snapshot") {
+      throw new Error("Expected a state.snapshot after the provider error");
+    }
+    expect(failureSnapshot.payload.endpointStatus).not.toBe("offline");
+
+    // After the run finishes and the endpoint is actually unreachable, an
+    // explicit check must still be able to report offline.
+    void controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "model-recheck",
+      chatId: chat.id,
+      type: "model.select",
+      payload: { model: "glm-5.2:cloud" },
+    });
+  });
+
 });
