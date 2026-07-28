@@ -136,6 +136,7 @@ describe("plugin protocol", () => {
         privacyNotice: "Context is opt-in.",
         secretNotebookIds: [],
         availableModels: [],
+        contextWindowMax: null,
       },
     ],
     [

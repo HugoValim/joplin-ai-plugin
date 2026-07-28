@@ -169,6 +169,55 @@ export class OpenAiCompatibleProvider implements AiProvider {
       .slice(0, 500);
   }
 
+  /**
+   * Resolves the context window for a model from Ollama `/api/show`, or null
+   * when the endpoint does not expose it. OpenAI-compatible `/v1/models` does
+   * not standardize a context length field, so we probe the Ollama-native
+   * endpoint as a documented fallback and treat any failure as unknown.
+   *
+   * @example await provider.contextWindow('llama3', new AbortController().signal)
+   */
+  public async contextWindow(
+    model: string,
+    abortSignal: AbortSignal,
+  ): Promise<number | null> {
+    try {
+      const showUrl = this.ollamaShowEndpoint();
+      if (!showUrl) return null;
+      const response = await this.transport.fetch(showUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: model }),
+        redirect: "error",
+        signal: abortSignal,
+      });
+      assertSuccessfulResponse(response, "application/json");
+      const text = await readResponseText(response, MAX_MODELS_JSON_BYTES);
+      const body = JSON.parse(text) as {
+        model_info?: Record<string, unknown>;
+      };
+      const ctx = findContextLength(body.model_info ?? {});
+      return ctx ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Builds the Ollama-native `/api/show` URL when the base URL origin is
+   * localhost; returns null for remote endpoints to avoid extra surface.
+   */
+  private ollamaShowEndpoint(): string | null {
+    let base: URL;
+    try {
+      base = new URL(this.config.baseUrl);
+    } catch {
+      return null;
+    }
+    const showUrl = new URL("/api/show", base);
+    return showUrl.toString();
+  }
+
   private async fetchModelsBody(abortSignal: AbortSignal): Promise<unknown> {
     const response = await this.transport.fetch(this.endpoint("models"), {
       method: "GET",
@@ -574,4 +623,22 @@ function assertToolArgumentLimit(totalChars: number): void {
     "LIMIT_EXCEEDED",
     `Provider tool arguments exceeded ${MAX_TOOL_ARGUMENT_CHARS} characters; expected a bounded response`,
   );
+}
+
+function findContextLength(
+  modelInfo: Record<string, unknown>,
+): number | null {
+  const keys = [
+    "llama.context_length",
+    "general.context_length",
+    "context_length",
+    "max_context_length",
+  ];
+  for (const key of keys) {
+    const value = modelInfo[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+  }
+  return null;
 }

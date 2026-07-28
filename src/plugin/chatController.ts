@@ -51,6 +51,7 @@ export class ChatController {
   private endpointStatus: EndpointStatus = "unconfigured";
   private modelName = "";
   private availableModels: readonly string[] = [];
+  private contextWindowMax: number | null = null;
   private secretNotebookIds: ReadonlySet<string> = new Set();
   private readonly activeRuns = new RunCancellationRegistry();
   private readonly providerConnector: ProviderConnector;
@@ -618,6 +619,7 @@ export class ChatController {
     const check = await this.providerConnector.check();
     this.modelName = check.modelName;
     this.availableModels = check.availableModels;
+    this.contextWindowMax = check.contextWindowMax;
     if (check.status !== "offline" || !this.hasActiveRun()) {
       this.endpointStatus = check.status;
     }
@@ -651,6 +653,7 @@ export class ChatController {
       privacyNotice: PRIVACY_NOTICE,
       secretNotebookIds: [...this.secretNotebookIds],
       availableModels: [...this.availableModels],
+      contextWindowMax: this.contextWindowMax,
     });
   }
 }

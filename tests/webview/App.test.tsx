@@ -58,6 +58,7 @@ function snapshotEvent(): PluginEvent {
       privacyNotice: "Only enabled context is sent.",
       secretNotebookIds: [],
       availableModels: ["glm-5.2:cloud"],
+      contextWindowMax: 128000,
     },
   };
 }

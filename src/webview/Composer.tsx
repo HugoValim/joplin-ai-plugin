@@ -10,6 +10,7 @@ interface ComposerProps {
   readonly focusSequence: number;
   readonly lastRunId: string | null;
   readonly lastUsage: UsageSnapshot | null;
+  readonly contextWindowMax: number | null;
   readonly history: readonly string[];
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: () => void;
@@ -48,9 +49,9 @@ export function Composer(props: ComposerProps): JSX.Element {
     >
       <div className="composer-status" id="composer-status">
         <span>{props.phase}</span>
-        {!props.busy && formatUsageSummary(props.lastUsage) ? (
+        {!props.busy && formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined }) ? (
           <span className="usage-summary" aria-label="Token usage">
-            {formatUsageSummary(props.lastUsage)}
+            {formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined })}
           </span>
         ) : null}
         {props.lastRunId && !props.busy ? (

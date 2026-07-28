@@ -69,6 +69,7 @@ export const EMPTY_SNAPSHOT: SidebarSnapshot = {
   privacyNotice: "Loading privacy information…",
   secretNotebookIds: [],
   availableModels: [],
+  contextWindowMax: null,
 };
 
 export const INITIAL_SIDEBAR_STATE: SidebarState = {

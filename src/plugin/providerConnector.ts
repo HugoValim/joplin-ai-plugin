@@ -22,6 +22,7 @@ export interface EndpointCheck {
   readonly status: EndpointStatus;
   readonly modelName: string;
   readonly availableModels: readonly string[];
+  readonly contextWindowMax: number | null;
 }
 
 export class ProviderConnector {
@@ -57,12 +58,12 @@ export class ProviderConnector {
     try {
       const config = await loadProviderConfig(this.settings);
       if (!config.model) {
-        return { status: "unconfigured", modelName: "", availableModels: [] };
+        return { status: "unconfigured", modelName: "", availableModels: [], contextWindowMax: null };
       }
       const { status, models } = await this.testProvider(config);
-      return { status, modelName: config.model, availableModels: models };
+      return { status, modelName: config.model, availableModels: models, contextWindowMax: await this.resolveContextWindow(config) };
     } catch {
-      return { status: "offline", modelName: "", availableModels: [] };
+      return { status: "offline", modelName: "", availableModels: [], contextWindowMax: null };
     }
   }
 
@@ -114,6 +115,29 @@ export class ProviderConnector {
       this.settings,
       new URL(config.baseUrl).origin,
     );
+  }
+
+  /**
+   * Resolves the model context window from provider metadata with a documented
+   * fallback of null when unknown.
+   *
+   * @example await connector.resolveContextWindow(config)
+   */
+  private async resolveContextWindow(
+    config: ProviderConfig,
+  ): Promise<number | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+      try {
+        const provider = this.factory(config);
+        return await provider.contextWindow(config.model, controller.signal);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return null;
+    }
   }
 
   private createSession(config: ProviderConfig): ProviderSession {

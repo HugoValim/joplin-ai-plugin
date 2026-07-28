@@ -39,6 +39,10 @@ class RepeatingToolProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
@@ -146,6 +150,10 @@ class SingleProposalProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class ProposalThenTextProvider implements AiProvider {
@@ -171,6 +179,10 @@ class ProposalThenTextProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 
@@ -256,6 +268,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
@@ -464,6 +477,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -519,6 +533,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ListTool());
@@ -616,6 +631,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ListTool());
@@ -701,6 +717,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -757,6 +774,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -808,6 +826,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registerAgentPlanTools(registry);
@@ -871,6 +890,10 @@ class InvalidThenRecoverProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 

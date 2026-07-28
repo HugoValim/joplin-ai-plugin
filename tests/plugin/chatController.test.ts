@@ -75,6 +75,10 @@ class BlockingProvider implements AiProvider {
     return [];
   }
 
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
+
   public waitUntilStarted(): Promise<void> {
     return this.started;
   }
@@ -121,6 +125,10 @@ class ProposalThenCompletionProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 
@@ -573,6 +581,9 @@ describe("ChatController", () => {
       }
       public async listModels(): Promise<readonly string[]> {
         return ["glm-5.2:cloud"];
+      }
+      public async contextWindow(): Promise<number | null> {
+        return null;
       }
     })();
     const notes = new EmptyNoteRepository();

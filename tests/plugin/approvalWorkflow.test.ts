@@ -194,6 +194,10 @@ class FinalTextProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class RecordingPanelPort implements PanelPort {

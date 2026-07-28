@@ -51,6 +51,10 @@ class FakeProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return ["glm-5.2:cloud"];
   }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 const PROVIDER_VALUES: Readonly<Record<string, unknown>> = {
@@ -98,6 +102,7 @@ describe("ProviderConnector", () => {
       status: "online",
       modelName: "glm-5.2:cloud",
       availableModels: ["glm-5.2:cloud"],
+      contextWindowMax: null,
     });
     expect(settings.valueReads).toBe(1);
   });

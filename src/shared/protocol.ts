@@ -443,6 +443,10 @@ const StateSnapshotSchema = Type.Object(
           Type.String({ minLength: 1, maxLength: 500 }),
           { maxItems: 500 },
         ),
+        contextWindowMax: Type.Union([
+          Type.Integer({ minimum: 0 }),
+          Type.Null(),
+        ]),
       },
       { additionalProperties: false },
     ),

@@ -115,6 +115,7 @@ export function App(): JSX.Element {
         focusSequence={state.focusSequence}
         lastRunId={state.lastRunId}
         lastUsage={state.lastUsage}
+        contextWindowMax={state.snapshot.contextWindowMax}
         history={composerHistory(activeChat?.messages ?? [])}
         onDraftChange={controller.setDraft}
         onSubmit={controller.submit}

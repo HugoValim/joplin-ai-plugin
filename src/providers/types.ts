@@ -71,6 +71,13 @@ export interface AiProvider {
    * @example await provider.listModels(new AbortController().signal)
    */
   listModels(abortSignal: AbortSignal): Promise<readonly string[]>;
+
+  /**
+   * Resolves the context window max for a model, or null when unknown.
+   *
+   * @example await provider.contextWindow('llama3', new AbortController().signal)
+   */
+  contextWindow(model: string, abortSignal: AbortSignal): Promise<number | null>;
 }
 
 export interface HttpTransport {
