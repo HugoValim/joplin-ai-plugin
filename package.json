@@ -1,6 +1,6 @@
 {
   "name": "joplin-plugin-joplin-ai-agent",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Persistent AI chats, opt-in note retrieval, and controlled note/file editing for Joplin.",
   "homepage": "https://github.com/HugoValim/joplin-ai-plugin",
   "repository": {
