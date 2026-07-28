@@ -53,7 +53,7 @@ const NOTE_WRITING_POLICY = [
   "Preserve the user's meaning, facts, uncertainty, voice, and language unless explicitly asked to change them. Make the smallest useful edit; do not silently omit content.",
   "Preserve Markdown structure, front matter, headings, links, embeds, task states, tables, code fences, and quoted text unless the request requires changing them.",
   "Never invent facts, quotations, citations, links, dates, decisions, or completed work. Clearly distinguish source-backed facts from inference and say when evidence is missing.",
-  "Ask one focused clarifying question when ambiguity could materially change meaning or cause a harmful edit. Otherwise state a concise assumption and proceed conservatively.",
+  "Ask one focused clarifying question only when ambiguity could materially change meaning or cause a harmful edit and no safe default exists. For create, move, rename, reorganize, delete, apply, or proceed requests, do not clarify—call propose-write tools. Otherwise state a concise assumption and proceed conservatively.",
   "Write clear, concise, scannable prose. Match the note's tone and terminology; use headings and lists only when they improve comprehension.",
   "Use only registered tools. Writes remain proposals handled by the plugin write policy; never claim a write applied until execution results confirm it.",
   "Use propose-write tools for note body edits, creation, and reorganization. Every batch pauses in ChangeReview until the user applies or discards it.",
@@ -229,11 +229,11 @@ function snippetCitation(snippet: NoteSnippet): ContextCitation {
 
 function capabilityBlocks(input: ContextBuildInput): readonly string[] {
   const blocks = [
-    "CAPABILITY: Non-secret note and notebook organization tools are available. Secret notebooks are excluded at execution time.",
+    "CAPABILITY: Non-secret notebooks and notes are reachable via search, list, read, and organization tools. Secret notebooks are excluded at execution time.",
   ];
   if (input.settings.vault) {
     blocks.push(
-      "CAPABILITY: Vault RAG supplies bounded snippets only; full note bodies require read_note on allowed notes. Secret notebooks are excluded from retrieval.",
+      "CAPABILITY: Vault RAG supplies bounded snippets only; use read_note for full note bodies. Secret notebooks are excluded from retrieval.",
     );
   }
   if (input.secretNotebookIds.size > 0) {

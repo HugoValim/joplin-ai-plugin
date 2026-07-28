@@ -14,13 +14,13 @@ describe("noteAccessPolicy model B", () => {
     expect(vaultOrgToolsEnabled()).toBe(true);
   });
 
-  test("enables note-scoped tools only for allowlisted notes", () => {
+  test("always enables note body tools; secrets remain excluded", () => {
+    expect(noteScopedToolsEnabled(toolContext())).toBe(true);
     expect(
       noteScopedToolsEnabled(
         toolContext({ readableNoteIds: new Set(["note-1"]) }),
       ),
     ).toBe(true);
-    expect(noteScopedToolsEnabled(toolContext())).toBe(false);
   });
 
   test("filters secret notebooks and notes", () => {
@@ -39,7 +39,7 @@ describe("noteAccessPolicy model B", () => {
     ).toEqual(["note-1"]);
   });
 
-  test("rejects secret notebook operations and attached notes in secret notebooks", () => {
+  test("rejects secret notebook operations and notes in secret notebooks", () => {
     const context = toolContext({
       readableNoteIds: new Set(["note-attached"]),
       secretNotebookIds: new Set(["nb-secret"]),
@@ -53,9 +53,10 @@ describe("noteAccessPolicy model B", () => {
     ).toThrow("marked secret");
   });
 
-  test("allows organization on non-secret notes without active or attached allowlist", () => {
+  test("allows reading and organizing non-secret notes without allowlist", () => {
     const context = toolContext({ readableNoteIds: new Set() });
     expect(() => assertNoteOrgAllowed(context, "nb-open")).not.toThrow();
+    expect(() => assertNoteReadable(context, "note-2", "nb-open")).not.toThrow();
     expect(() =>
       assertNoteOrgAllowed(
         toolContext({ secretNotebookIds: new Set(["nb-secret"]) }),

@@ -12,14 +12,15 @@ export function vaultOrgToolsEnabled(): boolean {
 }
 
 /**
- * Returns whether note-scoped tools may be advertised for allowlisted notes.
+ * Returns whether note body read/write tools may be advertised.
+ * Under model B, all non-secret notes are reachable; secrets are filtered at execute time.
  *
- * @example noteScopedToolsEnabled(context)
+ * @example noteScopedToolsEnabled()
  */
 export function noteScopedToolsEnabled(
-  context: ToolExecutionContext,
+  _context?: ToolExecutionContext,
 ): boolean {
-  return context.readableNoteIds.size > 0;
+  return true;
 }
 
 /**
@@ -65,8 +66,8 @@ export function assertNoteOrgAllowed(
 }
 
 /**
- * Rejects note body reads or proposals in secret notebooks or outside allowlist.
- * Attach does not bypass secret notebooks.
+ * Rejects note body reads or proposals in secret notebooks.
+ * Attach does not bypass secret notebooks. Non-secret notes are reachable without allowlist.
  *
  * @example assertNoteReadable(context, "note-1", "nb-1")
  */
@@ -75,20 +76,13 @@ export function assertNoteReadable(
   noteId: string,
   parentNotebookId?: string,
 ): void {
-  if (parentNotebookId) assertNotebookAllowed(context, parentNotebookId);
-  if (context.readableNoteIds.has(noteId)) {
-    if (parentNotebookId && isSecretNotebook(context, parentNotebookId)) {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `Note ${safeValue(noteId)} is in a secret notebook; expected an unmarked notebook`,
-      );
-    }
-    return;
+  if (!parentNotebookId) {
+    throw new DomainError(
+      "VALIDATION",
+      `Note ${safeValue(noteId)} is missing a parent notebook id; expected a notebook id string`,
+    );
   }
-  throw new DomainError(
-    "NOT_AVAILABLE",
-    `Note ${safeValue(noteId)} is outside the enabled context allowlist; expected an active or attached note`,
-  );
+  assertNotebookAllowed(context, parentNotebookId);
 }
 
 /**

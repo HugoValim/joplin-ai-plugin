@@ -45,37 +45,57 @@ class FakeNoteRepository implements NoteRepository {
 }
 
 describe("note tool privacy allowlist", () => {
-  test("always exposes vault-wide search and notebook listing", () => {
+  test("always exposes vault-wide search, listing, and note body tools", () => {
     const registry = new ToolRegistry();
     registerNoteTools(registry, new FakeNoteRepository(), new InMemoryChangeSetStore());
 
     const definitions = registry.providerDefinitions(
-      toolContext({ vault: false, readableNoteIds: new Set(["note-1"]) }),
+      toolContext({ vault: false, readableNoteIds: new Set() }),
     );
-    expect(definitions.map((tool) => tool.name)).toContain("search_notes");
-    expect(definitions.map((tool) => tool.name)).toContain("list_notebooks");
+    expect(definitions.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "search_notes",
+        "list_notebooks",
+        "read_note",
+        "create_note",
+        "append_note_markdown",
+        "replace_note_text",
+      ]),
+    );
   });
 
-  test("allows read_note only for active or attached note IDs", async () => {
+  test("allows read_note for any non-secret note without allowlist", async () => {
     const registry = new ToolRegistry();
     registerNoteTools(registry, new FakeNoteRepository(), new InMemoryChangeSetStore());
     const context = toolContext({
       vault: false,
-      readableNoteIds: new Set(["note-1"]),
+      readableNoteIds: new Set(),
+    });
+
+    const allowed = await registry.execute(
+      { id: "call-2", name: "read_note", arguments: { note_id: "note-2" } },
+      context,
+    );
+    expect(allowed.output).toMatchObject({ id: "note-2" });
+  });
+
+  test("rejects read_note for notes in secret notebooks", async () => {
+    const registry = new ToolRegistry();
+    registerNoteTools(registry, new FakeNoteRepository(), new InMemoryChangeSetStore());
+    const context = toolContext({
+      secretNotebookIds: new Set(["nb-secret"]),
     });
 
     await expect(
       registry.execute(
-        { id: "call-1", name: "read_note", arguments: { note_id: "note-2" } },
+        {
+          id: "call-secret",
+          name: "read_note",
+          arguments: { note_id: "note-secret" },
+        },
         context,
       ),
-    ).rejects.toThrow("outside the enabled context allowlist");
-
-    const allowed = await registry.execute(
-      { id: "call-2", name: "read_note", arguments: { note_id: "note-1" } },
-      context,
-    );
-    expect(allowed.output).toMatchObject({ id: "note-1" });
+    ).rejects.toThrow("marked secret");
   });
 
   test("filters secret notebooks from search and list results", async () => {
