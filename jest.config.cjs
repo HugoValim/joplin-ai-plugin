@@ -11,5 +11,6 @@ module.exports = {
 		'^api/(.*)$': '<rootDir>/api/$1',
 		'^react-markdown$': '<rootDir>/tests/fakes/reactMarkdown.tsx',
 		'^remark-gfm$': '<rootDir>/tests/fakes/remarkGfm.ts',
+		'^rehype-sanitize$': '<rootDir>/tests/fakes/rehypeSanitize.ts',
 	},
 };

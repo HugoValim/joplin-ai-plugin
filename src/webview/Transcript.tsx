@@ -1,6 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
+import { safeMarkdownUrlTransform } from "./markdownSecurity";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 import { MessageCard } from "./MessageCard";
 import {
@@ -318,7 +320,13 @@ function StreamingMessage({
         <span>Writing…</span>
       </header>
       <div className="message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeSanitize]}
+          urlTransform={safeMarkdownUrlTransform}
+        >
+          {content}
+        </ReactMarkdown>
       </div>
     </article>
   );

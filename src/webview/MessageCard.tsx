@@ -1,6 +1,8 @@
 import { memo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
+import { safeMarkdownUrlTransform } from "./markdownSecurity";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 
 type ChatMessage = ActiveChatView["messages"][number];
@@ -82,7 +84,11 @@ export const MessageCard = memo(function MessageCard(
         </time>
       </header>
       <div className="message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeSanitize]}
+          urlTransform={safeMarkdownUrlTransform}
+        >
           {message.content}
         </ReactMarkdown>
       </div>
