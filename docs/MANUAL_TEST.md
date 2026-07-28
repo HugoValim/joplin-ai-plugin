@@ -28,9 +28,10 @@ notes or folders.
       280px width and 200% zoom.
 - [ ] Active Note off: current note/selection is not sent.
 - [ ] Active Note on: the current note and selection are available.
-- [ ] Vault RAG off: no automatic search.
+- [ ] Vault RAG off: no automatic search snippets; search/list/read/org tools
+      still reach non-secret notes without attach.
 - [ ] Vault RAG on: bounded note citations appear.
-- [ ] Attach/detach current note updates that chat only.
+- [ ] Attach/detach current note updates that chat only (prompt context seed).
 - [ ] **Mark secret** on the active note's notebook excludes it from search,
       list, read, organization tools, and Vault RAG.
 - [ ] Secret count chip reflects marked notebooks globally.
@@ -58,19 +59,23 @@ notes or folders.
 - [ ] With no editor selection, `Ctrl+L` opens the sidebar without changing the
       draft.
 
-## Automatic apply
+## Bypass permissions
 
 - [ ] New and pre-feature chats show **Writes review** and require the normal
       review batch.
-- [ ] Enabling **Auto-apply changes** shows a warning; cancelling keeps review
+- [ ] Enabling **Bypass permissions** shows a warning; cancelling keeps review
       mode.
 - [ ] Confirming affects only the current chat and persists after restart.
-- [ ] File proposal batches apply without opening review, including a second
+- [ ] Non-delete proposal batches apply without opening review, including a second
       batch proposed during model continuation.
-- [ ] Note and notebook proposals always open ChangeReview despite auto-apply.
+- [ ] Deletion proposals always open ChangeReview and auto-open a Review Note in
+      the secret **AI Reviews** notebook despite bypass permissions.
+- [ ] Review Note is view-only; Apply/Discard in the sidebar strip resolves the
+      batch and deletes the temp note.
+- [ ] **Open review** recreates the Review Note if it was deleted manually.
 - [ ] Concurrently modified notes/files remain untouched and report conflicts.
 - [ ] Supported updates expose **Undo**; created notes are not auto-deleted.
-- [ ] Disabling auto-apply requires no warning and restores review mode.
+- [ ] Disabling bypass permissions requires no warning and restores review mode.
 
 ## Note and notebook organization
 
@@ -132,9 +137,26 @@ links, a table, LF/CRLF variants, a BOM file, and a file ignored by
 - [ ] Chat switch and local submission move to the latest message.
 - [ ] Rapid Enter/click posts one request and persists one user message.
 - [ ] Stop interrupts a streaming/bulk run.
+- [ ] Live run activity stays collapsed to one summary row by default; expand
+      shows the full tool list without taking over the transcript.
 - [ ] Clear requires confirmation and preserves the chat/folder context.
 - [ ] Delete requires irreversible-action confirmation.
 - [ ] Corrupt one disposable chat JSON: it is quarantined and other chats load.
+
+## Cursor-inspired chat UX
+
+- [ ] Composer footer shows last-run token usage (`in · out · total`) after
+      completion.
+- [ ] Failed runs show **Retry**; latest assistant message shows **Regenerate**.
+- [ ] **Ask** mode disables write/propose tools; **Agent** mode keeps current
+      review/bypass behavior.
+- [ ] Connection status opens an inline model picker when models are available.
+- [ ] **Rename chat** in the header menu updates the chat picker title.
+- [ ] Assistant turns show a collapsed **Run · status · tokens** timeline when
+      a run summary exists.
+- [ ] Pending ChangeReview docks below the transcript as a slim control strip;
+      diffs appear in the Review Note; composer stays visible but disabled until
+      Apply/Discard.
 
 ## Assistant output actions
 
@@ -161,5 +183,5 @@ Discard, and Undo flows across:
 - [ ] Reduced-motion OS setting.
 
 Confirm long responses never render behind the composer. Confirm transcript is
-the main scroll region; review diffs and six-line composer overflow only within
-their own bounded controls.
+the main scroll region; the Review Note editor and six-line composer overflow
+only within their own bounded controls.

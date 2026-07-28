@@ -26,9 +26,11 @@ Version: `0.6.0`
 - Read tools for notes, notebooks, and selected-folder text files.
 - Reviewed organization tools create notebooks; rename, move, and manually
   reorder notes; rename notebooks; and move notes or notebooks to Joplin Trash.
-- Note/notebook/file writes are proposals. Review is required by default. A warned,
-  per-chat **Auto-apply changes** toggle applies non-delete proposals without
-  showing the review batch. Deletions always require manual review.
+- Note/notebook/file writes are proposals. Review is required by default. Manual
+  review opens a temporary **Review Note** (view-only diff document in a secret
+  **AI Reviews** notebook) plus a slim **ChangeReview** strip for Apply/Discard.
+  A warned, per-chat **Bypass permissions** toggle applies non-delete proposals
+  without review. Deletions always require manual review.
 - Review or automatic-apply results return to the bounded agent loop so the
   model can finish the task or propose a subsequent batch; retrieved
   continuation context stays memory-only.
@@ -59,7 +61,7 @@ Version: `0.6.0`
 - Retrieved notes/files are labelled untrusted data. Fixed system instructions
   forbid treating their contents as commands.
 - Text copied with `Ctrl+L` remains a local draft until the user sends it.
-- Auto-apply is off for new and legacy chats. Enabling it warns that non-delete
+- Bypass permissions is off for new and legacy chats. Enabling it warns that non-delete
   proposals in that chat apply without review; deletion proposals still open
   review. Optimistic-concurrency checks isolate conflicts.
 - External tool paths are root-relative. Every operation resolves the root and
@@ -95,10 +97,10 @@ shows a security warning before the first chat request.
 1. Create or select a chat.
 2. Select **Add folder**.
 3. Ask: `Review these Markdown files and improve clarity while preserving structure.`
-4. Review proposed per-file diffs.
-5. Accept/reject individual files.
-6. Select **Apply accepted** once.
-7. Select **Undo last applied run** to restore retained originals.
+4. Review proposed per-file diffs in the auto-opened Review Note; use the sidebar
+   strip to accept/reject individual files.
+5. Select **Apply accepted** once.
+6. Select **Undo last applied run** to restore retained originals.
 
 Defaults: `.md`, `.mdx`, `.txt`; UTF-8/UTF-8 BOM; at most 50 files, 256 KiB
 per file, and 5 MiB total source.

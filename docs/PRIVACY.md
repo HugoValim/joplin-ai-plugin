@@ -13,11 +13,12 @@ For each submitted turn, the plugin sends:
 - up to six bounded vault snippets only when **Vault RAG** is enabled;
 - tool results requested by the model from Joplin or the selected chat folder.
 
-When **Vault RAG** is off, note body read/write tools are limited to the active
-note (when enabled) and explicitly attached notes. Vault-wide search, notebook
-listing, and organization tools remain available for non-secret notebooks.
-Notebooks marked **Secret** in the sidebar are excluded globally from agent
-tools and Vault RAG; attaching a note does not bypass a secret notebook.
+When **Vault RAG** is off, non-secret notebooks and notes remain reachable via
+search, list, read, and organization tools. Vault RAG only adds automatic
+bounded snippets to the prompt. Notebooks marked **Secret** in the sidebar are
+excluded globally from agent tools and Vault RAG; attaching a note does not
+bypass a secret notebook. Active and attached notes still seed prompt context
+when those toggles are enabled.
 
 The selected folder's absolute root is displayed in the sidebar and persisted
 locally, but model file tools receive root-relative paths.
@@ -51,9 +52,11 @@ LF/CRLF, final-newline presence, and permission mode.
 
 Model tools never directly write notes, notebooks, or files. They collect
 proposals for a single batch. Review is required by default. A persisted
-per-chat **Auto-apply changes** toggle can apply file proposals in the selected
-folder without displaying the review batch after an explicit warning. Note and
-notebook proposals always require manual review. Note and notebook deletions use
+per-chat **Bypass permissions** toggle can apply non-delete proposals without
+displaying the review batch after an explicit warning. Manual review opens a
+view-only Review Note in a secret **AI Reviews** notebook (excluded from agent
+tools and vault RAG) and deletes it after Apply/Discard. Deletion proposals still
+require manual review. Note and notebook deletions use
 recoverable Joplin Trash, never permanent deletion. Applying in either mode
 rechecks every item's `updated_time` or SHA-256. Conflicting items are not
 overwritten.
