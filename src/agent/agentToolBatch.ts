@@ -10,10 +10,18 @@ import type {
   ToolRegistry,
 } from "../tools/toolRegistry";
 
+/** Max inventory/search tool executions per run segment before blocking more. */
+export const MAX_DISCOVERY_TOOL_CALLS = 10;
+
+export interface AgentToolBatchResult {
+  readonly proposed: boolean;
+  readonly discoveryCapped: boolean;
+}
+
 /**
  * Executes one model tool batch sequentially in call order.
  *
- * @example const proposed = await executeAgentToolBatch({ calls, ... })
+ * @example const result = await executeAgentToolBatch({ calls, ... })
  */
 export async function executeAgentToolBatch(args: {
   readonly calls: readonly NormalizedToolCall[];
@@ -22,22 +30,37 @@ export async function executeAgentToolBatch(args: {
   readonly abortSignal: AbortSignal;
   readonly proposeOnly: boolean;
   readonly readOnly: boolean;
+  readonly blockDiscovery?: boolean;
   readonly toolNames: string[];
   readonly tools: ToolRegistry;
   readonly observer: AgentObserver;
-}): Promise<boolean> {
+}): Promise<AgentToolBatchResult> {
   let proposed = false;
+  let discoveryCapped = false;
+  let discoveryCount = args.toolNames.filter((name) =>
+    args.tools.isDiscoveryTool(name),
+  ).length;
   for (const call of args.calls) {
     assertNotAborted(args.abortSignal);
+    const hitDiscoveryCap =
+      args.tools.isDiscoveryTool(call.name) &&
+      discoveryCount >= MAX_DISCOVERY_TOOL_CALLS;
+    if (hitDiscoveryCap) discoveryCapped = true;
     args.observer.onToolStarted?.(call);
     const result = await executeOneAgentTool(
       call,
       args.context,
       args.proposeOnly,
       args.readOnly,
+      args.blockDiscovery === true || hitDiscoveryCap,
       args.tools,
+      hitDiscoveryCap,
     );
     args.toolNames.push(call.name);
+    if (args.tools.isDiscoveryTool(call.name) && !hitDiscoveryCap) {
+      discoveryCount += 1;
+      if (discoveryCount >= MAX_DISCOVERY_TOOL_CALLS) discoveryCapped = true;
+    }
     args.observer.onToolCompleted?.(result);
     if (result.risk === "meta" && args.context.agentPlan.plan) {
       args.observer.onPlanUpdated?.(args.context.agentPlan.plan);
@@ -49,7 +72,7 @@ export async function executeAgentToolBatch(args: {
     });
     if (result.risk === "propose-write") proposed = true;
   }
-  return proposed;
+  return { proposed, discoveryCapped };
 }
 
 async function executeOneAgentTool(
@@ -57,7 +80,9 @@ async function executeOneAgentTool(
   context: ToolExecutionContext,
   proposeOnly: boolean,
   readOnly: boolean,
+  blockDiscovery: boolean,
   tools: ToolRegistry,
+  discoveryCapped: boolean,
 ): Promise<ToolExecutionResult> {
   try {
     if (readOnly && tools.riskFor(call.name) === "propose-write") {
@@ -73,6 +98,12 @@ async function executeOneAgentTool(
         "read",
         `Read tool ${call.name} is disabled after the read budget; expected a propose-write tool`,
       );
+    }
+    if (blockDiscovery && tools.isDiscoveryTool(call.name)) {
+      const message = discoveryCapped
+        ? `Discovery tool ${call.name} hit the per-segment cap of ${MAX_DISCOVERY_TOOL_CALLS}; call set_agent_plan then read and propose a bounded batch`
+        : `Discovery tool ${call.name} is disabled after inventory; call set_agent_plan then read and propose a bounded batch`;
+      return unavailableResult(call, "read", message);
     }
     return await tools.execute(call, context);
   } catch (error: unknown) {

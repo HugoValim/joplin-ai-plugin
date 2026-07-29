@@ -54,7 +54,7 @@ class SetAgentPlanTool implements AgentTool<
 > {
   public readonly name = "set_agent_plan";
   public readonly description =
-    "Replace the run checklist for large multi-note or multi-notebook work. Call after inventory; then execute pending items in bounded propose batches.";
+    "Replace the run checklist for large multi-note or multi-notebook work. Call after inventory. Keep each item to at most 5 notes; then execute pending items in bounded propose batches of at most 5 note bodies.";
   public readonly risk = "meta" as const;
   public readonly inputSchema = Type.Object(
     {
@@ -84,7 +84,7 @@ class UpdateAgentPlanItemTool implements AgentTool<
 > {
   public readonly name = "update_agent_plan_item";
   public readonly description =
-    "Update one agent plan item status (pending, in_progress, completed, or cancelled).";
+    "Update one agent plan item status (pending, in_progress, completed, or cancelled). Call in the same turn as the matching propose-write batch; do not only narrate progress in chat.";
   public readonly risk = "meta" as const;
   public readonly inputSchema = Type.Object(
     {

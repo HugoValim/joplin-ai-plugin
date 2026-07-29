@@ -103,8 +103,44 @@ describe("ToolRegistry", () => {
       false,
     );
   });
+
+  test("omits inventory tools when blockDiscovery is enabled", () => {
+    const registry = new ToolRegistry();
+    registry.register(new EchoAgentTool());
+    registry.register(new ListNotebooksTool());
+    registry.register(new MetaTool());
+
+    const blocked = registry
+      .providerDefinitions(CONTEXT, { blockDiscovery: true })
+      .map((tool) => tool.name);
+
+    expect(blocked).toEqual(["echo", "set_plan"]);
+    expect(registry.isDiscoveryTool("list_notebooks")).toBe(true);
+    expect(registry.isDiscoveryTool("echo")).toBe(false);
+  });
 });
 
+class ListNotebooksTool implements AgentTool<
+  Record<string, never>,
+  { ok: boolean }
+> {
+  public readonly name = "list_notebooks";
+  public readonly description = "List notebooks";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    {},
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}
 class WriteTool implements AgentTool<Record<string, never>, { ok: boolean }> {
   public readonly name = "write_note";
   public readonly description = "Propose a note write";

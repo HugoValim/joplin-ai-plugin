@@ -1,12 +1,15 @@
 /**
  * Detects near-duplicate assistant intent text across consecutive steps
  * during an active Agent Plan. When N of the last M steps repeat the same
- * intent prose, the run is considered stuck.
+ * intent prose, the run is considered stuck. Text-only steps (no tools)
+ * under a pending plan also count via a shared synthetic token.
  */
 
 const DEFAULT_WINDOW = 5;
 const DEFAULT_THRESHOLD = 3;
 const MIN_TEXT_LENGTH = 20;
+/** Synthetic token so varied "I'll propose now" narration still trips stuck. */
+const TEXT_ONLY_TOKEN = "__text_only__";
 
 export interface StuckLoopConfig {
   readonly window: number;
@@ -39,10 +42,25 @@ export class StuckLoopDetector {
   public addStep(text: string): boolean {
     const normalized = normalizeText(text);
     if (normalized.length >= MIN_TEXT_LENGTH) {
-      this.recent.push(normalized);
-      if (this.recent.length > this.config.window) this.recent.shift();
+      this.pushRecent(normalized);
     }
     return this.isStuck();
+  }
+
+  /**
+   * Records a text-only (no tool calls) step under an active plan.
+   * Varied narration still counts toward the stuck threshold.
+   *
+   * @example if (detector.addTextOnlyStep()) abortRun()
+   */
+  public addTextOnlyStep(): boolean {
+    this.pushRecent(TEXT_ONLY_TOKEN);
+    return this.isStuck();
+  }
+
+  private pushRecent(token: string): void {
+    this.recent.push(token);
+    if (this.recent.length > this.config.window) this.recent.shift();
   }
 
   /**

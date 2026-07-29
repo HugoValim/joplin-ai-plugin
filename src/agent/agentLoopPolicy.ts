@@ -8,6 +8,12 @@ import type {
 /** After this many content-body reads without a proposal, force propose-write only. */
 export const READ_BUDGET_TOOL_CALLS = 8;
 
+/** Consecutive text-only bailout nudges before the run terminates early. */
+export const MAX_TEXT_ONLY_BAILOUTS = 5;
+
+/** PLAN REQUIRED text-only failures before the plugin bootstraps a plan. */
+export const PLAN_REQUIRED_BOOTSTRAP_AFTER = 2;
+
 /**
  * Activates propose-only mode after the content-read budget is exhausted.
  *
@@ -27,6 +33,31 @@ export function activateProposeOnlyIfNeeded(
   if (!tools.hasProposeWriteTools(context)) return false;
   messages.push(readBudgetNudgeMessage(tools, context));
   return true;
+}
+
+/**
+ * True after multi-notebook inventory when the model still has not set a plan.
+ *
+ * @example if (needsAgentPlanAfterDiscovery(toolNames, context, tools)) ...
+ */
+export function needsAgentPlanAfterDiscovery(
+  toolNames: readonly string[],
+  context: ToolExecutionContext,
+  tools: ToolRegistry,
+): boolean {
+  if (context.agentPlan.plan) return false;
+  if (toolNames.includes("set_agent_plan")) return false;
+  if (!hasAgentPlanTools(tools, context)) return false;
+  return isSignificantDiscovery(toolNames);
+}
+
+/**
+ * System nudge that forces set_agent_plan after inventory.
+ *
+ * @example messages.push(planRequiredNudge())
+ */
+export function planRequiredNudge(): ProviderMessage {
+  return planRequiredMessage();
 }
 
 /**
@@ -51,10 +82,21 @@ export function textOnlyBailoutMessage(
   ) {
     return planInProgressMessage();
   }
-  if (shouldRefuseDiscoveryBailout(toolNames, context, tools)) {
+  if (needsAgentPlanAfterDiscovery(toolNames, context, tools)) {
     return planRequiredMessage();
   }
   return null;
+}
+
+/**
+ * True when a bailout nudge requires set_agent_plan (post-inventory).
+ *
+ * @example if (isPlanRequiredBailout(bailout)) proposeOnly = true
+ */
+export function isPlanRequiredBailout(message: ProviderMessage): boolean {
+  return (
+    message.role === "system" && message.content.includes("PLAN REQUIRED:")
+  );
 }
 
 export function withStuckLoopNotice(assistantText: string): string {
@@ -65,22 +107,19 @@ export function withStuckLoopNotice(assistantText: string): string {
   ].join("\n");
 }
 
+export function withBailoutExhaustedNotice(assistantText: string): string {
+  return [
+    assistantText,
+    "",
+    "[BAILOUT EXHAUSTED] The agent kept answering with chat-only text instead of calling tools after repeated nudges. The run was terminated to avoid wasting steps. Ask again and the model should call propose-write tools in the same turn.",
+  ].join("\n");
+}
+
 export function withMissingProposalNotice(assistantText: string): string {
   const notice =
     "No propose-write tools were called, so ChangeReview did not open. Ask again to apply the changes.";
   const trimmed = assistantText.trim();
   return trimmed ? `${trimmed}\n\n${notice}` : notice;
-}
-
-function shouldRefuseDiscoveryBailout(
-  toolNames: readonly string[],
-  context: ToolExecutionContext,
-  tools: ToolRegistry,
-): boolean {
-  if (context.agentPlan.plan) return false;
-  if (toolNames.includes("set_agent_plan")) return false;
-  if (!hasAgentPlanTools(tools, context)) return false;
-  return isSignificantDiscovery(toolNames);
 }
 
 function isSignificantDiscovery(toolNames: readonly string[]): boolean {

@@ -46,6 +46,13 @@ describe("StuckLoopDetector", () => {
     expect(detector.isStuck()).toBe(false);
   });
 
+  test("flags repeated text-only steps even when narration varies", () => {
+    const detector = new StuckLoopDetector();
+    expect(detector.addTextOnlyStep()).toBe(false);
+    expect(detector.addTextOnlyStep()).toBe(false);
+    expect(detector.addTextOnlyStep()).toBe(true);
+  });
+
   test("reset clears the window", () => {
     const detector = new StuckLoopDetector();
     const repeated = "Propose X and read remaining notes";
