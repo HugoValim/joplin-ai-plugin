@@ -26,6 +26,8 @@ export interface EndpointCheck {
 }
 
 export class ProviderConnector {
+  private lastAvailableModels: readonly string[] = [];
+
   public constructor(
     private readonly settings: SettingsPort,
     private readonly dialogs: SecurityDialogPort,
@@ -58,12 +60,27 @@ export class ProviderConnector {
     try {
       const config = await loadProviderConfig(this.settings);
       if (!config.model) {
-        return { status: "unconfigured", modelName: "", availableModels: [], contextWindowMax: null };
+        return {
+          status: "unconfigured",
+          modelName: "",
+          availableModels: [...this.lastAvailableModels],
+          contextWindowMax: null,
+        };
       }
       const { status, models } = await this.testProvider(config);
-      return { status, modelName: config.model, availableModels: models, contextWindowMax: await this.resolveContextWindow(config) };
+      return {
+        status,
+        modelName: config.model,
+        availableModels: models,
+        contextWindowMax: await this.resolveContextWindow(config),
+      };
     } catch {
-      return { status: "offline", modelName: "", availableModels: [], contextWindowMax: null };
+      return {
+        status: "offline",
+        modelName: "",
+        availableModels: [...this.lastAvailableModels],
+        contextWindowMax: null,
+      };
     }
   }
 
@@ -151,13 +168,79 @@ export class ProviderConnector {
     const timer = setTimeout(() => controller.abort(), config.timeoutMs);
     try {
       const provider = this.factory(config);
-      await provider.testConnection(controller.signal);
-      const models = await provider.listModels(controller.signal);
-      return { status: "online", models };
+      const reachable = await this.probeStatus(provider, controller.signal);
+      const listed = await this.probeModels(provider, controller.signal);
+      const models = listed.length
+        ? mergeModelLists(listed, [config.model])
+        : mergeModelLists(this.lastAvailableModels, [config.model]);
+      if (listed.length) this.lastAvailableModels = models;
+      const modelOk = await this.probeModelAvailable(
+        provider,
+        config.model,
+        controller.signal,
+      );
+      const status: EndpointStatus =
+        reachable === "online" && modelOk ? "online" : "offline";
+      return { status, models };
     } catch {
-      return { status: "offline", models: [] };
+      return {
+        status: "offline",
+        models: mergeModelLists(this.lastAvailableModels, [config.model]),
+      };
     } finally {
       clearTimeout(timer);
     }
   }
+
+  private async probeStatus(
+    provider: AiProvider,
+    signal: AbortSignal,
+  ): Promise<EndpointStatus> {
+    try {
+      await provider.testConnection(signal);
+      return "online";
+    } catch {
+      return "offline";
+    }
+  }
+
+  private async probeModels(
+    provider: AiProvider,
+    signal: AbortSignal,
+  ): Promise<readonly string[]> {
+    try {
+      return await provider.listModels(signal);
+    } catch {
+      return [];
+    }
+  }
+
+  private async probeModelAvailable(
+    provider: AiProvider,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      return await provider.modelAvailable(model, signal);
+    } catch {
+      return false;
+    }
+  }
+}
+
+function mergeModelLists(
+  ...lists: readonly (readonly string[])[]
+): readonly string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const list of lists) {
+    for (const raw of list) {
+      const model = raw.trim();
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      merged.push(model);
+      if (merged.length >= 500) return merged;
+    }
+  }
+  return merged;
 }

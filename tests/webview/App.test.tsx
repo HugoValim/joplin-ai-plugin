@@ -57,7 +57,7 @@ function snapshotEvent(): PluginEvent {
       modelName: "glm-5.2:cloud",
       privacyNotice: "Only enabled context is sent.",
       secretNotebookIds: [],
-      availableModels: ["glm-5.2:cloud"],
+      availableModels: ["glm-5.2:cloud", "kimi-k3:cloud"],
       contextWindowMax: 128000,
     },
   };
@@ -198,6 +198,28 @@ describe("App shell", () => {
     expect(screen.getByText("Online · glm-5.2:cloud")).toBeTruthy();
     expect(screen.getByText("Project brief")).toBeTruthy();
     expect(screen.getByRole("feed").getAttribute("aria-live")).toBeNull();
+  });
+
+  test("selects a model from the connection status picker", async () => {
+    const { api } = await renderReadyApp();
+    const summary = screen.getByLabelText(
+      "Connection online, model glm-5.2:cloud",
+    );
+    fireEvent.click(summary);
+
+    const listbox = screen.getByRole("listbox", { name: "Available models" });
+    expect(listbox).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "kimi-k3:cloud" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("option", { name: "kimi-k3:cloud" }));
+
+    expect(api.requests.at(-1)).toMatchObject({
+      type: "model.select",
+      payload: { model: "kimi-k3:cloud" },
+    });
+    expect(summary.closest("details")?.open).toBe(false);
   });
 
   test("keeps destructive actions in a closing confirmed overflow menu", async () => {

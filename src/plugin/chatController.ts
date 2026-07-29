@@ -601,7 +601,7 @@ export class ChatController {
   private async selectModel(model: string): Promise<void> {
     await this.providerConnector.selectModel(model);
     this.modelName = model.trim();
-    void this.checkEndpoint();
+    await this.checkEndpoint();
   }
 
   private async updateContext(

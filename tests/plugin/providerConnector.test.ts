@@ -52,6 +52,10 @@ class FakeProvider implements AiProvider {
     return ["glm-5.2:cloud"];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }
@@ -105,5 +109,87 @@ describe("ProviderConnector", () => {
       contextWindowMax: null,
     });
     expect(settings.valueReads).toBe(1);
+  });
+
+  test("keeps cached models when a later check goes offline", async () => {
+    class OfflineProvider extends FakeProvider {
+      public override async testConnection(): Promise<void> {
+        throw new Error("unreachable");
+      }
+
+      public override async listModels(): Promise<readonly string[]> {
+        throw new Error("unreachable");
+      }
+    }
+
+    class ListingProvider extends FakeProvider {
+      public override async listModels(): Promise<readonly string[]> {
+        return ["glm-5.2:cloud", "kimi-k3:cloud"];
+      }
+    }
+
+    let offline = false;
+    const connector = new ProviderConnector(
+      new FakeSettingsPort(),
+      new FakeSecurityDialog(),
+      () => (offline ? new OfflineProvider() : new ListingProvider()),
+    );
+
+    await expect(connector.check()).resolves.toMatchObject({
+      status: "online",
+      availableModels: ["glm-5.2:cloud", "kimi-k3:cloud"],
+    });
+    offline = true;
+    await expect(connector.check()).resolves.toEqual({
+      status: "offline",
+      modelName: "glm-5.2:cloud",
+      availableModels: ["glm-5.2:cloud", "kimi-k3:cloud"],
+      contextWindowMax: null,
+    });
+  });
+
+  test("includes the configured model even when listing fails on first check", async () => {
+    class OfflineProvider extends FakeProvider {
+      public override async testConnection(): Promise<void> {
+        throw new Error("unreachable");
+      }
+
+      public override async listModels(): Promise<readonly string[]> {
+        throw new Error("unreachable");
+      }
+    }
+
+    const connector = new ProviderConnector(
+      new FakeSettingsPort(),
+      new FakeSecurityDialog(),
+      () => new OfflineProvider(),
+    );
+
+    await expect(connector.check()).resolves.toEqual({
+      status: "offline",
+      modelName: "glm-5.2:cloud",
+      availableModels: ["glm-5.2:cloud"],
+      contextWindowMax: null,
+    });
+  });
+
+  test("marks the endpoint offline when the selected model is unavailable", async () => {
+    class UnavailableModelProvider extends FakeProvider {
+      public override async modelAvailable(): Promise<boolean> {
+        return false;
+      }
+    }
+
+    const connector = new ProviderConnector(
+      new FakeSettingsPort(),
+      new FakeSecurityDialog(),
+      () => new UnavailableModelProvider(),
+    );
+
+    await expect(connector.check()).resolves.toMatchObject({
+      status: "offline",
+      modelName: "glm-5.2:cloud",
+      availableModels: ["glm-5.2:cloud"],
+    });
   });
 });

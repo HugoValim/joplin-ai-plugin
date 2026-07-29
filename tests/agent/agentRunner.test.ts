@@ -40,6 +40,10 @@ class RepeatingToolProvider implements AiProvider {
     return [];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }
@@ -151,6 +155,10 @@ class SingleProposalProvider implements AiProvider {
     return [];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }
@@ -179,6 +187,10 @@ class ProposalThenTextProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
   }
 
   public async contextWindow(): Promise<number | null> {
@@ -268,6 +280,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -477,6 +490,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -533,6 +547,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -631,6 +646,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -717,6 +733,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -774,6 +791,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -826,6 +844,7 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
       contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
@@ -892,6 +911,10 @@ class InvalidThenRecoverProvider implements AiProvider {
     return [];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }
@@ -933,6 +956,7 @@ describe("AgentRunner stuck loop detection", () => {
       },
       async testConnection(): Promise<void> {},
       async listModels(): Promise<readonly string[]> { return []; },
+      async modelAvailable(): Promise<boolean> { return true; },
       contextWindow: async () => null,
     };
     const tools = new ToolRegistry();

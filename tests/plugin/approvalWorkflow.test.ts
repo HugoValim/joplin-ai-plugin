@@ -198,6 +198,10 @@ class FinalTextProvider implements AiProvider {
     return [];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }

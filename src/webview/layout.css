@@ -27,6 +27,8 @@
 }
 
 .sidebar-header {
+  position: relative;
+  z-index: 20;
   display: grid;
   gap: 4px;
   min-width: 0;

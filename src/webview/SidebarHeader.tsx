@@ -87,7 +87,9 @@ function ModelStatus(props: SidebarHeaderProps): JSX.Element {
           ))}
         </div>
       ) : (
-        <p className="model-picker-empty">Configure a model in plugin settings.</p>
+        <p className="model-picker-empty">
+          Start Ollama (or set a model in plugin settings) to list models here.
+        </p>
       )}
     </details>
   );

@@ -82,6 +82,10 @@ class BlockingProvider implements AiProvider {
     return [];
   }
 
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
   public async contextWindow(): Promise<number | null> {
     return null;
   }
@@ -136,6 +140,10 @@ class ProposalThenCompletionProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
   }
 
   public async contextWindow(): Promise<number | null> {
@@ -597,6 +605,9 @@ describe("ChatController", () => {
       }
       public async listModels(): Promise<readonly string[]> {
         return ["glm-5.2:cloud"];
+      }
+      public async modelAvailable(): Promise<boolean> {
+        return true;
       }
       public async contextWindow(): Promise<number | null> {
         return null;
