@@ -382,7 +382,7 @@ export class ChatController {
       abortSignal,
     );
     deltaBatcher.flush();
-    this.endpointStatus = "online";
+    this.markEndpointOnline();
     await persistRunOutcome(
       this.chats,
       chat,
@@ -414,8 +414,12 @@ export class ChatController {
     deltas: DeltaBatcher,
   ): AgentObserver {
     return {
-      onTextDelta: (delta): void => deltas.push(delta),
+      onTextDelta: (delta): void => {
+        this.markEndpointOnline();
+        deltas.push(delta);
+      },
       onToolStarted: (call): void => {
+        this.markEndpointOnline();
         this.events.post(
           "tool.started",
           request.chatId,
@@ -426,6 +430,7 @@ export class ChatController {
       onToolCompleted: (result): void =>
         this.emitToolCompleted(request, result),
       onPlanUpdated: (plan): void => {
+        this.markEndpointOnline();
         this.events.post(
           "run.plan",
           request.chatId,
@@ -440,6 +445,7 @@ export class ChatController {
         );
       },
       onStep: (current, total): void => {
+        this.markEndpointOnline();
         this.events.post(
           "run.progress",
           request.chatId,
@@ -448,6 +454,20 @@ export class ChatController {
         );
       },
     };
+  }
+
+  /**
+   * Marks the endpoint online on first live agent activity and refreshes UI.
+   *
+   * Previously online was only set after the full run finished, so a long first
+   * task kept showing Offline while the agent was already writing.
+   *
+   * @example this.markEndpointOnline()
+   */
+  private markEndpointOnline(): void {
+    if (this.endpointStatus === "online") return;
+    this.endpointStatus = "online";
+    void this.sendSnapshot();
   }
 
   private emitToolCompleted(
@@ -618,13 +638,16 @@ export class ChatController {
   }
 
   private async checkEndpoint(): Promise<void> {
-    this.endpointStatus = "checking";
-    await this.sendSnapshot();
+    const busy = this.hasActiveRun();
+    if (!busy) {
+      this.endpointStatus = "checking";
+      await this.sendSnapshot();
+    }
     const check = await this.providerConnector.check();
     this.modelName = check.modelName;
     this.availableModels = check.availableModels;
     this.contextWindowMax = check.contextWindowMax;
-    if (check.status !== "offline" || !this.hasActiveRun()) {
+    if (check.status === "online" || !this.hasActiveRun()) {
       this.endpointStatus = check.status;
     }
     await this.sendSnapshot();
@@ -636,7 +659,7 @@ export class ChatController {
    * @example if (this.hasActiveRun()) keepConnectionOnline()
    */
   private hasActiveRun(): boolean {
-    return this.activeRuns.has(this.activeChatId ?? "");
+    return this.activeRuns.isBusy();
   }
 
   private async sendSnapshot(): Promise<void> {

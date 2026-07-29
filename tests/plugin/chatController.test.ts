@@ -53,6 +53,7 @@ class BlockingProvider implements AiProvider {
   private readonly started = new Promise<void>((resolve) => {
     this.markStarted = resolve;
   });
+  private connectionOk = true;
 
   public async *streamChat(
     request: StreamChatRequest,
@@ -68,10 +69,16 @@ class BlockingProvider implements AiProvider {
   }
 
   public async testConnection(): Promise<void> {
+    if (!this.connectionOk) {
+      throw new Error("endpoint unreachable for connectivity check");
+    }
     return Promise.resolve();
   }
 
   public async listModels(): Promise<readonly string[]> {
+    if (!this.connectionOk) {
+      throw new Error("endpoint unreachable for model list");
+    }
     return [];
   }
 
@@ -85,6 +92,10 @@ class BlockingProvider implements AiProvider {
 
   public release(): void {
     this.releaseRun?.();
+  }
+
+  public setConnectionOk(ok: boolean): void {
+    this.connectionOk = ok;
   }
 }
 
@@ -638,17 +649,101 @@ describe("ChatController", () => {
     if (failureSnapshot?.type !== "state.snapshot") {
       throw new Error("Expected a state.snapshot after the provider error");
     }
-    expect(failureSnapshot.payload.endpointStatus).not.toBe("offline");
+    expect(failureSnapshot.payload.endpointStatus).toBe("online");
+  });
 
-    // After the run finishes and the endpoint is actually unreachable, an
-    // explicit check must still be able to report offline.
-    void controller.handle({
+  test("marks endpoint online on first model step while the run is still busy", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("OnlineMidRun");
+    const provider = new BlockingProvider();
+    provider.setConnectionOk(false);
+    const notes = new EmptyNoteRepository();
+    const source = new EmptyActiveNoteSource();
+    const changes = new InMemoryChangeSetStore();
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
+      () => provider,
+    );
+
+    await controller.handle({
       version: PROTOCOL_VERSION,
-      messageId: "model-recheck",
+      messageId: "select-offline",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "force-offline-check",
       chatId: chat.id,
       type: "model.select",
       payload: { model: "glm-5.2:cloud" },
     });
+    // model.select fires checkEndpoint without awaiting; wait for offline.
+    await waitForSnapshotStatus(panel, "offline");
+    provider.setConnectionOk(true);
+    panel.events.length = 0;
+
+    const run = controller.handle(
+      submission(chat.id, "run-mid-online", "Start a long task"),
+    );
+    await provider.waitUntilStarted();
+    await waitForSnapshotStatus(panel, "online");
+
+    const midRunSnapshot = [...panel.events]
+      .reverse()
+      .find((event) => event.type === "state.snapshot");
+    if (midRunSnapshot?.type !== "state.snapshot") {
+      throw new Error("Expected a state.snapshot while the run was busy");
+    }
+    expect(midRunSnapshot.payload.endpointStatus).toBe("online");
+
+    provider.release();
+    await run;
   });
 
 });
+
+async function waitForSnapshotStatus(
+  panel: RecordingPanel,
+  status: "online" | "offline" | "checking" | "unconfigured",
+): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const latest = [...panel.events]
+      .reverse()
+      .find((event) => event.type === "state.snapshot");
+    if (
+      latest?.type === "state.snapshot" &&
+      latest.payload.endpointStatus === status
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for endpointStatus ${status}`);
+}
