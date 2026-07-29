@@ -5,7 +5,7 @@
   "platforms": [
     "desktop"
   ],
-  "version": "0.15.0",
+  "version": "0.15.1",
   "name": "Joplin AI Agent",
   "description": "Persistent AI chat, opt-in note retrieval, and controlled note and text-file editing.",
   "author": "Hugo Valim",
