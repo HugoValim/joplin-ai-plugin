@@ -67,6 +67,31 @@ export interface TrashNotebookInput {
   readonly expectedUpdatedTime: number;
 }
 
+export interface TrashedNoteRecord extends NoteMetadataRecord {
+  readonly deletedTime: number;
+}
+
+export interface TrashedNotebookRecord extends NotebookMetadataRecord {
+  readonly deletedTime: number;
+}
+
+export interface TrashListing {
+  readonly notes: readonly TrashedNoteRecord[];
+  readonly notebooks: readonly TrashedNotebookRecord[];
+}
+
+export interface RestoreNoteInput {
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId?: string;
+}
+
+export interface RestoreNotebookInput {
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId?: string;
+}
+
 export interface NoteRepository {
   searchNotes(query: string, limit: number): Promise<readonly NoteSearchHit[]>;
   readNote(noteId: string): Promise<NoteRecord>;
@@ -91,6 +116,11 @@ export interface NoteOrganizationRepository {
   ): Promise<NotebookMetadataRecord>;
   trashNote(input: TrashNoteInput): Promise<void>;
   trashNotebook(input: TrashNotebookInput): Promise<void>;
+  listTrash(limit: number): Promise<TrashListing>;
+  readTrashedNote(noteId: string): Promise<TrashedNoteRecord>;
+  readTrashedNotebook(notebookId: string): Promise<TrashedNotebookRecord>;
+  restoreNote(input: RestoreNoteInput): Promise<void>;
+  restoreNotebook(input: RestoreNotebookInput): Promise<void>;
 }
 
 export interface NoteSnippet {

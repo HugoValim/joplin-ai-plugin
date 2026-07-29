@@ -5,6 +5,11 @@ import {
 
 class FakeJoplinDataPort implements JoplinDataPort {
   public putCount = 0;
+  public parentLookup: unknown;
+  public getHandler?: (
+    path: string[],
+    query?: Record<string, unknown>,
+  ) => Promise<unknown>;
   public readonly putCalls: {
     readonly path: string[];
     readonly body?: Record<string, unknown>;
@@ -35,6 +40,14 @@ class FakeJoplinDataPort implements JoplinDataPort {
     query?: Record<string, unknown>,
   ): Promise<unknown> {
     this.getCalls.push({ path, ...(query ? { query } : {}) });
+    if (this.getHandler) return this.getHandler(path, query);
+    if (
+      this.parentLookup !== undefined &&
+      path[0] === "folders" &&
+      path.length === 2
+    ) {
+      return this.parentLookup;
+    }
     return this.getResponse;
   }
 
@@ -243,6 +256,176 @@ describe("JoplinNoteRepository", () => {
     });
 
     expect(dataPort.deleteCalls).toEqual([{ path: ["folders", "folder-1"] }]);
+  });
+
+  test("restores a trashed note by clearing deleted_time", async () => {
+    const dataPort = new FakeJoplinDataPort({
+      id: "note-1",
+      parent_id: "folder-1",
+      title: "Draft",
+      updated_time: 20,
+      order: 7,
+      deleted_time: 99,
+    });
+    dataPort.parentLookup = {
+      id: "folder-1",
+      parent_id: "",
+      title: "Projects",
+      updated_time: 40,
+      deleted_time: 0,
+    };
+    const repository = new JoplinNoteRepository(dataPort);
+
+    await repository.restoreNote({
+      noteId: "note-1",
+      expectedUpdatedTime: 20,
+    });
+
+    expect(dataPort.putCalls).toEqual([
+      {
+        path: ["notes", "note-1"],
+        body: { deleted_time: 0 },
+      },
+    ]);
+  });
+
+  test("restores a trashed note into a chosen notebook when parent is also trashed", async () => {
+    const dataPort = new FakeJoplinDataPort({
+      id: "note-1",
+      parent_id: "folder-gone",
+      title: "Draft",
+      updated_time: 20,
+      order: 7,
+      deleted_time: 99,
+    });
+    const repository = new JoplinNoteRepository(dataPort);
+
+    await repository.restoreNote({
+      noteId: "note-1",
+      expectedUpdatedTime: 20,
+      parentId: "folder-2",
+    });
+
+    expect(dataPort.putCalls).toEqual([
+      {
+        path: ["notes", "note-1"],
+        body: { deleted_time: 0, parent_id: "folder-2" },
+      },
+    ]);
+  });
+
+  test("restores a trashed notebook and clears deleted_time", async () => {
+    const dataPort = new FakeJoplinDataPort();
+    dataPort.getHandler = async (path) => {
+      if (path[0] === "folders" && path[1] === "folder-1" && path.length === 2) {
+        return {
+          id: "folder-1",
+          parent_id: "",
+          title: "Archive",
+          updated_time: 40,
+          deleted_time: 99,
+        };
+      }
+      if (path[0] === "folders" && path.length === 1) {
+        return { items: [], has_more: false };
+      }
+      if (path[0] === "folders" && path[2] === "notes") {
+        return { items: [], has_more: false };
+      }
+      throw new Error(`Unexpected get ${path.join("/")}`);
+    };
+    const repository = new JoplinNoteRepository(dataPort);
+
+    await repository.restoreNotebook({
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+    });
+
+    expect(dataPort.putCalls).toEqual([
+      {
+        path: ["folders", "folder-1"],
+        body: { deleted_time: 0 },
+      },
+    ]);
+  });
+
+  test("lists soft-deleted notes and notebooks from Trash", async () => {
+    const dataPort = new FakeJoplinDataPort();
+    dataPort.getHandler = async (path) => {
+      if (path[0] === "notes") {
+        return {
+          items: [
+            {
+              id: "note-trashed",
+              parent_id: "folder-1",
+              title: "Gone",
+              updated_time: 20,
+              order: 1,
+              deleted_time: 99,
+            },
+            {
+              id: "note-live",
+              parent_id: "folder-1",
+              title: "Live",
+              updated_time: 21,
+              order: 2,
+              deleted_time: 0,
+            },
+          ],
+          has_more: false,
+        };
+      }
+      if (path[0] === "folders") {
+        return {
+          items: [
+            {
+              id: "folder-trashed",
+              parent_id: "",
+              title: "Old",
+              updated_time: 40,
+              deleted_time: 88,
+            },
+          ],
+          has_more: false,
+        };
+      }
+      throw new Error(`Unexpected get ${path.join("/")}`);
+    };
+    const repository = new JoplinNoteRepository(dataPort);
+
+    await expect(repository.listTrash(25)).resolves.toEqual({
+      notes: [
+        {
+          id: "note-trashed",
+          parentId: "folder-1",
+          title: "Gone",
+          updatedTime: 20,
+          order: 1,
+          deletedTime: 99,
+        },
+      ],
+      notebooks: [
+        {
+          id: "folder-trashed",
+          parentId: "",
+          title: "Old",
+          updatedTime: 40,
+          deletedTime: 88,
+        },
+      ],
+    });
+    expect(
+      dataPort.getCalls.some(
+        (call) =>
+          call.path[0] === "notes" && call.query?.include_deleted === 1,
+      ),
+    ).toBe(true);
+    expect(
+      dataPort.getCalls.some(
+        (call) =>
+          call.path[0] === "folders" && call.query?.include_deleted === 1,
+      ),
+    ).toBe(true);
   });
 
   test("does not overwrite a note changed after it was read", async () => {

@@ -56,26 +56,25 @@ actions; note mutations use Joplin commands or optimistic repository updates.
 - Writes require optimistic-concurrency tokens and either batch review or an
   explicitly warned per-chat auto-apply setting.
 - Note/notebook deletion uses Joplin Trash and always requires manual review.
+- Restore-from-Trash proposals use the same approval/Bypass gates.
 - No permanent deletion, file delete/rename, shell, binary edit, attachment,
   mobile, or unrestricted FS.
 
 ## Current navigation snapshot
 
-- Goal: let the agent organize Joplin notes and notebooks safely.
-- Entry points: organization tools in `src/tools/`; proposal schemas in
-  `src/persistence/changeSetStore.ts`; application through
+- Goal: restore soft-deleted notes/notebooks from Joplin Trash via reviewed tools.
+- Entry points: `list_trash` / `restore_note` / `restore_notebook` in
+  `src/tools/trashOrganizationTools.ts`; repository ops in
+  `src/notes/joplinTrashOperations.ts`; apply in
   `src/agent/noteOrganizationChangeApplier.ts`.
-- Data flow: validated tool input -> versioned proposal -> manual/auto review
-  policy -> optimistic preflight -> Joplin Data API -> model continuation.
-- Decision points: deletion always forces review; deletion is Trash-only;
-  metadata writes require current `updated_time`; note order affects Custom
-  sorting.
-- Side effects: create/rename notebooks; rename/move/reorder notes; trash notes
-  or notebooks and their contained items.
-- Chosen edit point: a separate organization repository/tool/applier path,
-  reusing existing change-set review and conflict isolation.
-- Validation plan: public repository/tool/applier/protocol tests, then
-  format/lint/typecheck/full Jest/dist gates.
+- Data flow: list trash -> propose restore change set -> approval/bypass ->
+  PUT `deleted_time: 0` (notebook restore also recovers contained items).
+- Decision points: restore requires current trash `updated_time`; destination
+  parent must not be secret; permanent delete stays forbidden.
+- Side effects: clear `deleted_time` on notes/notebooks; optional parent retarget
+  when previous parent is missing/trashed.
+- Chosen edit point: trash operations module + organization proposal/apply path.
+- Validation plan: repository/tool/applier tests, then lint/typecheck/full Jest.
 
 ## Open questions
 

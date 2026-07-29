@@ -402,6 +402,7 @@ const ChangeOperationSchema = Type.Union([
   Type.Literal("create"),
   Type.Literal("update"),
   Type.Literal("delete"),
+  Type.Literal("restore"),
   Type.Literal("rename"),
   Type.Literal("move"),
   Type.Literal("reorder"),

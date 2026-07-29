@@ -19,8 +19,13 @@ import type {
   NoteSearchHit,
   NotebookMetadataRecord,
   NotebookRecord,
+  RestoreNoteInput,
+  RestoreNotebookInput,
+  TrashListing,
   TrashNoteInput,
   TrashNotebookInput,
+  TrashedNoteRecord,
+  TrashedNotebookRecord,
   UpdateNoteBodyInput,
   UpdateNoteMetadataInput,
   UpdateNotebookMetadataInput,
@@ -53,18 +58,35 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
   public readonly trashedNotes: TrashNoteInput[] = [];
   public readonly notebookMetadataUpdates: UpdateNotebookMetadataInput[] = [];
   public readonly trashedNotebooks: TrashNotebookInput[] = [];
-  public readonly note: NoteMetadataRecord = {
+  public readonly restoredNotes: RestoreNoteInput[] = [];
+  public readonly restoredNotebooks: RestoreNotebookInput[] = [];
+  public note: NoteMetadataRecord = {
     id: "note-1",
     parentId: "folder-1",
     title: "Draft",
     updatedTime: 10,
     order: 100,
   };
-  public readonly notebook: NotebookMetadataRecord = {
+  public notebook: NotebookMetadataRecord = {
     id: "folder-1",
     parentId: "",
     title: "Projects",
     updatedTime: 40,
+  };
+  public trashedNote: TrashedNoteRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Draft",
+    updatedTime: 10,
+    order: 100,
+    deletedTime: 99,
+  };
+  public trashedNotebook: TrashedNotebookRecord = {
+    id: "folder-1",
+    parentId: "",
+    title: "Projects",
+    updatedTime: 40,
+    deletedTime: 99,
   };
 
   public async readNoteMetadata(): Promise<NoteMetadataRecord> {
@@ -115,6 +137,21 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
   }
   public async trashNotebook(input: TrashNotebookInput): Promise<void> {
     this.trashedNotebooks.push(input);
+  }
+  public async listTrash(): Promise<TrashListing> {
+    return { notes: [this.trashedNote], notebooks: [this.trashedNotebook] };
+  }
+  public async readTrashedNote(): Promise<TrashedNoteRecord> {
+    return this.trashedNote;
+  }
+  public async readTrashedNotebook(): Promise<TrashedNotebookRecord> {
+    return this.trashedNotebook;
+  }
+  public async restoreNote(input: RestoreNoteInput): Promise<void> {
+    this.restoredNotes.push(input);
+  }
+  public async restoreNotebook(input: RestoreNotebookInput): Promise<void> {
+    this.restoredNotebooks.push(input);
   }
 }
 
@@ -481,6 +518,73 @@ describe("ChangeApplier", () => {
 
     expect(result.changes[0]?.status).toBe("applied");
     expect(organizations.trashedNotebooks).toEqual([
+      { notebookId: "folder-1", expectedUpdatedTime: 40 },
+    ]);
+  });
+
+  test("applies an approved note restore from Joplin Trash", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-restore-note", {
+      kind: "note",
+      operation: "restore",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      parentId: "folder-2",
+      targetLabel: "Draft",
+      before: "In Joplin Trash (soft-deleted).",
+      after: "Title: Draft\nNotebook: folder-2\nManual order: 100",
+    });
+    const changeSet = changes.getByRun("run-restore-note");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-restore-note",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.restoredNotes).toEqual([
+      { noteId: "note-1", expectedUpdatedTime: 10, parentId: "folder-2" },
+    ]);
+  });
+
+  test("applies an approved notebook restore from Joplin Trash", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-restore-notebook", {
+      kind: "notebook",
+      operation: "restore",
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+      targetLabel: "Projects",
+      before: "In Joplin Trash with contained items (soft-deleted).",
+      after: "Title: Projects\nParent notebook: (root)",
+    });
+    const changeSet = changes.getByRun("run-restore-notebook");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-restore-notebook",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.restoredNotebooks).toEqual([
       { notebookId: "folder-1", expectedUpdatedTime: 40 },
     ]);
   });
