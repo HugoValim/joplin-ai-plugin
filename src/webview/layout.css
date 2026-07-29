@@ -196,6 +196,7 @@
 
 .mode-control button[aria-pressed="true"] {
   background: var(--joplin-background-color2);
+  color: var(--joplin-color2);
   font-weight: 600;
 }
 
