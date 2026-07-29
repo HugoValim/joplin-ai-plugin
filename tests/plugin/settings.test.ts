@@ -55,6 +55,8 @@ describe("plugin settings", () => {
     expect(prompt).toContain("Do not invent");
     expect(prompt).toContain("Markdown");
     expect(prompt).toContain("clarifying question");
+    expect(prompt).toContain("start_subagent");
+    expect(prompt).toMatch(/up to 3/i);
     expect(prompt).not.toContain("\n");
   });
 });

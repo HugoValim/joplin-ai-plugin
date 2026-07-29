@@ -44,6 +44,8 @@ export interface AgentRunRequest {
   readonly secretNotebookIds: ReadonlySet<string>;
   /** Caps model steps for this run; defaults to the global safety limit. */
   readonly maxModelSteps?: number;
+  /** Nested helpers: expose only read tools (no meta/propose). */
+  readonly helperOnly?: boolean;
 }
 
 export interface TokenUsage {
@@ -190,6 +192,7 @@ export class AgentRunner {
         abortSignal,
         proposeOnly,
         request.readOnly,
+        request.helperOnly === true,
       );
       usage = mergeUsage(usage, modelStep.usage);
       assistantText += modelStep.text;
@@ -270,6 +273,7 @@ export class AgentRunner {
     abortSignal: AbortSignal,
     proposeOnly: boolean,
     readOnly: boolean,
+    helperOnly: boolean,
   ): Promise<ModelStep & { readonly usage: TokenUsage | null }> {
     let text = "";
     const toolCalls: NormalizedToolCall[] = [];
@@ -277,7 +281,11 @@ export class AgentRunner {
     const stream = this.provider.streamChat(
       {
         messages,
-        tools: this.tools.providerDefinitions(context, { proposeOnly, readOnly }),
+        tools: this.tools.providerDefinitions(context, {
+          proposeOnly,
+          readOnly,
+          helperOnly,
+        }),
       },
       abortSignal,
     );
@@ -312,11 +320,12 @@ export class AgentRunner {
       readableNoteIds: request.readableNoteIds,
       secretNotebookIds: request.secretNotebookIds,
       agentPlan,
-      runSubAgent: request.readOnly
+      helperOnly: request.helperOnly,
+      runSubAgent: request.readOnly || request.helperOnly
         ? undefined
         : (input): Promise<SubAgentSpawnResult> =>
             this.subAgentHost.run(input, request, abortSignal),
-      abortSubAgent: request.readOnly
+      abortSubAgent: request.readOnly || request.helperOnly
         ? undefined
         : (subAgentId): number => this.subAgentHost.abort(subAgentId),
     };

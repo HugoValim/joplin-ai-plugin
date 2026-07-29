@@ -37,6 +37,8 @@ export interface ToolExecutionContext {
   readonly secretNotebookIds: ReadonlySet<string>;
   readonly agentPlan: AgentPlanState;
   readonly readOnly: boolean;
+  /** Nested helpers may only use read tools (Cursor-style Task isolation). */
+  readonly helperOnly?: boolean;
   /** Parent AgentRunner hook: runs a nested read-only subagent to completion. */
   readonly runSubAgent?: (
     input: SubAgentSpawnInput,
@@ -108,7 +110,11 @@ export class ToolRegistry {
    */
   public providerDefinitions(
     context: ToolExecutionContext,
-    options: { readonly proposeOnly?: boolean; readonly readOnly?: boolean } = {},
+    options: {
+      readonly proposeOnly?: boolean;
+      readonly readOnly?: boolean;
+      readonly helperOnly?: boolean;
+    } = {},
   ): readonly ProviderToolDefinition[] {
     return [...this.tools.values()]
       .filter((tool) => tool.isAvailable(context))
@@ -122,6 +128,7 @@ export class ToolRegistry {
         (tool) =>
           !options.readOnly || tool.risk === "read" || tool.risk === "meta",
       )
+      .filter((tool) => !options.helperOnly || tool.risk === "read")
       .map((tool) => ({
         name: tool.name,
         description: tool.description,

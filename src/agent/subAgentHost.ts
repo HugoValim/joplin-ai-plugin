@@ -19,10 +19,10 @@ import type {
 export const SUBAGENT_MAX_MODEL_STEPS = 24;
 
 export const SUBAGENT_SYSTEM_PROMPT = [
-  "You are a read-only helper subagent.",
-  "Use available read tools to gather facts for the parent agent.",
-  "Do not propose note or file writes; summarize findings in your final text reply.",
-  "Stay within the given task; do not spawn further subagents.",
+  "You are a read-only helper subagent (like a Cursor Task worker).",
+  "You do not see the parent chat; rely only on the task brief below.",
+  "Use read tools to gather facts, then reply with a concise findings summary.",
+  "Do not propose writes, edit plans, or spawn further subagents.",
 ].join(" ");
 
 export interface NestedAgentRunnerFactory {
@@ -88,6 +88,7 @@ export class SubAgentHost {
           hasFileWorkspace: parentRequest.hasFileWorkspace,
           vault: parentRequest.vault,
           readOnly: true,
+          helperOnly: true,
           readableNoteIds: parentRequest.readableNoteIds,
           secretNotebookIds: parentRequest.secretNotebookIds,
           maxModelSteps: SUBAGENT_MAX_MODEL_STEPS,

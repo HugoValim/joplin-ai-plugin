@@ -34,7 +34,10 @@ export type SubAgentOutput = Static<typeof SubAgentOutputSchema>;
 class StartSubAgentTool implements AgentTool<SubAgentInput, SubAgentOutput> {
   public readonly name = "start_subagent";
   public readonly description =
-    "Start a helper subagent for a bounded read-only subtask during a heavy multi-step run. At most 3 run concurrently; further spawns are refused. Awaits the subagent and returns its findings. The parent merges results and proposes writes.";
+    "Spawn a read-only helper subagent for one bounded research subtask (Cursor Task style). " +
+    "Pass a self-contained task brief with note/notebook ids, scope, and the findings format to return — the helper does not see parent chat history. " +
+    "For parallel work, call start_subagent up to 3 times in the SAME tool-call turn; they run concurrently. A 4th concurrent spawn is refused. " +
+    "Awaits completion and returns result_text. You merge findings and alone propose/apply writes.";
   public readonly risk = "meta" as const;
   public readonly inputSchema = SubAgentInputSchema;
   public readonly outputSchema = SubAgentOutputSchema;

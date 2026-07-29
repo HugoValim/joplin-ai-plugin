@@ -3,13 +3,19 @@ import type {
   ProviderEvent,
   StreamChatRequest,
 } from "../../src/providers/types";
+import { Type } from "@sinclair/typebox";
 import { InMemoryChangeSetStore } from "../../src/persistence/changeSetStore";
 import {
   AgentRunner,
   type AgentRunRequest,
 } from "../../src/agent/agentRunner";
 import { registerSubAgentTools } from "../../src/tools/subAgentTools";
-import { ToolRegistry } from "../../src/tools/toolRegistry";
+import { registerAgentPlanTools } from "../../src/tools/agentPlanTools";
+import {
+  ToolRegistry,
+  type AgentTool,
+  type ToolExecutionContext,
+} from "../../src/tools/toolRegistry";
 
 function baseRequest(
   overrides: Partial<AgentRunRequest> = {},
@@ -241,4 +247,112 @@ describe("AgentRunner nested subagents", () => {
     ).rejects.toMatchObject({ code: "ABORTED" });
     expect(subAborted).toBe(true);
   });
+
+  test("fans out all start_subagent calls in one turn like Cursor multi-agents", async () => {
+    const live = new Set<string>();
+    let maxLive = 0;
+    let parentStep = 0;
+    const provider: AiProvider = {
+      async *streamChat(
+        request: StreamChatRequest,
+      ): AsyncIterable<ProviderEvent> {
+        const isSub = request.messages.some(
+          (m) =>
+            m.role === "system" &&
+            typeof m.content === "string" &&
+            m.content.includes("helper subagent"),
+        );
+        if (isSub) {
+          const task = String(
+            request.messages.find((m) => m.role === "user")?.content ?? "",
+          );
+          live.add(task);
+          maxLive = Math.max(maxLive, live.size);
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          live.delete(task);
+          // Helpers must only see read tools — never start_subagent / plan meta.
+          expect(
+            (request.tools ?? []).every((tool) => !tool.name.includes("subagent")),
+          ).toBe(true);
+          expect(
+            (request.tools ?? []).every((tool) => tool.name !== "set_agent_plan"),
+          ).toBe(true);
+          yield { type: "text-delta", delta: `done:${task}` };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        parentStep += 1;
+        if (parentStep === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "spawn-a",
+                name: "start_subagent",
+                arguments: { subagent_id: "a", task: "scope-a" },
+              },
+              {
+                id: "echo-mid",
+                name: "echo",
+                arguments: {},
+              },
+              {
+                id: "spawn-b",
+                name: "start_subagent",
+                arguments: { subagent_id: "b", task: "scope-b" },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", delta: "merged" };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      async testConnection(): Promise<void> {},
+      async listModels(): Promise<readonly string[]> {
+        return [];
+      },
+      async modelAvailable(): Promise<boolean> {
+        return true;
+      },
+      contextWindow: async () => null,
+    };
+    const tools = new ToolRegistry();
+    registerSubAgentTools(tools);
+    registerAgentPlanTools(tools);
+    tools.register(new EchoReadTool());
+    const runner = new AgentRunner(
+      provider,
+      tools,
+      new InMemoryChangeSetStore(),
+    );
+    const outcome = await runner.run(baseRequest(), new AbortController().signal);
+    expect(outcome.status).toBe("completed");
+    expect(maxLive).toBe(2);
+    const toolContents = outcome.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => m.content);
+    expect(toolContents.some((c) => c.includes("done:scope-a"))).toBe(true);
+    expect(toolContents.some((c) => c.includes("done:scope-b"))).toBe(true);
+  });
 });
+
+class EchoReadTool implements AgentTool<Record<string, never>, { ok: boolean }> {
+  public readonly name = "echo";
+  public readonly description = "noop";
+  public readonly risk = "read" as const;
+  public readonly inputSchema = Type.Object(
+    {},
+    { additionalProperties: false },
+  );
+  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+
+  public isAvailable(_context: ToolExecutionContext): boolean {
+    return true;
+  }
+
+  public async execute(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+}

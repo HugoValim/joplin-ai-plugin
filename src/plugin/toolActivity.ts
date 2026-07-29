@@ -28,7 +28,13 @@ function readSubAgentSummary(result: ToolExecutionResult): string | null {
     "subagent_id" in output && typeof output.subagent_id === "string"
       ? output.subagent_id
       : "subagent";
-  return `Subagent ${id}: ${output.status}`;
+  const preview =
+    "result_text" in output &&
+    typeof output.result_text === "string" &&
+    output.result_text.trim().length > 0
+      ? `: ${output.result_text.trim().slice(0, 80)}`
+      : "";
+  return `Subagent ${id}: ${output.status}${preview}`;
 }
 
 function readReviewPreflight(
