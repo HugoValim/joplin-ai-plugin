@@ -489,11 +489,15 @@ export class ApprovalWorkflow {
           },
           runId,
         ),
-      onStep: (current, total): void =>
+      onStep: (current, total, label): void =>
         this.events.post(
           "run.progress",
           chatId,
-          { current, total, label: `Model step ${current} of ${total}` },
+          {
+            current,
+            total,
+            label: label ?? `Model step ${current} of ${total}`,
+          },
           runId,
         ),
     };

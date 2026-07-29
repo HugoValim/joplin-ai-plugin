@@ -458,12 +458,16 @@ export class ChatController {
           request.runId,
         );
       },
-      onStep: (current, total): void => {
+      onStep: (current, total, label): void => {
         this.markEndpointOnline();
         this.events.post(
           "run.progress",
           request.chatId,
-          { current, total, label: `Model step ${current} of ${total}` },
+          {
+            current,
+            total,
+            label: label ?? `Model step ${current} of ${total}`,
+          },
           request.runId,
         );
       },

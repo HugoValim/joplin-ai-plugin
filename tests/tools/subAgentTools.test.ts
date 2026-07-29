@@ -1,9 +1,13 @@
 import { ToolRegistry } from "../../src/tools/toolRegistry";
-import { SubAgentRegistry } from "../../src/agent/subAgentRegistry";
 import { registerSubAgentTools } from "../../src/tools/subAgentTools";
-import type { ToolExecutionContext } from "../../src/tools/toolRegistry";
+import type {
+  SubAgentSpawnResult,
+  ToolExecutionContext,
+} from "../../src/tools/toolRegistry";
 
-function context(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContext {
+function context(
+  overrides: Partial<ToolExecutionContext> = {},
+): ToolExecutionContext {
   return {
     chatId: "chat-1",
     runId: "run-1",
@@ -18,55 +22,79 @@ function context(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionCo
 }
 
 describe("subagent tools", () => {
-  test("start_subagent succeeds under the concurrency cap", async () => {
-    const registry = new SubAgentRegistry(3);
+  test("start_subagent awaits the host and returns its result", async () => {
     const tools = new ToolRegistry();
-    registerSubAgentTools(registry, tools);
+    registerSubAgentTools(tools);
+    const hostResult: SubAgentSpawnResult = {
+      subagent_id: "sub-1",
+      status: "completed",
+      message: "done",
+      result_text: "findings",
+      active_count: 0,
+    };
 
     const result = await tools.execute(
-      { id: "call-1", name: "start_subagent", arguments: { subagent_id: "sub-1", task: "Read and summarize notes" } },
-      context(),
+      {
+        id: "call-1",
+        name: "start_subagent",
+        arguments: { subagent_id: "sub-1", task: "Read and summarize notes" },
+      },
+      context({
+        runSubAgent: async (): Promise<SubAgentSpawnResult> => hostResult,
+      }),
     );
     expect(result.output).toMatchObject({
       subagent_id: "sub-1",
-      status: "started",
-      active_count: 1,
+      status: "completed",
+      result_text: "findings",
+      active_count: 0,
     });
   });
 
-  test("start_subagent refuses beyond the cap", async () => {
-    const registry = new SubAgentRegistry(3);
+  test("complete_subagent aborts via the host", async () => {
     const tools = new ToolRegistry();
-    registerSubAgentTools(registry, tools);
-    const ctx = context();
+    registerSubAgentTools(tools);
+    const aborted: string[] = [];
 
-    await tools.execute({ id: "c1", name: "start_subagent", arguments: { subagent_id: "s1", task: "t" } }, ctx);
-    await tools.execute({ id: "c2", name: "start_subagent", arguments: { subagent_id: "s2", task: "t" } }, ctx);
-    await tools.execute({ id: "c3", name: "start_subagent", arguments: { subagent_id: "s3", task: "t" } }, ctx);
-    const result = await tools.execute(
-      { id: "c4", name: "start_subagent", arguments: { subagent_id: "s4", task: "t" } },
-      ctx,
+    await tools.execute(
+      {
+        id: "c1",
+        name: "complete_subagent",
+        arguments: { subagent_id: "s1", task: "done" },
+      },
+      context({
+        abortSubAgent: (id): number => {
+          aborted.push(id);
+          return 0;
+        },
+      }),
     );
-    expect(result.output).toMatchObject({ status: "refused", active_count: 3 });
-  });
-
-  test("complete_subagent frees a slot", async () => {
-    const registry = new SubAgentRegistry(3);
-    const tools = new ToolRegistry();
-    registerSubAgentTools(registry, tools);
-    const ctx = context();
-
-    await tools.execute({ id: "c1", name: "start_subagent", arguments: { subagent_id: "s1", task: "t" } }, ctx);
-    await tools.execute({ id: "c2", name: "complete_subagent", arguments: { subagent_id: "s1", task: "done" } }, ctx);
-    expect(registry.activeCount).toBe(0);
+    expect(aborted).toEqual(["s1"]);
   });
 
   test("start_subagent is unavailable in read-only mode", () => {
-    const registry = new SubAgentRegistry(3);
     const tools = new ToolRegistry();
-    registerSubAgentTools(registry, tools);
+    registerSubAgentTools(tools);
 
-    const defs = tools.providerDefinitions(context({ readOnly: true }));
+    const defs = tools.providerDefinitions(
+      context({
+        readOnly: true,
+        runSubAgent: async (): Promise<SubAgentSpawnResult> => ({
+          subagent_id: "x",
+          status: "completed",
+          message: "m",
+          result_text: "",
+          active_count: 0,
+        }),
+      }),
+    );
+    expect(defs.some((d) => d.name === "start_subagent")).toBe(false);
+  });
+
+  test("start_subagent is unavailable without a host hook", () => {
+    const tools = new ToolRegistry();
+    registerSubAgentTools(tools);
+    const defs = tools.providerDefinitions(context());
     expect(defs.some((d) => d.name === "start_subagent")).toBe(false);
   });
 });

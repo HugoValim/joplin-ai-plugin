@@ -1,11 +1,12 @@
 /**
  * Tracks live subagents spawned during a heavy agent run.
  * Caps concurrency at 3; further spawns are refused with a clear error.
+ * Each active entry owns an AbortController so parent cancel aborts children.
  *
- * @example registry.tryStart("subtask-1") // true if under cap
+ * @example registry.tryStart("subtask-1", controller) // true if under cap
  */
 export class SubAgentRegistry {
-  private readonly active = new Set<string>();
+  private readonly active = new Map<string, AbortController>();
   private readonly capacity: number;
 
   public constructor(capacity = 3) {
@@ -13,18 +14,30 @@ export class SubAgentRegistry {
   }
 
   /**
-   * Starts a subagent when capacity allows.
+   * Starts a subagent when capacity allows and records its AbortController.
    *
-   * @example if (registry.tryStart("sub-1")) runSubAgent()
+   * @example if (registry.tryStart("sub-1", controller)) runSubAgent()
    */
-  public tryStart(subAgentId: string): boolean {
+  public tryStart(subAgentId: string, controller: AbortController): boolean {
     if (this.active.has(subAgentId)) return false;
     if (this.active.size >= this.capacity) return false;
-    this.active.add(subAgentId);
+    this.active.set(subAgentId, controller);
     return true;
   }
 
   public complete(subAgentId: string): void {
+    this.active.delete(subAgentId);
+  }
+
+  /**
+   * Aborts one subagent (if live) and frees its slot.
+   *
+   * @example registry.abort("sub-1")
+   */
+  public abort(subAgentId: string, reason?: unknown): void {
+    const controller = this.active.get(subAgentId);
+    if (!controller) return;
+    controller.abort(reason ?? new Error(`Subagent ${subAgentId} aborted`));
     this.active.delete(subAgentId);
   }
 
@@ -40,7 +53,17 @@ export class SubAgentRegistry {
     return this.capacity - this.active.size;
   }
 
-  public cancelAll(): void {
+  /**
+   * Aborts every live subagent and clears the registry.
+   *
+   * @example registry.cancelAll()
+   */
+  public cancelAll(reason?: unknown): void {
+    const abortReason =
+      reason ?? new Error("Parent run cancelled; aborting subagents");
+    for (const controller of this.active.values()) {
+      controller.abort(abortReason);
+    }
     this.active.clear();
   }
 }

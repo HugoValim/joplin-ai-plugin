@@ -15,6 +15,19 @@ export const CONTENT_READ_TOOL_NAMES = new Set([
   "read_text_file",
 ]);
 
+export interface SubAgentSpawnInput {
+  readonly subagent_id: string;
+  readonly task: string;
+}
+
+export interface SubAgentSpawnResult {
+  readonly subagent_id: string;
+  readonly status: "completed" | "refused" | "failed" | "cancelled";
+  readonly message: string;
+  readonly result_text: string;
+  readonly active_count: number;
+}
+
 export interface ToolExecutionContext {
   readonly chatId: string;
   readonly runId: string;
@@ -24,6 +37,12 @@ export interface ToolExecutionContext {
   readonly secretNotebookIds: ReadonlySet<string>;
   readonly agentPlan: AgentPlanState;
   readonly readOnly: boolean;
+  /** Parent AgentRunner hook: runs a nested read-only subagent to completion. */
+  readonly runSubAgent?: (
+    input: SubAgentSpawnInput,
+  ) => Promise<SubAgentSpawnResult>;
+  /** Parent AgentRunner hook: aborts one live subagent and returns remaining count. */
+  readonly abortSubAgent?: (subAgentId: string) => number;
 }
 
 export interface AgentTool<TInput, TOutput> {
