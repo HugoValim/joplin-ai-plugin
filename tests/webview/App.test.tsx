@@ -267,6 +267,25 @@ describe("App shell", () => {
     expect(guard.textContent).toContain("Minimum width: 280px");
   });
 
+  test("keeps composer editable while a run is busy so follow-ups can be queued", async () => {
+    const { api } = await renderReadyApp();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    fireEvent.change(composer, { target: { value: "Start run" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(composer.disabled).toBe(false);
+    fireEvent.change(composer, { target: { value: "follow up while busy" } });
+    expect(composer.value).toBe("follow up while busy");
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(screen.getByLabelText("Queued follow-up").textContent).toContain(
+      "follow up while busy",
+    );
+    expect(api.requests.filter((r) => (r as { type?: unknown }).type === "chat.submit")).toHaveLength(1);
+  });
+
   test("keeps transcript visible with docked review and disables composer until resolved", async () => {
     const { api } = await renderReadyApp();
     await act(async () => api.emit(pendingSnapshotEvent()));

@@ -31,7 +31,9 @@ export function App(): JSX.Element {
       onRetry={controller.retry}
     />
   ) : null;
-  const composerDisabled = state.busy || Boolean(pendingChanges);
+  // Composer stays editable while busy (queue follow-ups); ChangeReview still locks it.
+  const shellLocked = state.busy || Boolean(pendingChanges);
+  const composerDisabled = Boolean(pendingChanges);
 
   return (
     <main className={`app-shell${pendingChanges ? " has-review" : ""}`}>
@@ -61,7 +63,7 @@ export function App(): JSX.Element {
           chat={activeChat}
           activeNote={state.activeNote}
           secretNotebookIds={state.snapshot.secretNotebookIds}
-          disabled={composerDisabled}
+          disabled={shellLocked}
           onUpdate={controller.updateContext}
           onToggleAttached={controller.toggleAttachedNote}
           onSelectFolder={controller.selectFolder}
@@ -88,7 +90,7 @@ export function App(): JSX.Element {
               ? promptSuggestions(activeChat, state.activeNote)
               : undefined
           }
-          noteActionsDisabled={composerDisabled || !state.activeNote}
+          noteActionsDisabled={shellLocked || !state.activeNote}
           activity={activity}
         />
         {activeChat && pendingChanges ? (
@@ -110,7 +112,7 @@ export function App(): JSX.Element {
       {activeChat ? (
         <ModeControl
           mode={activeChat.context.interactionMode}
-          disabled={composerDisabled}
+          disabled={shellLocked}
           onUpdate={controller.updateContext}
         />
       ) : null}
