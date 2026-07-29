@@ -33,21 +33,4 @@ describe("summarizeToolResult", () => {
       }),
     ).toBe("Added to proposed batch");
   });
-
-  test("summarizes subagent completion with a short findings preview", () => {
-    expect(
-      summarizeToolResult({
-        toolCallId: "spawn-1",
-        name: "start_subagent",
-        risk: "meta",
-        output: {
-          subagent_id: "sub-a",
-          status: "completed",
-          message: "finished",
-          result_text: "Notebook A has three notes about travel.",
-          active_count: 0,
-        },
-      }),
-    ).toBe("Subagent sub-a: completed: Notebook A has three notes about travel.");
-  });
 });

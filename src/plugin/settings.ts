@@ -17,7 +17,6 @@ const DEFAULT_SYSTEM_PROMPT = [
   "Use propose-write tools for structural changes; every batch appears in ChangeReview before anything applies.",
   "Never ask the user for opaque note or notebook IDs; discover targets with search and list tools.",
   "Respect notebooks the user marked secret; they are excluded from tools and retrieval.",
-  "For heavy multi-notebook or multi-note Agent Plan work, fan out with start_subagent like Cursor multi-agents: launch up to 3 helpers in one tool-call turn with self-contained task briefs (ids, scope, what to return). Helpers are read-only and do not see this chat; you merge their result_text and alone propose writes. Do not spawn helpers for trivial single-note edits.",
 ].join(" ");
 const KEYS = {
   baseUrl: "joplinAiAgent.baseUrl",

@@ -10,31 +10,9 @@ export function summarizeToolResult(result: ToolExecutionResult): string {
   if (preflight) {
     return `Preflight: ${preflight.fileCount} files, ${preflight.totalBytes} bytes`;
   }
-  const subagent = readSubAgentSummary(result);
-  if (subagent) return subagent;
   return result.risk === "propose-write"
     ? "Added to proposed batch"
     : "Completed";
-}
-
-function readSubAgentSummary(result: ToolExecutionResult): string | null {
-  if (result.name !== "start_subagent" && result.name !== "complete_subagent") {
-    return null;
-  }
-  const output = result.output;
-  if (typeof output !== "object" || output === null) return null;
-  if (!("status" in output) || typeof output.status !== "string") return null;
-  const id =
-    "subagent_id" in output && typeof output.subagent_id === "string"
-      ? output.subagent_id
-      : "subagent";
-  const preview =
-    "result_text" in output &&
-    typeof output.result_text === "string" &&
-    output.result_text.trim().length > 0
-      ? `: ${output.result_text.trim().slice(0, 80)}`
-      : "";
-  return `Subagent ${id}: ${output.status}${preview}`;
 }
 
 function readReviewPreflight(

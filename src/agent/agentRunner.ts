@@ -11,11 +11,6 @@ import type {
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import { DomainError } from "../shared/errors";
 import { StuckLoopDetector } from "./stuckLoopDetector";
-import { SubAgentRegistry } from "./subAgentRegistry";
-import {
-  createNestedRunnerFactory,
-  SubAgentHost,
-} from "./subAgentHost";
 import { executeAgentToolBatch } from "./agentToolBatch";
 import {
   activateProposeOnlyIfNeeded,
@@ -27,7 +22,6 @@ import type {
   ToolRegistry,
   ToolExecutionContext,
   ToolExecutionResult,
-  SubAgentSpawnResult,
 } from "../tools/toolRegistry";
 
 /** Safety only — not a normal stop for reorganization work. */
@@ -42,10 +36,6 @@ export interface AgentRunRequest {
   readonly readOnly: boolean;
   readonly readableNoteIds: ReadonlySet<string>;
   readonly secretNotebookIds: ReadonlySet<string>;
-  /** Caps model steps for this run; defaults to the global safety limit. */
-  readonly maxModelSteps?: number;
-  /** Nested helpers: expose only read tools (no meta/propose). */
-  readonly helperOnly?: boolean;
 }
 
 export interface TokenUsage {
@@ -85,21 +75,12 @@ interface ModelStep {
 }
 
 export class AgentRunner {
-  private readonly subAgentHost: SubAgentHost;
-
   public constructor(
     private readonly provider: AiProvider,
     private readonly tools: ToolRegistry,
     private readonly changes: ChangeSetStore,
     private readonly observer: AgentObserver = {},
-    subAgents: SubAgentRegistry = new SubAgentRegistry(),
-  ) {
-    this.subAgentHost = new SubAgentHost(
-      subAgents,
-      createNestedRunnerFactory(provider, tools, changes, AgentRunner),
-      observer,
-    );
-  }
+  ) {}
 
   /**
    * Runs model/tool steps and pauses before every proposed write batch.
@@ -110,18 +91,14 @@ export class AgentRunner {
     request: AgentRunRequest,
     abortSignal: AbortSignal,
   ): Promise<AgentRunOutcome> {
-    try {
-      return await this.runFrom(
-        request,
-        [...request.messages],
-        1,
-        0,
-        { plan: null },
-        abortSignal,
-      );
-    } finally {
-      this.subAgentHost.cancelAll();
-    }
+    return this.runFrom(
+      request,
+      [...request.messages],
+      1,
+      0,
+      { plan: null },
+      abortSignal,
+    );
   }
 
   /**
@@ -143,18 +120,14 @@ export class AgentRunner {
     const nudge = agentPlanContinuationNudge(planState.plan);
     if (nudge) messages.push({ role: "system", content: nudge });
     if (planState.plan) this.observer.onPlanUpdated?.(planState.plan);
-    try {
-      return await this.runFrom(
-        request,
-        messages,
-        continuation.nextStep,
-        continuation.toolCallCount,
-        planState,
-        abortSignal,
-      );
-    } finally {
-      this.subAgentHost.cancelAll();
-    }
+    return this.runFrom(
+      request,
+      messages,
+      continuation.nextStep,
+      continuation.toolCallCount,
+      planState,
+      abortSignal,
+    );
   }
 
   private async runFrom(
@@ -165,8 +138,7 @@ export class AgentRunner {
     planState: AgentPlanState,
     abortSignal: AbortSignal,
   ): Promise<AgentRunOutcome> {
-    const maxSteps = request.maxModelSteps ?? MAX_MODEL_STEPS;
-    const context = this.buildToolContext(request, planState, abortSignal);
+    const context = this.buildToolContext(request, planState);
     let toolCallCount = initialToolCallCount;
     let assistantText = "";
     let readCallsSincePropose = 0;
@@ -175,9 +147,9 @@ export class AgentRunner {
     const toolNames: string[] = [];
     const loopDetector = new StuckLoopDetector();
 
-    for (let step = firstStep; step <= maxSteps; step += 1) {
+    for (let step = firstStep; step <= MAX_MODEL_STEPS; step += 1) {
       assertNotAborted(abortSignal);
-      this.observer.onStep?.(step, maxSteps);
+      this.observer.onStep?.(step, MAX_MODEL_STEPS);
       proposeOnly = activateProposeOnlyIfNeeded(
         proposeOnly,
         readCallsSincePropose,
@@ -192,13 +164,12 @@ export class AgentRunner {
         abortSignal,
         proposeOnly,
         request.readOnly,
-        request.helperOnly === true,
       );
       usage = mergeUsage(usage, modelStep.usage);
       assistantText += modelStep.text;
       messages.push(toAssistantMessage(modelStep));
       if (context.agentPlan.plan && loopDetector.addStep(modelStep.text)) {
-        this.observer.onStep?.(step, maxSteps);
+        this.observer.onStep?.(step, MAX_MODEL_STEPS);
         return completedOutcome(
           messages,
           withStuckLoopNotice(assistantText),
@@ -215,7 +186,7 @@ export class AgentRunner {
           toolNames,
         );
         if (bailout) {
-          if (step >= maxSteps) {
+          if (step >= MAX_MODEL_STEPS) {
             return completedOutcome(
               messages,
               withMissingProposalNotice(assistantText),
@@ -263,7 +234,7 @@ export class AgentRunner {
     }
     throw new DomainError(
       "LIMIT_EXCEEDED",
-      `Agent exceeded ${maxSteps} model steps; expected completion within the loop limit`,
+      `Agent exceeded ${MAX_MODEL_STEPS} model steps; expected completion within the loop limit`,
     );
   }
 
@@ -273,7 +244,6 @@ export class AgentRunner {
     abortSignal: AbortSignal,
     proposeOnly: boolean,
     readOnly: boolean,
-    helperOnly: boolean,
   ): Promise<ModelStep & { readonly usage: TokenUsage | null }> {
     let text = "";
     const toolCalls: NormalizedToolCall[] = [];
@@ -284,7 +254,6 @@ export class AgentRunner {
         tools: this.tools.providerDefinitions(context, {
           proposeOnly,
           readOnly,
-          helperOnly,
         }),
       },
       abortSignal,
@@ -309,7 +278,6 @@ export class AgentRunner {
   private buildToolContext(
     request: AgentRunRequest,
     agentPlan: AgentPlanState,
-    abortSignal: AbortSignal,
   ): ToolExecutionContext {
     return {
       chatId: request.chatId,
@@ -320,14 +288,6 @@ export class AgentRunner {
       readableNoteIds: request.readableNoteIds,
       secretNotebookIds: request.secretNotebookIds,
       agentPlan,
-      helperOnly: request.helperOnly,
-      runSubAgent: request.readOnly || request.helperOnly
-        ? undefined
-        : (input): Promise<SubAgentSpawnResult> =>
-            this.subAgentHost.run(input, request, abortSignal),
-      abortSubAgent: request.readOnly || request.helperOnly
-        ? undefined
-        : (subAgentId): number => this.subAgentHost.abort(subAgentId),
     };
   }
 }
