@@ -30,6 +30,8 @@ export function toActiveChat(
   changes: ChangeSetStore,
   applyTokenForPending?: (changeSetId: string) => string,
 ): ActiveChatView {
+  const parked = chat.parkedAppliedChangeSet;
+  if (parked) changes.restore(parked);
   const pending = chat.pendingChangeSet;
   if (pending) changes.restore(pending);
   return {

@@ -677,4 +677,52 @@ describe("ChangeApplier", () => {
     expect(workspace.files.get("a.md")?.content).toBe("A original");
     expect(workspace.files.get("b.md")?.content).toBe("B new");
   });
+
+  test("merges parked run rollbacks into the target run for cumulative undo", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const older = changes.add("chat-1", "run-old", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const newer = changes.add("chat-1", "run-new", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const rollbacks = new InMemoryRollbackStore();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(workspace),
+      rollbacks,
+    );
+    const oldSet = changes.getByRun("run-old");
+    const newSet = changes.getByRun("run-new");
+    if (!oldSet || !newSet) throw new Error("Expected change sets");
+
+    await applier.apply(oldSet.id, [older.id], {
+      chatId: "chat-1",
+      runId: "run-old",
+    });
+    await applier.apply(newSet.id, [newer.id], {
+      chatId: "chat-1",
+      runId: "run-new",
+    });
+    await applier.mergeRollbacks("run-new", "chat-1", "run-old");
+    await applier.undo("run-new", "chat-1", [older.id]);
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+  });
 });

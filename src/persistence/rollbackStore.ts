@@ -44,7 +44,7 @@ const RollbackSchema = Type.Object(
     chatId: IdentifierSchema,
     createdAt: Type.Number({ minimum: 0 }),
     items: Type.Array(Type.Union([FileItemSchema, NoteItemSchema]), {
-      maxItems: 50,
+      maxItems: 100,
     }),
   },
   { additionalProperties: false },

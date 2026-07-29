@@ -111,7 +111,7 @@ export class ApprovalWorkflow {
     changeSet: ChangeSet,
     autoApply: boolean,
   ): Promise<void> {
-    await this.autoKeepAppliedReview(changeSet.chatId);
+    await this.parkAppliedReview(changeSet.chatId);
     if (autoApply && !requiresManualReview(changeSet)) {
       this.postAutomaticProgress(changeSet);
       const applyToken = this.applyTokens.issue(changeSet.id);
@@ -600,6 +600,7 @@ export class ApprovalWorkflow {
   ): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
     await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
+    await this.disposeReviewNote(chat.parkedAppliedChangeSet?.reviewNoteId);
     const runSummaries = chat.runSummaries.map((summary) =>
       summary.runId === runId ? { ...summary, status } : summary,
     );
@@ -608,6 +609,7 @@ export class ApprovalWorkflow {
       updatedAt: Date.now(),
       runSummaries,
       pendingChangeSet: null,
+      parkedAppliedChangeSet: null,
     });
   }
 
@@ -622,11 +624,15 @@ export class ApprovalWorkflow {
       return;
     }
     const chat = await requireChat(this.chats, chatId);
+    const parked = chat.parkedAppliedChangeSet;
+    const retained = parked
+      ? await this.mergeParkedIntoApplied(chatId, changeSet, parked)
+      : changeSet;
     const reviewNoteId = await this.reviewNotes.openForChangeSet(
-      changeSet,
+      retained,
       chat.title,
     );
-    const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
+    const reviewed = this.changes.attachReviewNote(retained.id, reviewNoteId);
     const runSummaries = chat.runSummaries.map((summary) =>
       summary.runId === runId
         ? { ...summary, status: "applied" as const }
@@ -637,24 +643,52 @@ export class ApprovalWorkflow {
       updatedAt: Date.now(),
       runSummaries,
       pendingChangeSet: reviewed,
+      parkedAppliedChangeSet: null,
     });
   }
 
-  private async autoKeepAppliedReview(chatId: string): Promise<void> {
+  private async mergeParkedIntoApplied(
+    chatId: string,
+    applied: ChangeSet,
+    parked: ChangeSet,
+  ): Promise<ChangeSet> {
+    await this.applier.mergeRollbacks(applied.runId, chatId, parked.runId);
+    const merged = this.changes.absorbAppliedChanges(
+      applied.id,
+      parked.changes,
+      { chatId, runId: applied.runId },
+    );
+    if (parked.id !== applied.id) this.changes.drop(parked.id);
+    return merged;
+  }
+
+  private async parkAppliedReview(chatId: string): Promise<void> {
     const chat = await this.chats.get(chatId);
     if (!chat?.pendingChangeSet) return;
     const pending = chat.pendingChangeSet;
     if (pending.status !== "applied" && pending.status !== "partial") return;
     await this.disposeReviewNote(pending.reviewNoteId);
-    this.changes.removeChanges(
-      pending.id,
-      pending.changes.map((change) => change.id),
-      { chatId, runId: pending.runId },
+    const parkedWithoutNote = stripReviewNote(pending);
+    const existing = chat.parkedAppliedChangeSet;
+    if (!existing) {
+      await this.chats.save({
+        ...chat,
+        updatedAt: Date.now(),
+        pendingChangeSet: null,
+        parkedAppliedChangeSet: parkedWithoutNote,
+      });
+      return;
+    }
+    const merged = await this.mergeParkedIntoApplied(
+      chatId,
+      parkedWithoutNote,
+      existing,
     );
     await this.chats.save({
       ...chat,
       updatedAt: Date.now(),
       pendingChangeSet: null,
+      parkedAppliedChangeSet: stripReviewNote(merged),
     });
   }
 
@@ -673,6 +707,7 @@ export class ApprovalWorkflow {
   private async disposePendingReviewNote(chatId: string): Promise<void> {
     const chat = await this.chats.get(chatId);
     await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
+    await this.disposeReviewNote(chat?.parkedAppliedChangeSet?.reviewNoteId);
   }
 
   private async disposeReviewNote(
@@ -681,6 +716,18 @@ export class ApprovalWorkflow {
     if (!reviewNoteId) return;
     await this.reviewNotes.dispose(reviewNoteId);
   }
+}
+
+function stripReviewNote(changeSet: ChangeSet): ChangeSet {
+  if (!changeSet.reviewNoteId) return changeSet;
+  return {
+    id: changeSet.id,
+    chatId: changeSet.chatId,
+    runId: changeSet.runId,
+    createdAt: changeSet.createdAt,
+    status: changeSet.status,
+    changes: changeSet.changes,
+  };
 }
 
 function requiresManualReview(changeSet: ChangeSet): boolean {

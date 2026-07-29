@@ -152,7 +152,7 @@ const ChangesApplySchema = Type.Object(
       {
         changeSetId: IdentifierSchema,
         acceptedIds: Type.Array(IdentifierSchema, {
-          maxItems: 50,
+          maxItems: 100,
           uniqueItems: true,
         }),
         applyToken: Type.String({ minLength: 32, maxLength: 128 }),
@@ -196,7 +196,7 @@ const ChangesKeepSchema = Type.Object(
         changeSetId: IdentifierSchema,
         changeIds: Type.Array(IdentifierSchema, {
           minItems: 1,
-          maxItems: 50,
+          maxItems: 100,
           uniqueItems: true,
         }),
       },
@@ -215,7 +215,7 @@ const ChangesUndoSchema = Type.Object(
         changeSetId: IdentifierSchema,
         changeIds: Type.Array(IdentifierSchema, {
           minItems: 1,
-          maxItems: 50,
+          maxItems: 100,
           uniqueItems: true,
         }),
       },
@@ -441,7 +441,7 @@ const ChangeSetViewSchema = Type.Object(
     runId: Type.Optional(IdentifierSchema),
     applyToken: Type.String({ minLength: 0, maxLength: 128 }),
     reviewNoteId: Type.Optional(IdentifierSchema),
-    changes: Type.Array(ChangeViewSchema, { maxItems: 50 }),
+    changes: Type.Array(ChangeViewSchema, { maxItems: 100 }),
   },
   { additionalProperties: false },
 );

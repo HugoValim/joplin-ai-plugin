@@ -337,7 +337,7 @@ export const ChangeSetSchema = Type.Object(
         NotebookDeleteSchema,
         NotebookRestoreSchema,
       ]),
-      { maxItems: 50 },
+      { maxItems: 100 },
     ),
     reviewNoteId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   },
@@ -363,6 +363,12 @@ export interface ChangeSetStore {
     changeIds: readonly string[],
     scope: ChangeSetScope,
   ): ChangeSet | null;
+  absorbAppliedChanges(
+    targetChangeSetId: string,
+    extraChanges: readonly ProposedChange[],
+    scope: ChangeSetScope,
+  ): ChangeSet;
+  drop(changeSetId: string): void;
   attachReviewNote(changeSetId: string, reviewNoteId: string): ChangeSet;
   restore(changeSet: ChangeSet): void;
 }
@@ -496,6 +502,60 @@ export class InMemoryChangeSetStore implements ChangeSetStore {
     const next: ChangeSet = { ...current, changes: remaining };
     this.sets.set(changeSetId, next);
     return cloneChangeSet(next);
+  }
+
+  /**
+   * Prepends earlier applied review items into the target applied batch.
+   *
+   * @example store.absorbAppliedChanges(targetId, parked.changes, scope)
+   */
+  public absorbAppliedChanges(
+    targetChangeSetId: string,
+    extraChanges: readonly ProposedChange[],
+    scope: ChangeSetScope,
+  ): ChangeSet {
+    const current = this.getScoped(targetChangeSetId, scope);
+    if (current.status !== "applied" && current.status !== "partial") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(targetChangeSetId)} has status ${current.status}; expected applied or partial status`,
+      );
+    }
+    if (extraChanges.length === 0) return cloneChangeSet(current);
+    const changes = [...extraChanges, ...current.changes];
+    if (changes.length > 100) {
+      throw new DomainError(
+        "VALIDATION",
+        `Merged change set would have ${changes.length} changes; expected at most 100`,
+      );
+    }
+    const status = changes.every((change) => change.status === "applied")
+      ? ("applied" as const)
+      : ("partial" as const);
+    const next: ChangeSet = {
+      id: current.id,
+      chatId: current.chatId,
+      runId: current.runId,
+      createdAt: current.createdAt,
+      status,
+      changes,
+    };
+    this.sets.set(targetChangeSetId, next);
+    return cloneChangeSet(next);
+  }
+
+  /**
+   * Drops a change set from memory after its items were absorbed elsewhere.
+   *
+   * @example store.drop(parkedChangeSetId)
+   */
+  public drop(changeSetId: string): void {
+    const current = this.sets.get(changeSetId);
+    if (!current) return;
+    this.sets.delete(changeSetId);
+    if (this.idsByRun.get(current.runId) === changeSetId) {
+      this.idsByRun.delete(current.runId);
+    }
   }
 
   /**

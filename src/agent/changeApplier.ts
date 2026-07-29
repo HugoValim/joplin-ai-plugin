@@ -218,6 +218,51 @@ export class ChangeApplier {
     return { runId, restored, conflicts };
   }
 
+  /**
+   * Merges undo snapshots from a parked run into the target cumulative run.
+   *
+   * @example await applier.mergeRollbacks(targetRunId, chatId, parkedRunId)
+   */
+  public async mergeRollbacks(
+    targetRunId: string,
+    chatId: string,
+    sourceRunId: string,
+  ): Promise<void> {
+    if (targetRunId === sourceRunId) return;
+    const source = await this.rollbacks.get(sourceRunId);
+    if (!source) return;
+    if (source.chatId !== chatId) {
+      throw new DomainError(
+        "SECURITY",
+        `Rollback ${safeValue(sourceRunId)} belongs to chat ${source.chatId}; expected chat ${chatId}`,
+      );
+    }
+    const target = await this.rollbacks.get(targetRunId);
+    if (target && target.chatId !== chatId) {
+      throw new DomainError(
+        "SECURITY",
+        `Rollback ${safeValue(targetRunId)} belongs to chat ${target.chatId}; expected chat ${chatId}`,
+      );
+    }
+    const items = [...(target?.items ?? []), ...source.items];
+    if (items.length > 100) {
+      throw new DomainError(
+        "VALIDATION",
+        `Merged rollback would have ${items.length} items; expected at most 100`,
+      );
+    }
+    await this.rollbacks.save({
+      runId: targetRunId,
+      chatId,
+      createdAt: target?.createdAt ?? source.createdAt,
+      items,
+    });
+    await this.rollbacks.save({
+      ...source,
+      items: [],
+    });
+  }
+
   private requireProposedSet(
     changeSetId: string,
     scope: ChangeSetScope,

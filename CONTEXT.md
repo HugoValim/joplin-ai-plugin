@@ -19,7 +19,7 @@ controlled propose-write batches reviewed by the user before anything applies.
 
 - Aliases: proposal batch, pending changes, review batch
 - Lifecycle: `Proposed → Applied | Partial | Discarded`
-- Notes: at most fifty changes; may reference a Review Note while proposed.
+- Notes: at most one hundred changes; may reference a Review Note while proposed.
 
 ### Proposed Change
 
