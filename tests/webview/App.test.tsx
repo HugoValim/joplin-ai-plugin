@@ -248,7 +248,9 @@ describe("App shell", () => {
       name: /Bypass permissions/,
     });
     expect(
-      screen.getByText(/Deletions still require ChangeReview/),
+      screen.getByText(
+        /Auto-apply non-delete proposals, then review with Keep\/Undo/,
+      ),
     ).toBeTruthy();
 
     fireEvent.click(toggle);
@@ -283,7 +285,11 @@ describe("App shell", () => {
     expect(screen.getByLabelText("Queued follow-up").textContent).toContain(
       "follow up while busy",
     );
-    expect(api.requests.filter((r) => (r as { type?: unknown }).type === "chat.submit")).toHaveLength(1);
+    expect(
+      api.requests.filter(
+        (r) => (r as { type?: unknown }).type === "chat.submit",
+      ),
+    ).toHaveLength(1);
   });
 
   test("keeps transcript visible with docked review and disables composer until resolved", async () => {

@@ -532,4 +532,45 @@ describe("ChangeApplier", () => {
 
     expect(workspace.files.get("good.md")?.content).toBe("Good original");
   });
+
+  test("undoes only selected change IDs and leaves other rollbacks", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const first = changes.add("chat-1", "run-2", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const second = changes.add("chat-1", "run-2", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(workspace),
+      new InMemoryRollbackStore(),
+    );
+    const changeSet = changes.getByRun("run-2");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await applier.apply(changeSet.id, [first.id, second.id], {
+      chatId: "chat-1",
+      runId: "run-2",
+    });
+    await applier.undo("run-2", "chat-1", [first.id]);
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+  });
 });

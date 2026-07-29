@@ -111,6 +111,7 @@ export class ApprovalWorkflow {
     changeSet: ChangeSet,
     autoApply: boolean,
   ): Promise<void> {
+    await this.autoKeepAppliedReview(changeSet.chatId);
     if (autoApply && !requiresManualReview(changeSet)) {
       this.postAutomaticProgress(changeSet);
       const applyToken = this.applyTokens.issue(changeSet.id);
@@ -119,7 +120,10 @@ export class ApprovalWorkflow {
         changeSet,
         chat.title,
       );
-      const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
+      const reviewed = this.changes.attachReviewNote(
+        changeSet.id,
+        reviewNoteId,
+      );
       await this.chats.save({ ...chat, pendingChangeSet: reviewed });
       await this.applyRequest(
         automaticApplyRequest(reviewed, applyToken),
@@ -183,7 +187,7 @@ export class ApprovalWorkflow {
       request.payload.acceptedIds,
       { chatId: request.chatId, runId: request.runId },
     );
-    await this.clearPending(request.chatId, request.runId, "applied");
+    await this.retainAppliedReview(request.chatId, request.runId, result);
     const pending = this.continuations.take(request.payload.changeSetId);
     if (pending) {
       await this.continueAfterApproval(request, pending, result, automatic);
@@ -261,16 +265,103 @@ export class ApprovalWorkflow {
       return;
     }
     const result = await this.applier.undo(changeSet.runId, request.chatId);
-    this.changes.discard(request.payload.changeSetId, {
-      chatId: request.chatId,
-      runId: request.runId,
-    });
+    this.changes.removeChanges(
+      changeSet.id,
+      changeSet.changes.map((change) => change.id),
+      { chatId: request.chatId, runId: request.runId },
+    );
     await this.clearPending(request.chatId, request.runId, "denied");
     this.events.post(
       "run.completed",
       request.chatId,
       {
         summary: `Denied and restored ${result.restored}; conflicts ${result.conflicts.length}`,
+      },
+      request.runId,
+    );
+  }
+
+  /**
+   * Keeps applied review items without restoring content.
+   *
+   * @example await workflow.keep(request)
+   */
+  public async keep(
+    request: Extract<PanelRequest, { type: "changes.keep" }>,
+  ): Promise<void> {
+    const remaining = this.changes.removeChanges(
+      request.payload.changeSetId,
+      request.payload.changeIds,
+      { chatId: request.chatId, runId: request.runId },
+    );
+    if (!remaining) {
+      await this.clearPending(request.chatId, request.runId, "applied");
+      this.events.post(
+        "run.completed",
+        request.chatId,
+        { summary: "Kept applied changes" },
+        request.runId,
+      );
+      return;
+    }
+    await this.savePending(request.chatId, remaining);
+    this.events.post(
+      "changes.proposed",
+      request.chatId,
+      toChangeSetView(remaining, ""),
+      request.runId,
+    );
+  }
+
+  /**
+   * Undoes selected applied review items and drops them from the pending panel.
+   *
+   * @example await workflow.undoChanges(request)
+   */
+  public async undoChanges(
+    request: Extract<PanelRequest, { type: "changes.undo" }>,
+  ): Promise<void> {
+    const changeSet = this.changes.getScoped(request.payload.changeSetId, {
+      chatId: request.chatId,
+      runId: request.runId,
+    });
+    if (changeSet.status !== "applied" && changeSet.status !== "partial") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(changeSet.id)} has status ${changeSet.status}; expected applied or partial status`,
+      );
+    }
+    const result = await this.applier.undo(
+      changeSet.runId,
+      request.chatId,
+      request.payload.changeIds,
+    );
+    const remaining = this.changes.removeChanges(
+      changeSet.id,
+      request.payload.changeIds,
+      { chatId: request.chatId, runId: request.runId },
+    );
+    if (!remaining) {
+      await this.clearPending(request.chatId, request.runId, "applied");
+      this.events.post(
+        "run.completed",
+        request.chatId,
+        {
+          summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
+        },
+        request.runId,
+      );
+      return;
+    }
+    await this.savePending(request.chatId, remaining);
+    this.events.post(
+      "run.completed",
+      request.chatId,
+      {
+        summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
+        ...(result.restored > 0 || remaining.changes.some(isUndoableApplied)
+          ? { undoRunId: changeSet.runId }
+          : {}),
       },
       request.runId,
     );
@@ -516,12 +607,73 @@ export class ApprovalWorkflow {
     });
   }
 
+  private async retainAppliedReview(
+    chatId: string,
+    runId: string,
+    result: ApplyResult,
+  ): Promise<void> {
+    const changeSet = this.changes.get(result.changeSetId);
+    if (!changeSet) {
+      await this.clearPending(chatId, runId, "applied");
+      return;
+    }
+    const chat = await requireChat(this.chats, chatId);
+    const reviewNoteId = await this.reviewNotes.openForChangeSet(
+      changeSet,
+      chat.title,
+    );
+    const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
+    const runSummaries = chat.runSummaries.map((summary) =>
+      summary.runId === runId
+        ? { ...summary, status: "applied" as const }
+        : summary,
+    );
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      runSummaries,
+      pendingChangeSet: reviewed,
+    });
+  }
+
+  private async autoKeepAppliedReview(chatId: string): Promise<void> {
+    const chat = await this.chats.get(chatId);
+    if (!chat?.pendingChangeSet) return;
+    const pending = chat.pendingChangeSet;
+    if (pending.status !== "applied" && pending.status !== "partial") return;
+    await this.disposeReviewNote(pending.reviewNoteId);
+    this.changes.removeChanges(
+      pending.id,
+      pending.changes.map((change) => change.id),
+      { chatId, runId: pending.runId },
+    );
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      pendingChangeSet: null,
+    });
+  }
+
+  private async savePending(
+    chatId: string,
+    changeSet: ChangeSet,
+  ): Promise<void> {
+    const chat = await requireChat(this.chats, chatId);
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      pendingChangeSet: changeSet,
+    });
+  }
+
   private async disposePendingReviewNote(chatId: string): Promise<void> {
     const chat = await this.chats.get(chatId);
     await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
   }
 
-  private async disposeReviewNote(reviewNoteId: string | undefined): Promise<void> {
+  private async disposeReviewNote(
+    reviewNoteId: string | undefined,
+  ): Promise<void> {
     if (!reviewNoteId) return;
     await this.reviewNotes.dispose(reviewNoteId);
   }
@@ -531,6 +683,12 @@ function requiresManualReview(changeSet: ChangeSet): boolean {
   return changeSet.changes.some(
     (change) => change.kind !== "file" && change.operation === "delete",
   );
+}
+
+function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
+  if (change.status !== "applied") return false;
+  if (change.kind === "file") return true;
+  return change.operation === "update";
 }
 
 function automaticApplyRequest(

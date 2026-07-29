@@ -10,6 +10,7 @@ function record(runId: string, createdAt: number): RollbackRecord {
     items: [
       {
         kind: "file",
+        changeId: "change-1",
         chatId: "chat-1",
         snapshot: {
           relativePath: "guide.md",

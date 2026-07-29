@@ -22,7 +22,10 @@ import type {
   NotebookRecord,
   UpdateNoteBodyInput,
 } from "../../src/notes/retriever";
-import { InMemoryChangeSetStore, type ChangeSet } from "../../src/persistence/changeSetStore";
+import {
+  InMemoryChangeSetStore,
+  type ChangeSet,
+} from "../../src/persistence/changeSetStore";
 import { ChatStore } from "../../src/persistence/chatStore";
 import { ApprovalWorkflow } from "../../src/plugin/approvalWorkflow";
 import type { PanelPort } from "../../src/plugin/panelPort";
@@ -334,7 +337,7 @@ describe("ApprovalWorkflow", () => {
     });
 
     expect(notes.note.body).toBe("New");
-    expect(reviewNotes.disposed).toEqual(["review-note-1"]);
+    expect(reviewNotes.disposed).toEqual([]);
     expect(
       provider.lastRequest?.messages.some((message) =>
         message.content.includes('"status":"applied"'),
@@ -342,6 +345,9 @@ describe("ApprovalWorkflow", () => {
     ).toBe(true);
     expect((await chats.get(chat.id))?.messages.at(-1)?.content).toBe(
       "Applied successfully.",
+    );
+    expect((await chats.get(chat.id))?.pendingChangeSet?.status).toBe(
+      "applied",
     );
     expect(panel.events.map((event) => event.type)).toEqual([
       "changes.proposed",
@@ -396,9 +402,12 @@ describe("ApprovalWorkflow", () => {
       "run.progress",
       "run.completed",
     ]);
+    const saved = await chats.get(chat.id);
+    expect(saved?.pendingChangeSet?.status).toBe("applied");
+    expect(saved?.pendingChangeSet?.changes[0]?.status).toBe("applied");
   });
 
-  test("automatically applies file-only proposals without review", async () => {
+  test("automatically applies file-only proposals and retains applied review", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await chats.create("Automatic files");
     const changes = new InMemoryChangeSetStore();
@@ -444,6 +453,8 @@ describe("ApprovalWorkflow", () => {
     expect(panel.events[0]).toMatchObject({
       payload: { label: "Auto-applying 1 proposed changes" },
     });
+    const saved = await chats.get(chat.id);
+    expect(saved?.pendingChangeSet?.status).toBe("applied");
   });
 
   test("requires manual review for deletion even when auto-apply is enabled", async () => {
@@ -515,7 +526,11 @@ describe("ApprovalWorkflow", () => {
         new InMemoryRollbackStore(),
       ),
       new ToolRegistry(),
-      { connectWithConfirmation: async () => ({ provider: new FinalTextProvider() }) },
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
       new PluginEventSender(new RecordingPanelPort()),
       new RunCancellationRegistry(),
       new NoOpReviewNotePort(),
@@ -541,9 +556,135 @@ describe("ApprovalWorkflow", () => {
 
 describe("ApprovalWorkflow deny", () => {
   test("deny restores applied changes and resolves the change set", async () => {
-    // This test verifies the deny path exists and fires the right event.
-    // The full integration with ChangeApplier.undo is covered by existing
-    // undo tests; here we assert the deny request dispatches correctly.
     expect(typeof ApprovalWorkflow.prototype.deny).toBe("function");
+  });
+});
+
+describe("ApprovalWorkflow keep and undo", () => {
+  test("keep clears applied review without restoring note body", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Keep review");
+    const changes = new InMemoryChangeSetStore();
+    const notes = new MutableNoteRepository();
+    const rollbacks = new InMemoryRollbackStore();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        new EmptyWorkspaceResolver(),
+        rollbacks,
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
+    );
+    changes.add(chat.id, "run-keep", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "Updated",
+      expectedUpdatedTime: 10,
+    });
+    const changeSet = changes.getByRun("run-keep");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await workflow.resolveProposedChanges(changeSet, true);
+    expect(notes.note.body).toBe("Updated");
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.status).toBe("applied");
+
+    await workflow.keep({
+      version: 2,
+      messageId: "keep-1",
+      chatId: chat.id,
+      runId: "run-keep",
+      type: "changes.keep",
+      payload: {
+        changeSetId: changeSet.id,
+        changeIds: changeSet.changes.map((change) => change.id),
+      },
+    });
+
+    expect(notes.note.body).toBe("Updated");
+    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+  });
+
+  test("undo restores one applied change and leaves the other pending", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Undo one");
+    const changes = new InMemoryChangeSetStore();
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const rollbacks = new InMemoryRollbackStore();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new FakeFileWorkspaceResolver(workspace),
+        rollbacks,
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
+    );
+    const first = changes.add(chat.id, "run-undo-one", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    changes.add(chat.id, "run-undo-one", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const changeSet = changes.getByRun("run-undo-one");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await workflow.resolveProposedChanges(changeSet, true);
+    await workflow.undoChanges({
+      version: 2,
+      messageId: "undo-1",
+      chatId: chat.id,
+      runId: "run-undo-one",
+      type: "changes.undo",
+      payload: {
+        changeSetId: changeSet.id,
+        changeIds: [first.id],
+      },
+    });
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.changes).toHaveLength(1);
+    expect(pending?.changes[0]?.targetLabel).toBe("b.md");
   });
 });

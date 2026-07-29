@@ -39,10 +39,7 @@ export function toActiveChat(
     context: chat.context,
     externalRoot: chat.externalRoot,
     pendingChangeSet: pending
-      ? toChangeSetView(
-          pending,
-          applyTokenForPending?.(pending.id) ?? "",
-        )
+      ? toChangeSetView(pending, applyTokenForPending?.(pending.id) ?? "")
       : null,
     runSummaries: chat.runSummaries,
   };
@@ -73,12 +70,19 @@ function toChangeView(
     after: change.after,
     diff: change.diff,
     status: change.status,
+    undoable: isChangeUndoable(change),
     ...(change.message ? { message: change.message } : {}),
   };
   if (change.kind === "file") {
     return { ...base, operation: "replace" as const };
   }
   return { ...base, operation: change.operation };
+}
+
+function isChangeUndoable(change: ProposedChange): boolean {
+  if (change.status !== "applied") return false;
+  if (change.kind === "file") return true;
+  return change.operation === "update";
 }
 
 function changeTargetId(change: ProposedChange): string {

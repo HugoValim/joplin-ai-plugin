@@ -18,6 +18,9 @@ export function App(): JSX.Element {
   const { state } = controller;
   const activeChat = state.snapshot.activeChat;
   const pendingChanges = activeChat?.pendingChangeSet ?? null;
+  const hasProposedPending = Boolean(
+    pendingChanges?.changes.some((change) => change.status === "proposed"),
+  );
   const hasActivity = Boolean(
     state.tools.length || state.plan.length || state.progress || state.failure,
   );
@@ -27,13 +30,13 @@ export function App(): JSX.Element {
       plan={state.plan}
       progress={state.progress}
       failure={state.failure}
-      canRetry={Boolean(state.failure && !state.busy && !pendingChanges)}
+      canRetry={Boolean(state.failure && !state.busy && !hasProposedPending)}
       onRetry={controller.retry}
     />
   ) : null;
-  // Composer stays editable while busy (queue follow-ups); ChangeReview still locks it.
-  const shellLocked = state.busy || Boolean(pendingChanges);
-  const composerDisabled = Boolean(pendingChanges);
+  // Composer stays editable while busy (queue follow-ups); proposed ChangeReview locks it.
+  const shellLocked = state.busy || hasProposedPending;
+  const composerDisabled = hasProposedPending;
 
   return (
     <main className={`app-shell${pendingChanges ? " has-review" : ""}`}>
@@ -64,6 +67,7 @@ export function App(): JSX.Element {
           activeNote={state.activeNote}
           secretNotebookIds={state.snapshot.secretNotebookIds}
           disabled={shellLocked}
+          compact={Boolean(pendingChanges)}
           onUpdate={controller.updateContext}
           onToggleAttached={controller.toggleAttachedNote}
           onSelectFolder={controller.selectFolder}
@@ -106,6 +110,10 @@ export function App(): JSX.Element {
             onDiscard={controller.discardChanges}
             onDeny={controller.denyChanges}
             onOpenReview={controller.openReview}
+            onKeep={controller.keepChange}
+            onKeepAll={controller.keepAllChanges}
+            onUndoChange={controller.undoChange}
+            onUndoAll={controller.undoAllChanges}
           />
         ) : null}
       </div>
@@ -121,7 +129,11 @@ export function App(): JSX.Element {
         draft={controller.draft}
         busy={state.busy}
         disabled={composerDisabled}
-        phase={pendingChanges ? "Resolve proposed changes to continue" : state.phase}
+        phase={
+          hasProposedPending
+            ? "Resolve proposed changes to continue"
+            : state.phase
+        }
         focusSequence={state.focusSequence}
         lastRunId={state.lastRunId}
         lastUsage={state.lastUsage}

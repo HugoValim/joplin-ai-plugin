@@ -52,8 +52,18 @@ describe("panel protocol", () => {
       },
     ],
     ["folder.select", {}],
-    ["changes.apply", { changeSetId: "changes-1", acceptedIds: ["change-1"], applyToken: "a".repeat(64) }],
+    [
+      "changes.apply",
+      {
+        changeSetId: "changes-1",
+        acceptedIds: ["change-1"],
+        applyToken: "a".repeat(64),
+      },
+    ],
     ["changes.discard", { changeSetId: "changes-1" }],
+    ["changes.deny", { changeSetId: "changes-1" }],
+    ["changes.keep", { changeSetId: "changes-1", changeIds: ["change-1"] }],
+    ["changes.undo", { changeSetId: "changes-1", changeIds: ["change-1"] }],
     ["review.open", { changeSetId: "changes-1" }],
     ["run.undo", { targetRunId: "run-old" }],
     ["note.open", { noteId: "note-1" }],
@@ -157,7 +167,10 @@ describe("plugin protocol", () => {
       "tool.completed",
       { toolCallId: "tool-1", name: "read_note", ok: true, summary: "Read" },
     ],
-    ["changes.proposed", { changeSetId: "changes-1", applyToken: "f".repeat(64), changes: [] }],
+    [
+      "changes.proposed",
+      { changeSetId: "changes-1", applyToken: "f".repeat(64), changes: [] },
+    ],
     ["run.progress", { current: 1, total: 2, label: "Reviewing" }],
     [
       "run.plan",

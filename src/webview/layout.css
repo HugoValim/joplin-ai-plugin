@@ -222,6 +222,14 @@
   color: var(--joplin-color2);
 }
 
+.context-summary-compact > summary {
+  padding: 3px 5px;
+}
+
+.context-summary-compact .context-chip {
+  max-width: 140px;
+}
+
 .context-summary > summary {
   display: flex;
   min-width: 0;

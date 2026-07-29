@@ -380,7 +380,11 @@ function isConsistentChat(chat: PersistedChat, expectedId: string): boolean {
   const pending = chat.pendingChangeSet;
   return (
     chat.id === expectedId &&
-    (!pending || (pending.chatId === chat.id && pending.status === "proposed"))
+    (!pending ||
+      (pending.chatId === chat.id &&
+        (pending.status === "proposed" ||
+          pending.status === "applied" ||
+          pending.status === "partial")))
   );
 }
 
@@ -388,6 +392,6 @@ function assertConsistentChat(chat: PersistedChat): void {
   if (isConsistentChat(chat, chat.id)) return;
   throw new DomainError(
     "VALIDATION",
-    `Invalid chat ${chat.id} pending change-set ownership; expected matching chat ID and proposed status`,
+    `Invalid chat ${chat.id} pending change-set ownership; expected matching chat ID and proposed, applied, or partial status`,
   );
 }

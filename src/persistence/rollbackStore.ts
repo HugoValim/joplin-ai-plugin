@@ -13,6 +13,7 @@ const IdentifierSchema = Type.String({
 const FileItemSchema = Type.Object(
   {
     kind: Type.Literal("file"),
+    changeId: IdentifierSchema,
     chatId: IdentifierSchema,
     snapshot: Type.Object(
       {
@@ -30,6 +31,7 @@ const FileItemSchema = Type.Object(
 const NoteItemSchema = Type.Object(
   {
     kind: Type.Literal("note"),
+    changeId: IdentifierSchema,
     noteId: IdentifierSchema,
     originalBody: Type.String({ maxLength: 10_000_000 }),
     expectedAppliedUpdatedTime: Type.Number({ minimum: 0 }),

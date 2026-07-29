@@ -504,7 +504,11 @@ describe("ChatController", () => {
     expect(
       panel.events.some((event) => event.type === "changes.proposed"),
     ).toBe(false);
-    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.status).toBe("applied");
+    expect(
+      pending?.changes.every((change) => change.status === "applied"),
+    ).toBe(true);
   });
 
   test("requires trusted confirmation before enabling automatic apply", async () => {
@@ -576,6 +580,7 @@ describe("ChatController", () => {
     expect(dialogs.messages[0]).toContain(
       "Deletions still require manual ChangeReview",
     );
+    expect(dialogs.messages[0]).toContain("Keep/Undo");
   });
 
   test("keeps endpoint status online through a provider error during a busy run", async () => {
@@ -725,7 +730,6 @@ describe("ChatController", () => {
     provider.release();
     await run;
   });
-
 });
 
 async function waitForSnapshotStatus(

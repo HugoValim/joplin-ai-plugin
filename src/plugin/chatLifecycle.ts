@@ -93,8 +93,25 @@ export async function persistRunOutcome(
     messages: appendAssistantMessage(current, outcome, citations),
     references: [...current.references, ...citations],
     runSummaries: [...current.runSummaries, toRunSummary(runId, outcome)],
-    pendingChangeSet: outcome.changeSet,
+    pendingChangeSet: nextPendingChangeSet(
+      current.pendingChangeSet,
+      outcome.changeSet,
+    ),
   });
+}
+
+function nextPendingChangeSet(
+  current: PersistedChat["pendingChangeSet"],
+  outcome: NonNullable<PersistedChat["pendingChangeSet"]> | null,
+): PersistedChat["pendingChangeSet"] {
+  if (outcome) return outcome;
+  if (
+    current &&
+    (current.status === "applied" || current.status === "partial")
+  ) {
+    return current;
+  }
+  return null;
 }
 
 function appendAssistantMessage(

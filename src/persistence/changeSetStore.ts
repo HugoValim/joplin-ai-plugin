@@ -314,6 +314,11 @@ export interface ChangeSetStore {
     changeSetId: string,
     results: readonly ProposedChange[],
   ): ChangeSet;
+  removeChanges(
+    changeSetId: string,
+    changeIds: readonly string[],
+    scope: ChangeSetScope,
+  ): ChangeSet | null;
   attachReviewNote(changeSetId: string, reviewNoteId: string): ChangeSet;
   restore(changeSet: ChangeSet): void;
 }
@@ -406,6 +411,45 @@ export class InMemoryChangeSetStore implements ChangeSetStore {
       status: allApplied ? "applied" : "partial",
       changes: [...results],
     };
+    this.sets.set(changeSetId, next);
+    return cloneChangeSet(next);
+  }
+
+  /**
+   * Drops reviewed items from an applied/partial set after Keep or Undo.
+   *
+   * @example store.removeChanges(changeSetId, ["change-1"], scope)
+   */
+  public removeChanges(
+    changeSetId: string,
+    changeIds: readonly string[],
+    scope: ChangeSetScope,
+  ): ChangeSet | null {
+    const current = this.getScoped(changeSetId, scope);
+    if (current.status !== "applied" && current.status !== "partial") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(changeSetId)} has status ${current.status}; expected applied or partial status`,
+      );
+    }
+    const remove = new Set(changeIds);
+    const remaining = current.changes.filter(
+      (change) => !remove.has(change.id),
+    );
+    if (remaining.length === current.changes.length) {
+      const unknown = changeIds.find(
+        (changeId) => !current.changes.some((change) => change.id === changeId),
+      );
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown kept change ${safeValue(unknown)}; expected an ID in change set ${changeSetId}`,
+      );
+    }
+    if (remaining.length === 0) {
+      this.sets.delete(changeSetId);
+      return null;
+    }
+    const next: ChangeSet = { ...current, changes: remaining };
     this.sets.set(changeSetId, next);
     return cloneChangeSet(next);
   }

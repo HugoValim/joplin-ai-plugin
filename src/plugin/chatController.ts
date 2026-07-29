@@ -38,13 +38,10 @@ import type { CommandPort, DialogPort, ProviderFactory } from "./types";
 import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
 import type { SecretNotebookStore } from "../persistence/secretNotebookStore";
-import {
-  NoOpReviewNotePort,
-  type ReviewNotePort,
-} from "./reviewNoteService";
+import { NoOpReviewNotePort, type ReviewNotePort } from "./reviewNoteService";
 
 const AUTO_APPLY_WARNING =
-  "Security warning: Bypass permissions will apply every model-proposed non-delete change without review. Deletions still require manual ChangeReview. Conflicts are still blocked and Undo remains available where supported. Enable for this chat?";
+  "Security warning: Bypass permissions will auto-apply every model-proposed non-delete change, then keep an inline Keep/Undo review in the sidebar. Deletions still require manual ChangeReview before apply. Conflicts are still blocked. Enable for this chat?";
 
 export class ChatController {
   private activeChatId: string | null = null;
@@ -158,6 +155,14 @@ export class ChatController {
         await this.approvals.deny(request);
         await this.sendSnapshot();
         return;
+      case "changes.keep":
+        await this.approvals.keep(request);
+        await this.sendSnapshot();
+        return;
+      case "changes.undo":
+        await this.approvals.undoChanges(request);
+        await this.sendSnapshot();
+        return;
       case "review.open":
         await this.approvals.openReview(request);
         await this.sendSnapshot();
@@ -247,78 +252,87 @@ export class ChatController {
   private async submit(
     request: Extract<PanelRequest, { type: "chat.submit" }>,
   ): Promise<void> {
-    await this.startRun(request.chatId, request.runId, async (deltas, signal) => {
-      const chat = await requireChat(this.chats, request.chatId);
-      const saved = await this.appendUserMessage(chat, request.payload.text);
-      await this.executeRunWithChat(
-        request.chatId,
-        request.runId,
-        saved,
-        request.payload.text,
-        deltas,
-        signal,
-      );
-    });
+    await this.startRun(
+      request.chatId,
+      request.runId,
+      async (deltas, signal) => {
+        const chat = await requireChat(this.chats, request.chatId);
+        const saved = await this.appendUserMessage(chat, request.payload.text);
+        await this.executeRunWithChat(
+          request.chatId,
+          request.runId,
+          saved,
+          request.payload.text,
+          deltas,
+          signal,
+        );
+      },
+    );
   }
 
   private async retry(
     request: Extract<PanelRequest, { type: "chat.retry" }>,
   ): Promise<void> {
-    await this.startRun(request.chatId, request.runId, async (deltas, signal) => {
-      const chat = await requireChat(this.chats, request.chatId);
-      const userMessage = lastUserMessage(chat);
-      if (!userMessage) {
-        throw new DomainError(
-          "NOT_AVAILABLE",
-          `Chat ${safeValue(chat.id)} has no user message to retry; expected at least one user turn`,
+    await this.startRun(
+      request.chatId,
+      request.runId,
+      async (deltas, signal) => {
+        const chat = await requireChat(this.chats, request.chatId);
+        const userMessage = lastUserMessage(chat);
+        if (!userMessage) {
+          throw new DomainError(
+            "NOT_AVAILABLE",
+            `Chat ${safeValue(chat.id)} has no user message to retry; expected at least one user turn`,
+          );
+        }
+        await this.executeRunWithChat(
+          request.chatId,
+          request.runId,
+          chat,
+          userMessage.content,
+          deltas,
+          signal,
         );
-      }
-      await this.executeRunWithChat(
-        request.chatId,
-        request.runId,
-        chat,
-        userMessage.content,
-        deltas,
-        signal,
-      );
-    });
+      },
+    );
   }
 
   private async regenerate(
     request: Extract<PanelRequest, { type: "chat.regenerate" }>,
   ): Promise<void> {
-    await this.startRun(request.chatId, request.runId, async (deltas, signal) => {
-      const chat = await requireChat(this.chats, request.chatId);
-      const truncated = truncateForRegenerate(
-        chat,
-        request.payload.messageId,
-      );
-      await this.chats.save(truncated);
-      const userMessage = lastUserMessage(truncated);
-      if (!userMessage) {
-        throw new DomainError(
-          "NOT_AVAILABLE",
-          `Chat ${safeValue(chat.id)} has no user message before regenerate target; expected a prior user turn`,
+    await this.startRun(
+      request.chatId,
+      request.runId,
+      async (deltas, signal) => {
+        const chat = await requireChat(this.chats, request.chatId);
+        const truncated = truncateForRegenerate(
+          chat,
+          request.payload.messageId,
         );
-      }
-      await this.executeRunWithChat(
-        request.chatId,
-        request.runId,
-        truncated,
-        userMessage.content,
-        deltas,
-        signal,
-      );
-    });
+        await this.chats.save(truncated);
+        const userMessage = lastUserMessage(truncated);
+        if (!userMessage) {
+          throw new DomainError(
+            "NOT_AVAILABLE",
+            `Chat ${safeValue(chat.id)} has no user message before regenerate target; expected a prior user turn`,
+          );
+        }
+        await this.executeRunWithChat(
+          request.chatId,
+          request.runId,
+          truncated,
+          userMessage.content,
+          deltas,
+          signal,
+        );
+      },
+    );
   }
 
   private async startRun(
     chatId: string,
     runId: string,
-    execute: (
-      deltas: DeltaBatcher,
-      abortSignal: AbortSignal,
-    ) => Promise<void>,
+    execute: (deltas: DeltaBatcher, abortSignal: AbortSignal) => Promise<void>,
   ): Promise<void> {
     const abortController = new AbortController();
     if (!this.activeRuns.tryStart(chatId, runId, abortController)) {

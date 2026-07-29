@@ -187,6 +187,44 @@ const ChangesDenySchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ChangesKeepSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.keep"),
+    payload: Type.Object(
+      {
+        changeSetId: IdentifierSchema,
+        changeIds: Type.Array(IdentifierSchema, {
+          minItems: 1,
+          maxItems: 50,
+          uniqueItems: true,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ChangesUndoSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.undo"),
+    payload: Type.Object(
+      {
+        changeSetId: IdentifierSchema,
+        changeIds: Type.Array(IdentifierSchema, {
+          minItems: 1,
+          maxItems: 50,
+          uniqueItems: true,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const ReviewOpenSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -283,6 +321,8 @@ const PanelRequestSchema = Type.Union([
   ChangesApplySchema,
   ChangesDiscardSchema,
   ChangesDenySchema,
+  ChangesKeepSchema,
+  ChangesUndoSchema,
   ReviewOpenSchema,
   RunUndoSchema,
   NoteOpenSchema,
@@ -324,10 +364,7 @@ const ContextSettingsSchema = Type.Object(
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
     autoApply: Type.Boolean(),
-    interactionMode: Type.Union([
-      Type.Literal("ask"),
-      Type.Literal("agent"),
-    ]),
+    interactionMode: Type.Union([Type.Literal("ask"), Type.Literal("agent")]),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,
@@ -392,6 +429,7 @@ const ChangeViewSchema = Type.Object(
       Type.Literal("skipped"),
     ]),
     message: Type.Optional(Type.String({ maxLength: 1_000 })),
+    undoable: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -400,7 +438,7 @@ const ChangeSetViewSchema = Type.Object(
   {
     changeSetId: IdentifierSchema,
     runId: Type.Optional(IdentifierSchema),
-    applyToken: Type.String({ minLength: 32, maxLength: 128 }),
+    applyToken: Type.String({ minLength: 0, maxLength: 128 }),
     reviewNoteId: Type.Optional(IdentifierSchema),
     changes: Type.Array(ChangeViewSchema, { maxItems: 50 }),
   },

@@ -52,6 +52,10 @@ export interface SidebarController {
   readonly applyChanges: () => void;
   readonly discardChanges: () => void;
   readonly denyChanges: () => void;
+  readonly keepChange: (changeId: string) => void;
+  readonly keepAllChanges: () => void;
+  readonly undoChange: (changeId: string) => void;
+  readonly undoAllChanges: () => void;
   readonly openReview: () => void;
   readonly undo: () => void;
   readonly retry: () => void;
@@ -95,7 +99,6 @@ export function useSidebarController(): SidebarController {
   return { state, draft, acceptedIds, setDraft, ...actions };
 }
 
-
 function useQueuedFollowUp(
   state: SidebarState,
   dispatch: StateDispatch,
@@ -115,10 +118,10 @@ function useQueuedFollowUp(
   }, [state.busy, state.queuedMessage, activeChatId]);
 
   // When a run finishes (busy false) and there is a queued message with no
-  // pending changes, load it into the draft and submit.
+  // proposed changes, load it into the draft and submit.
   useEffect(() => {
     if (state.busy || !state.queuedMessage) return;
-    if (state.snapshot.activeChat?.pendingChangeSet) return;
+    if (hasProposedPending(state.snapshot.activeChat?.pendingChangeSet)) return;
     if (submissionLock.current) return;
     const text = state.queuedMessage;
     dispatch({ type: "clear-queue" });
@@ -316,6 +319,14 @@ function createActions(
     applyChanges: () => applyChanges(input),
     discardChanges: () => discardChanges(input),
     denyChanges: () => denyChanges(input),
+    keepChange: (changeId) => keepChanges(input, [changeId]),
+    keepAllChanges: () =>
+      keepChanges(
+        input,
+        input.pending?.changes.map((change) => change.id) ?? [],
+      ),
+    undoChange: (changeId) => undoSelectedChanges(input, [changeId]),
+    undoAllChanges: () => denyChanges(input),
     openReview: () => openReview(input),
     undo: () => undoRun(input),
     retry: () => retryRun(input),
@@ -345,7 +356,7 @@ function useSubmitAction(
       !text ||
       !activeChat ||
       state.busy ||
-      activeChat.pendingChangeSet ||
+      hasProposedPending(activeChat.pendingChangeSet) ||
       submissionLock.current
     )
       return;
@@ -517,6 +528,49 @@ function denyChanges(input: ActionInput): void {
   });
 }
 
+function keepChanges(input: ActionInput, changeIds: readonly string[]): void {
+  if (!input.pending || changeIds.length === 0) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Keeping changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.keep",
+    payload: {
+      changeSetId: input.pending.changeSetId,
+      changeIds: [...changeIds],
+    },
+  });
+}
+
+function undoSelectedChanges(
+  input: ActionInput,
+  changeIds: readonly string[],
+): void {
+  if (!input.pending || changeIds.length === 0) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Undoing changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.undo",
+    payload: {
+      changeSetId: input.pending.changeSetId,
+      changeIds: [...changeIds],
+    },
+  });
+}
+
 function openReview(input: ActionInput): void {
   if (!input.pending) return;
   const runId = input.pending.runId ?? input.pending.changeSetId;
@@ -546,9 +600,19 @@ function undoRun(input: ActionInput): void {
 }
 
 function retryRun(input: ActionInput): void {
-  if (!input.activeChat || input.state.busy || input.pending) return;
+  if (
+    !input.activeChat ||
+    input.state.busy ||
+    hasProposedPending(input.pending)
+  )
+    return;
   const runId = identifier();
-  input.dispatch({ type: "begin", runId, phase: "Retrying", submission: false });
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Retrying",
+    submission: false,
+  });
   input.send({
     ...input.envelope(),
     runId,
@@ -620,6 +684,14 @@ function postRequest(
 function isTerminalEvent(event: PluginEvent): boolean {
   return ["changes.proposed", "run.failed", "run.completed"].includes(
     event.type,
+  );
+}
+
+function hasProposedPending(
+  pending: ActiveChat["pendingChangeSet"] | null | undefined,
+): boolean {
+  return Boolean(
+    pending?.changes.some((change) => change.status === "proposed"),
   );
 }
 

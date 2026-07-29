@@ -13,7 +13,7 @@ export function renderReviewDiffDocument(input: {
 }): string {
   const { chatTitle, changeSet } = input;
   const lines: string[] = [
-    "> **View-only review document.** Apply or discard changes in the AI sidebar.",
+    "> **View-only review document.** Keep, undo, apply, or discard in the AI sidebar. Diffs are easiest to read here in the note editor.",
     "",
     `Chat: **${escapeInline(chatTitle)}**`,
     `Changes: **${changeSet.changes.length}**`,
