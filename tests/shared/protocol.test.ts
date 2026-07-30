@@ -67,6 +67,7 @@ describe("panel protocol", () => {
     ["review.open", { changeSetId: "changes-1" }],
     ["run.undo", { targetRunId: "run-old" }],
     ["note.open", { noteId: "note-1" }],
+    ["link.open", { url: "https://example.test/doc" }],
     ["secrets.mark", { notebookId: "nb-1" }],
     ["secrets.unmark", { notebookId: "nb-1" }],
   ])("accepts %s requests", (type, payload) => {

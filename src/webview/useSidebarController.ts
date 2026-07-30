@@ -42,6 +42,7 @@ export interface SidebarController {
   readonly markSecretNotebook: (notebookId: string) => void;
   readonly unmarkSecretNotebook: (notebookId: string) => void;
   readonly openNote: (noteId: string) => void;
+  readonly openLink: (url: string) => void;
   readonly runAssistantAction: (
     messageId: string,
     action: AssistantAction,
@@ -310,6 +311,12 @@ function createActions(
         ...input.envelope(),
         type: "note.open",
         payload: { noteId },
+      }),
+    openLink: (url) =>
+      input.send({
+        ...input.envelope(),
+        type: "link.open",
+        payload: { url },
       }),
     runAssistantAction: (messageId, action) =>
       runAssistantAction(input, messageId, action),

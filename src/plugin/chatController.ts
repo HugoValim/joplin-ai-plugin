@@ -16,6 +16,7 @@ import type {
 } from "../persistence/chatStore";
 import { DomainError, safeValue } from "../shared/errors";
 import type { PanelRequest } from "../shared/protocol";
+import { isSafeExternalMarkdownUrl } from "../shared/safeExternalUrl";
 import type { ToolRegistry, ToolExecutionResult } from "../tools/toolRegistry";
 import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
@@ -173,6 +174,15 @@ export class ChatController {
         return;
       case "note.open":
         await this.commands.execute("openNote", request.payload.noteId);
+        return;
+      case "link.open":
+        if (!isSafeExternalMarkdownUrl(request.payload.url)) {
+          throw new DomainError(
+            "SECURITY",
+            `expected an absolute http(s) URL, got ${safeValue(request.payload.url)}`,
+          );
+        }
+        await this.commands.execute("openItem", request.payload.url);
         return;
       case "assistant.action":
         this.events.post(

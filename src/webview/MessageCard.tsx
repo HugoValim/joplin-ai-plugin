@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { safeMarkdownUrlTransform } from "./markdownSecurity";
+import { markdownLinkComponents } from "./markdownLinkComponents";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 import { RunTimeline } from "./RunTimeline";
 
@@ -20,6 +21,7 @@ interface MessageCardProps {
   readonly runSummary: RunSummary | null;
   readonly canRegenerate: boolean;
   readonly onOpenNote: (noteId: string) => void;
+  readonly onOpenLink: (url: string) => void;
   readonly onAssistantAction: (
     messageId: string,
     action: AssistantAction,
@@ -41,6 +43,7 @@ export const MessageCard = memo(function MessageCard(
     position,
     total,
     onOpenNote,
+    onOpenLink,
     onAssistantAction,
     noteActionsDisabled,
   } = props;
@@ -93,6 +96,7 @@ export const MessageCard = memo(function MessageCard(
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSanitize]}
           urlTransform={safeMarkdownUrlTransform}
+          components={markdownLinkComponents(onOpenLink)}
         >
           {message.content}
         </ReactMarkdown>

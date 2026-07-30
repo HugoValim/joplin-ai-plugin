@@ -31,7 +31,7 @@
 
 .message {
   width: fit-content;
-  max-width: min(94%, 72ch);
+  max-width: 94%;
   flex: 0 0 auto;
   border: 1px solid var(--joplin-divider-color);
   border-radius: 10px;
@@ -42,7 +42,7 @@
 }
 
 .message-user {
-  max-width: min(86%, 56ch);
+  max-width: 86%;
   align-self: flex-end;
   border-left: 3px solid var(--joplin-color-accent);
   background: var(--joplin-background-color);
@@ -75,6 +75,16 @@
 
 .message-content > :last-child {
   margin-bottom: 0;
+}
+
+.message-content a.markdown-link {
+  color: var(--joplin-color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-content a.markdown-link:visited {
+  color: var(--joplin-color-accent);
 }
 
 .message-content p,
@@ -209,7 +219,7 @@
 .run-activity {
   display: grid;
   gap: 4px;
-  width: min(100%, 72ch);
+  width: 100%;
   border-left: 3px solid var(--joplin-color-accent);
   border-radius: 7px;
   background: var(--joplin-background-color2);

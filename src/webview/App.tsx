@@ -86,6 +86,7 @@ export function App(): JSX.Element {
           busy={state.busy}
           submissionSequence={state.submissionSequence}
           onOpenNote={controller.openNote}
+          onOpenLink={controller.openLink}
           onAssistantAction={controller.runAssistantAction}
           onRegenerate={controller.regenerate}
           onSuggestion={controller.useSuggestion}
