@@ -128,6 +128,28 @@ const ContextUpdateSchema = Type.Object(
           maxItems: 50,
           uniqueItems: true,
         }),
+        attachedNotebookIds: Type.Optional(
+          Type.Array(IdentifierSchema, {
+            maxItems: 20,
+            uniqueItems: true,
+          }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ContextSearchSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.search"),
+    payload: Type.Object(
+      {
+        requestId: IdentifierSchema,
+        query: Type.String({ maxLength: 200 }),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
       },
       { additionalProperties: false },
     ),
@@ -334,6 +356,7 @@ const PanelRequestSchema = Type.Union([
   ChatRegenerateSchema,
   RunCancelSchema,
   ContextUpdateSchema,
+  ContextSearchSchema,
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
@@ -387,6 +410,12 @@ const ContextSettingsSchema = Type.Object(
       maxItems: 50,
       uniqueItems: true,
     }),
+    attachedNotebookIds: Type.Optional(
+      Type.Array(IdentifierSchema, {
+        maxItems: 20,
+        uniqueItems: true,
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -560,6 +589,30 @@ const ComposerPrefillSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const MentionHitSchema = Type.Object(
+  {
+    kind: Type.Union([Type.Literal("note"), Type.Literal("notebook")]),
+    id: IdentifierSchema,
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+
+const ContextSearchResultsSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.search.results"),
+    payload: Type.Object(
+      {
+        requestId: IdentifierSchema,
+        hits: Type.Array(MentionHitSchema, { maxItems: 40 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const RunStartedSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -703,6 +756,7 @@ const PluginEventSchema = Type.Union([
   StateSnapshotSchema,
   WorkspaceChangedSchema,
   ComposerPrefillSchema,
+  ContextSearchResultsSchema,
   RunStartedSchema,
   AssistantDeltaSchema,
   ToolStartedSchema,

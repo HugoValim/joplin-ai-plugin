@@ -5,6 +5,7 @@ export interface ContextSettings {
   readonly activeNote: boolean;
   readonly vault: boolean;
   readonly attachedNoteIds: readonly string[];
+  readonly attachedNotebookIds?: readonly string[];
 }
 
 export interface ActiveNoteContextSource {
@@ -21,6 +22,9 @@ export interface NoteRetrievalPort {
 }
 
 export type AttachedNoteLoader = (noteId: string) => Promise<NoteRecord | null>;
+export type NotebookNoteIdsLoader = (
+  notebookId: string,
+) => Promise<readonly string[]>;
 
 export interface ContextBuildInput {
   readonly systemPrompt: string;
@@ -75,6 +79,8 @@ export class ContextBuilder {
     private readonly activeSource: ActiveNoteContextSource,
     private readonly retriever: NoteRetrievalPort,
     private readonly loadAttachedNote: AttachedNoteLoader,
+    private readonly loadNotebookNoteIds: NotebookNoteIdsLoader = () =>
+      Promise.resolve([]),
   ) {}
 
   /**
@@ -85,11 +91,12 @@ export class ContextBuilder {
   public async build(input: ContextBuildInput): Promise<BuiltContext> {
     const contextBlocks: string[] = [];
     const citations: ContextCitation[] = [];
-    const readableNoteIds = new Set<string>(input.settings.attachedNoteIds);
+    const attachedIds = await this.resolveAttachedNoteIds(input);
+    const readableNoteIds = new Set<string>(attachedIds);
     const active = await this.addActiveContext(input, contextBlocks, citations);
     if (active) readableNoteIds.add(active.id);
     await this.addAttachedContext(
-      input,
+      attachedIds,
       active?.id ?? null,
       contextBlocks,
       citations,
@@ -124,14 +131,25 @@ export class ContextBuilder {
     return note;
   }
 
-  private async addAttachedContext(
+  private async resolveAttachedNoteIds(
     input: ContextBuildInput,
+  ): Promise<readonly string[]> {
+    const ids = [...input.settings.attachedNoteIds];
+    for (const notebookId of input.settings.attachedNotebookIds ?? []) {
+      if (input.secretNotebookIds.has(notebookId)) continue;
+      ids.push(...(await this.loadNotebookNoteIds(notebookId)));
+    }
+    return [...new Set(ids)].slice(0, 50);
+  }
+
+  private async addAttachedContext(
+    attachedNoteIds: readonly string[],
     activeNoteId: string | null,
     blocks: string[],
     citations: ContextCitation[],
   ): Promise<void> {
     let remaining = 100_000;
-    for (const noteId of new Set(input.settings.attachedNoteIds)) {
+    for (const noteId of attachedNoteIds) {
       if (noteId === activeNoteId || remaining <= 0) continue;
       const note = await this.loadAttachedNote(noteId);
       if (!note) continue;

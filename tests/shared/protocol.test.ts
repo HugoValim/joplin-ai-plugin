@@ -52,6 +52,7 @@ describe("panel protocol", () => {
       },
     ],
     ["folder.select", {}],
+    ["context.search", { requestId: "req-1", query: "gui", limit: 10 }],
     [
       "changes.apply",
       {

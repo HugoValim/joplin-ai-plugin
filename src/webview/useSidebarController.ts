@@ -15,6 +15,7 @@ import { parseWebviewPluginEvent } from "./pluginEventTransport";
 import {
   INITIAL_SIDEBAR_STATE,
   sidebarReducer,
+  type MentionHit,
   type SidebarState,
 } from "./sidebarState";
 
@@ -64,6 +65,9 @@ export interface SidebarController {
   readonly renameChat: (title: string) => void;
   readonly selectModel: (model: string) => void;
   readonly useSuggestion: (suggestion: string) => void;
+  readonly mentionHits: readonly MentionHit[];
+  readonly onMentionQueryChange: (query: string | null) => void;
+  readonly attachMention: (hit: MentionHit) => void;
 }
 
 /**
@@ -344,6 +348,9 @@ function createActions(
       input.setDraft(suggestion);
       input.dispatch({ type: "focus" });
     },
+    mentionHits: input.state.mentionHits,
+    onMentionQueryChange: (query) => requestMentionSearch(input, query),
+    attachMention: (hit) => attachMention(input, hit),
   };
 }
 
@@ -420,10 +427,63 @@ function updateContext(
   next: Partial<ActiveChat["context"]>,
 ): void {
   if (!input.activeChat) return;
+  const context = input.activeChat.context;
   input.send({
     ...input.envelope(),
     type: "context.update",
-    payload: { ...input.activeChat.context, ...next },
+    payload: {
+      ...context,
+      attachedNotebookIds: context.attachedNotebookIds ?? [],
+      ...next,
+    },
+  });
+}
+
+const MAX_ATTACHED_NOTES = 50;
+const MAX_ATTACHED_NOTEBOOKS = 20;
+
+function attachMention(input: ActionInput, hit: MentionHit): void {
+  if (!input.activeChat) return;
+  const context = input.activeChat.context;
+  if (hit.kind === "note") {
+    updateContext(input, {
+      attachedNoteIds: addMentionId(
+        context.attachedNoteIds,
+        hit.id,
+        MAX_ATTACHED_NOTES,
+      ),
+    });
+    return;
+  }
+  updateContext(input, {
+    attachedNotebookIds: addMentionId(
+      context.attachedNotebookIds ?? [],
+      hit.id,
+      MAX_ATTACHED_NOTEBOOKS,
+    ),
+  });
+}
+
+function addMentionId(
+  ids: readonly string[],
+  id: string,
+  max: number,
+): string[] {
+  if (ids.includes(id) || ids.length >= max) return [...ids];
+  return [...ids, id];
+}
+
+function requestMentionSearch(input: ActionInput, query: string | null): void {
+  if (query === null) {
+    input.dispatch({ type: "mention-query", requestId: null });
+    return;
+  }
+  const requestId = identifier();
+  input.dispatch({ type: "mention-query", requestId });
+  input.send({
+    ...input.envelope(),
+    type: "context.search",
+    payload: { requestId, query },
   });
 }
 

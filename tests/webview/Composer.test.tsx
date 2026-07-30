@@ -1,7 +1,10 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { Composer } from "../../src/webview/Composer";
+import {
+  Composer,
+  mentionHitFromDataTransfer,
+} from "../../src/webview/Composer";
 
 function composer(
   overrides: Partial<React.ComponentProps<typeof Composer>> = {},
@@ -18,10 +21,14 @@ function composer(
     onQueue: jest.fn(),
     disabled: false,
     history: [],
+    mentionHits: [],
     onDraftChange: jest.fn(),
     onSubmit: jest.fn(),
     onCancel: jest.fn(),
     onUndo: jest.fn(),
+    onMentionQueryChange: jest.fn(),
+    onMentionSelect: jest.fn(),
+    onReferenceDrop: jest.fn(),
     ...overrides,
   };
 }
@@ -119,12 +126,74 @@ describe("Composer", () => {
   });
 });
 
+describe("Composer mentions", () => {
+  test("typing @ requests mention hits and selecting one attaches it", () => {
+    const onMentionQueryChange = jest.fn();
+    const onMentionSelect = jest.fn();
+    const hit = { kind: "note" as const, id: "note-1", title: "My Note" };
+    const props = composer({
+      draft: "",
+      mentionHits: [hit],
+      onMentionQueryChange,
+      onMentionSelect,
+    });
+    render(<Composer {...props} />);
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+
+    fireEvent.change(input, { target: { value: "@" } });
+    expect(onMentionQueryChange).toHaveBeenCalledWith("");
+
+    fireEvent.click(screen.getByRole("button", { name: /My Note/ }));
+    expect(onMentionSelect).toHaveBeenCalledWith(hit);
+  });
+});
+
+function fakeDataTransfer(values: Record<string, string>): DataTransfer {
+  return {
+    getData: (type: string) => values[type] ?? "",
+  } as unknown as DataTransfer;
+}
+
+describe("mentionHitFromDataTransfer", () => {
+  test("parses a dragged note id into a note mention hit", () => {
+    const data = fakeDataTransfer({
+      "text/x-jop-note-ids": JSON.stringify(["note-123"]),
+    });
+    expect(mentionHitFromDataTransfer(data)).toEqual({
+      kind: "note",
+      id: "note-123",
+      title: "note-123",
+    });
+  });
+
+  test("parses a dragged notebook id into a notebook mention hit", () => {
+    const data = fakeDataTransfer({
+      "text/x-jop-folder-ids": JSON.stringify(["notebook-9"]),
+    });
+    expect(mentionHitFromDataTransfer(data)).toEqual({
+      kind: "notebook",
+      id: "notebook-9",
+      title: "notebook-9",
+    });
+  });
+
+  test("returns null when there is no recognizable payload", () => {
+    expect(mentionHitFromDataTransfer(fakeDataTransfer({}))).toBeNull();
+  });
+});
+
 describe("Composer token usage display", () => {
   test("shows k-formatted usage with context window when available", () => {
     render(
       <Composer
         {...composer({
-          lastUsage: { promptTokens: 12000, outputTokens: 1600, totalTokens: 13600 },
+          lastUsage: {
+            promptTokens: 12000,
+            outputTokens: 1600,
+            totalTokens: 13600,
+          },
           contextWindowMax: 128000,
         })}
       />,

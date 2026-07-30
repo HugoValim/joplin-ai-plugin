@@ -55,6 +55,12 @@ const ContextSchema = Type.Object(
       maxItems: 50,
       uniqueItems: true,
     }),
+    attachedNotebookIds: Type.Optional(
+      Type.Array(IdentifierSchema, {
+        maxItems: 20,
+        uniqueItems: true,
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -175,6 +181,7 @@ export class ChatStore {
         autoApply: false,
         interactionMode: "agent",
         attachedNoteIds: [],
+        attachedNotebookIds: [],
       },
       externalRoot: null,
       references: [],
@@ -355,6 +362,7 @@ function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
       ...chat.context,
       autoApply: chat.context.autoApply ?? false,
       interactionMode: chat.context.interactionMode ?? "agent",
+      attachedNotebookIds: chat.context.attachedNotebookIds ?? [],
     },
     parkedAppliedChangeSet: chat.parkedAppliedChangeSet ?? null,
   };
@@ -404,10 +412,7 @@ function isConsistentPending(
   );
 }
 
-function isConsistentParked(
-  parked: ChangeSet | null,
-  chatId: string,
-): boolean {
+function isConsistentParked(parked: ChangeSet | null, chatId: string): boolean {
   if (!parked) return true;
   return (
     parked.chatId === chatId &&

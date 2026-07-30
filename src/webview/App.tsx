@@ -142,10 +142,14 @@ export function App(): JSX.Element {
         queuedMessage={state.queuedMessage}
         onQueue={controller.queueMessage}
         history={composerHistory(activeChat?.messages ?? [])}
+        mentionHits={controller.mentionHits}
         onDraftChange={controller.setDraft}
         onSubmit={controller.submit}
         onCancel={controller.cancel}
         onUndo={controller.undo}
+        onMentionQueryChange={controller.onMentionQueryChange}
+        onMentionSelect={controller.attachMention}
+        onReferenceDrop={controller.attachMention}
       />
       <RunLiveRegion announcement={state.phase} />
     </main>

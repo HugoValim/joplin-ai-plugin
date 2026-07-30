@@ -17,7 +17,10 @@ import {
 } from "../persistence/adapters";
 import { ChatStore, type JsonFilePort } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
-import { SecretNotebookStore, type JsonFilePort as SecretNotebookJsonPort } from "../persistence/secretNotebookStore";
+import {
+  SecretNotebookStore,
+  type JsonFilePort as SecretNotebookJsonPort,
+} from "../persistence/secretNotebookStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
 import { registerAgentPlanTools } from "../tools/agentPlanTools";
 import { registerFileTools } from "../tools/fileTools";
@@ -75,6 +78,10 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
         return null;
       }
     },
+    async (notebookId) => {
+      const listed = await notes.listNotebookNotes(notebookId, 25);
+      return listed.map((note) => note.id);
+    },
   );
   const finder = new FastGlobCandidateFinder(fileSystem);
   const workspaces = new PerChatWorkspaceResolver(
@@ -117,6 +124,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     secretNotebooks,
     (config) => new OpenAiCompatibleProvider(config),
     new ReviewNoteService(notes, secretNotebooks, commands),
+    notes,
   );
   await panel.initialize((request) => controller.handle(request));
   await registerToggleSidebarShortcut(

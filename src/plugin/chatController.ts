@@ -17,6 +17,7 @@ import type {
 import { DomainError, safeValue } from "../shared/errors";
 import type { PanelRequest } from "../shared/protocol";
 import { isSafeExternalMarkdownUrl } from "../shared/safeExternalUrl";
+import { searchMentionHits, type MentionSearchPort } from "./mentionSearch";
 import type { ToolRegistry, ToolExecutionResult } from "../tools/toolRegistry";
 import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
@@ -71,6 +72,7 @@ export class ChatController {
     private readonly secretNotebooks: SecretNotebookStore,
     createProvider: ProviderFactory,
     reviewNotes: ReviewNotePort = new NoOpReviewNotePort(),
+    private readonly mentionSearch: MentionSearchPort | null = null,
   ) {
     this.providerConnector = new ProviderConnector(
       settings,
@@ -140,6 +142,9 @@ export class ChatController {
         return;
       case "context.update":
         await this.updateContext(request);
+        return;
+      case "context.search":
+        await this.searchContext(request);
         return;
       case "folder.select":
         await this.selectFolder(request.chatId);
@@ -618,6 +623,23 @@ export class ChatController {
     await this.checkEndpoint();
   }
 
+  private async searchContext(
+    request: Extract<PanelRequest, { type: "context.search" }>,
+  ): Promise<void> {
+    const hits = this.mentionSearch
+      ? await searchMentionHits(
+          this.mentionSearch,
+          request.payload.query,
+          this.secretNotebookIds,
+          request.payload.limit ?? 10,
+        )
+      : [];
+    this.events.post("context.search.results", request.chatId, {
+      requestId: request.payload.requestId,
+      hits,
+    });
+  }
+
   private async updateContext(
     request: Extract<PanelRequest, { type: "context.update" }>,
   ): Promise<void> {
@@ -629,7 +651,10 @@ export class ChatController {
     await this.chats.save({
       ...chat,
       updatedAt: Date.now(),
-      context: request.payload,
+      context: {
+        ...request.payload,
+        attachedNotebookIds: request.payload.attachedNotebookIds ?? [],
+      },
     });
     await this.sendSnapshot();
   }
