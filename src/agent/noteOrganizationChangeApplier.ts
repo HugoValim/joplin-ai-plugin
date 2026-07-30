@@ -2,6 +2,8 @@ import type {
   NoteMetadataRecord,
   NoteOrganizationRepository,
   NotebookMetadataRecord,
+  TrashedNoteRecord,
+  TrashedNotebookRecord,
 } from "../notes/retriever";
 import type { ProposedChange } from "../persistence/changeSetStore";
 import { DomainError } from "../shared/errors";
@@ -10,7 +12,7 @@ type NoteOrganizationChange = Extract<
   ProposedChange,
   {
     kind: "note";
-    operation: "rename" | "move" | "reorder" | "delete";
+    operation: "rename" | "move" | "reorder" | "delete" | "restore";
   }
 >;
 type NotebookOrganizationChange = Extract<ProposedChange, { kind: "notebook" }>;
@@ -58,6 +60,14 @@ export type ReadyOrganizationChange =
       readonly original: NoteMetadataRecord;
     }
   | {
+      readonly kind: "note-restore";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "note"; operation: "restore" }
+      >;
+      readonly original: TrashedNoteRecord;
+    }
+  | {
       readonly kind: "notebook-rename";
       readonly change: Extract<
         ProposedChange,
@@ -80,6 +90,14 @@ export type ReadyOrganizationChange =
         { kind: "notebook"; operation: "delete" }
       >;
       readonly original: NotebookMetadataRecord;
+    }
+  | {
+      readonly kind: "notebook-restore";
+      readonly change: Extract<
+        ProposedChange,
+        { kind: "notebook"; operation: "restore" }
+      >;
+      readonly original: TrashedNotebookRecord;
     };
 
 /**
@@ -100,6 +118,11 @@ async function preflightNoteChange(
   change: NoteOrganizationChange,
   repository: NoteOrganizationRepository,
 ): Promise<ReadyOrganizationChange> {
+  if (change.operation === "restore") {
+    const original = await repository.readTrashedNote(change.noteId);
+    assertOrganizationVersion(change, original);
+    return { kind: "note-restore", change, original };
+  }
   const original = await repository.readNoteMetadata(change.noteId);
   assertOrganizationVersion(change, original);
   if (change.operation === "rename")
@@ -116,6 +139,11 @@ async function preflightNotebookChange(
   repository: NoteOrganizationRepository,
 ): Promise<ReadyOrganizationChange> {
   if (change.operation === "create") return { kind: "notebook-create", change };
+  if (change.operation === "restore") {
+    const original = await repository.readTrashedNotebook(change.notebookId);
+    assertOrganizationVersion(change, original);
+    return { kind: "notebook-restore", change, original };
+  }
   const original = await repository.readNotebook(change.notebookId);
   assertOrganizationVersion(change, original);
   if (change.operation === "rename")
@@ -146,7 +174,8 @@ type NotebookReadyChange = Extract<
       | "notebook-create"
       | "notebook-rename"
       | "notebook-move"
-      | "notebook-delete";
+      | "notebook-delete"
+      | "notebook-restore";
   }
 >;
 type NoteReadyChange = Exclude<ReadyOrganizationChange, NotebookReadyChange>;
@@ -166,6 +195,16 @@ async function applyNotebookOrganizationChange(
   if (item.kind === "notebook-rename")
     return applyNotebookRename(item, repository);
   if (item.kind === "notebook-move") return applyNotebookMove(item, repository);
+  if (item.kind === "notebook-restore") {
+    await repository.restoreNotebook({
+      notebookId: item.change.notebookId,
+      expectedUpdatedTime: item.change.expectedUpdatedTime,
+      ...(item.change.parentId !== undefined
+        ? { parentId: item.change.parentId }
+        : {}),
+    });
+    return;
+  }
   await repository.trashNotebook({
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
@@ -212,6 +251,16 @@ async function applyNoteOrganizationChange(
     await repository.trashNote({
       noteId: item.change.noteId,
       expectedUpdatedTime: item.change.expectedUpdatedTime,
+    });
+    return;
+  }
+  if (item.kind === "note-restore") {
+    await repository.restoreNote({
+      noteId: item.change.noteId,
+      expectedUpdatedTime: item.change.expectedUpdatedTime,
+      ...(item.change.parentId !== undefined
+        ? { parentId: item.change.parentId }
+        : {}),
     });
     return;
   }

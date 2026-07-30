@@ -27,6 +27,25 @@ const MAX_ASSISTANT_TEXT_CHARS = 4_000_000;
 const MAX_TOOL_ARGUMENT_CHARS = 1_048_576;
 const MAX_MODELS_JSON_BYTES = 1_048_576;
 const MAX_CHUNK_CONTENT_CHARS = 256_000;
+const OLLAMA_CLOUD_TAGS_URL = "https://ollama.com/api/tags";
+/** Flagship Ollama cloud models only — latest per family, no retired/smaller siblings. */
+const OLLAMA_TOP_TIER_CLOUD_MODELS: ReadonlySet<string> = new Set([
+  "glm-5.2",
+  "kimi-k3",
+  "deepseek-v4-pro",
+  "minimax-m3",
+  "qwen3.5:397b",
+  "mistral-large-3:675b",
+  "nemotron-3-ultra",
+  "gpt-oss:120b",
+  "gemma4:31b",
+]);
+const ModelsListSchema = Type.Object(
+  {
+    data: Type.Union([Type.Array(Type.Unknown()), Type.Null()]),
+  },
+  { additionalProperties: true },
+);
 const JsonObjectSchema = Type.Record(Type.String(), Type.Unknown());
 const ToolCallDeltaSchema = Type.Object(
   {
@@ -147,36 +166,234 @@ export class OpenAiCompatibleProvider implements AiProvider {
   }
 
   /**
-   * Tests `GET /models`, rejecting redirects and malformed responses.
+   * Tests OpenAI-compatible `GET /models`, falling back to Ollama `GET /api/tags`.
    *
    * @example await provider.testConnection(new AbortController().signal)
    */
   public async testConnection(abortSignal: AbortSignal): Promise<void> {
-    await this.fetchModelsBody(abortSignal);
+    try {
+      await this.fetchModelsBody(abortSignal);
+    } catch (openAiError: unknown) {
+      const tags = await this.fetchOllamaTags(abortSignal);
+      if (tags !== null) return;
+      throw openAiError;
+    }
   }
 
   /**
-   * Returns model IDs from `GET /models`.
+   * Returns local model IDs, merging Ollama cloud catalog entries when the
+   * configured host is loopback Ollama (so `:cloud` models stay selectable).
    *
    * @example await provider.listModels(new AbortController().signal)
    */
   public async listModels(abortSignal: AbortSignal): Promise<readonly string[]> {
-    const body = await this.fetchModelsBody(abortSignal);
-    const entries = (body as { data: readonly { id?: string }[] }).data;
-    return entries
-      .map((entry) => entry.id?.trim())
-      .filter((id): id is string => Boolean(id))
-      .slice(0, 500);
+    const local = await this.listLocalModelIds(abortSignal);
+    const cloud = this.isLoopbackOllamaHost()
+      ? await this.fetchOllamaCloudCatalog(abortSignal)
+      : [];
+    const merged = uniqueModelIds([...local, ...cloud]);
+    if (merged.length) return merged.slice(0, 500);
+    if (local.length === 0 && (await this.ollamaTagsReachable(abortSignal))) {
+      return [];
+    }
+    throw new DomainError(
+      "PROVIDER",
+      `Provider at ${this.config.baseUrl} returned no models from /models or /api/tags`,
+    );
   }
 
-  private async fetchModelsBody(abortSignal: AbortSignal): Promise<unknown> {
+  /**
+   * Returns whether a model is available via Ollama `/api/show`, or present in
+   * the OpenAI-compatible models list when show is unavailable.
+   *
+   * @example await provider.modelAvailable('glm-5.2:cloud', signal)
+   */
+  public async modelAvailable(
+    model: string,
+    abortSignal: AbortSignal,
+  ): Promise<boolean> {
+    const trimmed = model.trim();
+    if (!trimmed) return false;
+    if (await this.ollamaShowSucceeds(trimmed, abortSignal)) return true;
+    if (this.ollamaShowEndpoint()) return false;
+    try {
+      const models = await this.listLocalModelIds(abortSignal);
+      return models.includes(trimmed);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Resolves the context window for a model from Ollama `/api/show`, or null
+   * when the endpoint does not expose it. OpenAI-compatible `/v1/models` does
+   * not standardize a context length field, so we probe the Ollama-native
+   * endpoint as a documented fallback and treat any failure as unknown.
+   *
+   * @example await provider.contextWindow('llama3', new AbortController().signal)
+   */
+  public async contextWindow(
+    model: string,
+    abortSignal: AbortSignal,
+  ): Promise<number | null> {
+    try {
+      const body = await this.fetchOllamaShow(model, abortSignal);
+      if (!body) return null;
+      const ctx = findContextLength(body.model_info ?? {});
+      return ctx ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async listLocalModelIds(
+    abortSignal: AbortSignal,
+  ): Promise<readonly string[]> {
+    try {
+      const body = await this.fetchModelsBody(abortSignal);
+      const entries = Array.isArray(body.data) ? body.data : [];
+      const ids = entries
+        .map(modelIdFromEntry)
+        .filter((id): id is string => Boolean(id));
+      if (ids.length) return ids;
+    } catch {
+      // Prefer Ollama-native tags when the OpenAI models route is missing.
+    }
+    const tags = await this.fetchOllamaTags(abortSignal);
+    return tags ?? [];
+  }
+
+  private async ollamaShowSucceeds(
+    model: string,
+    abortSignal: AbortSignal,
+  ): Promise<boolean> {
+    return (await this.fetchOllamaShow(model, abortSignal)) !== null;
+  }
+
+  private async fetchOllamaShow(
+    model: string,
+    abortSignal: AbortSignal,
+  ): Promise<{ model_info?: Record<string, unknown> } | null> {
+    const showUrl = this.ollamaShowEndpoint();
+    if (!showUrl) return null;
+    try {
+      const response = await this.transport.fetch(showUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: model }),
+        redirect: "error",
+        signal: abortSignal,
+      });
+      await assertSuccessfulResponse(response, "application/json");
+      const text = await readResponseText(response, MAX_MODELS_JSON_BYTES);
+      return JSON.parse(text) as { model_info?: Record<string, unknown> };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Builds the Ollama-native `/api/show` URL from the configured base origin.
+   */
+  private ollamaShowEndpoint(): string | null {
+    return this.ollamaNativeEndpoint("/api/show");
+  }
+
+  private ollamaTagsEndpoint(): string | null {
+    return this.ollamaNativeEndpoint("/api/tags");
+  }
+
+  private ollamaNativeEndpoint(pathname: string): string | null {
+    let base: URL;
+    try {
+      base = new URL(this.config.baseUrl);
+    } catch {
+      return null;
+    }
+    return new URL(pathname, base).toString();
+  }
+
+  private isLoopbackOllamaHost(): boolean {
+    try {
+      const host = new URL(this.config.baseUrl).hostname;
+      return host === "localhost" || host === "127.0.0.1" || host === "::1";
+    } catch {
+      return false;
+    }
+  }
+
+  private async ollamaTagsReachable(abortSignal: AbortSignal): Promise<boolean> {
+    return (await this.fetchOllamaTags(abortSignal)) !== null;
+  }
+
+  /**
+   * Lists installed Ollama model names via `GET /api/tags`.
+   * Returns `[]` when reachable but empty, `null` when unavailable.
+   */
+  private async fetchOllamaTags(
+    abortSignal: AbortSignal,
+  ): Promise<readonly string[] | null> {
+    const tagsUrl = this.ollamaTagsEndpoint();
+    if (!tagsUrl) return null;
+    return this.readOllamaTagNames(tagsUrl, abortSignal, false);
+  }
+
+  /**
+   * Loads the public Ollama cloud catalog, keeps flagship models only, and maps
+   * names to local `:cloud` ids.
+   */
+  private async fetchOllamaCloudCatalog(
+    abortSignal: AbortSignal,
+  ): Promise<readonly string[]> {
+    const names = await this.readOllamaTagNames(
+      OLLAMA_CLOUD_TAGS_URL,
+      abortSignal,
+      false,
+    );
+    if (!names) return [];
+    return names
+      .filter((name) => OLLAMA_TOP_TIER_CLOUD_MODELS.has(name))
+      .map(toLocalCloudModelId);
+  }
+
+  private async readOllamaTagNames(
+    tagsUrl: string,
+    abortSignal: AbortSignal,
+    useApiKey: boolean,
+  ): Promise<readonly string[] | null> {
+    try {
+      const response = await this.transport.fetch(tagsUrl, {
+        method: "GET",
+        headers: this.headers(false, useApiKey),
+        redirect: "error",
+        signal: abortSignal,
+      });
+      await assertSuccessfulResponse(response, "application/json");
+      const text = await readResponseText(response, MAX_MODELS_JSON_BYTES);
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || !("models" in parsed)) {
+        return null;
+      }
+      const models = parsed.models;
+      if (!Array.isArray(models)) return null;
+      return models
+        .map(ollamaTagNameFromEntry)
+        .filter((name): name is string => Boolean(name));
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchModelsBody(
+    abortSignal: AbortSignal,
+  ): Promise<{ data: readonly unknown[] | null }> {
     const response = await this.transport.fetch(this.endpoint("models"), {
       method: "GET",
       headers: this.headers(false),
       redirect: "error",
       signal: abortSignal,
     });
-    assertSuccessfulResponse(response, "application/json");
+    await assertSuccessfulResponse(response, "application/json");
     const bodyText = await readResponseText(response, MAX_MODELS_JSON_BYTES);
     let body: unknown;
     try {
@@ -184,10 +401,14 @@ export class OpenAiCompatibleProvider implements AiProvider {
     } catch {
       throw malformedResponse(bodyText.slice(0, 100), "valid models JSON");
     }
-    if (!Value.Check(Type.Object({ data: Type.Array(Type.Unknown()) }), body)) {
-      throw malformedResponse(body, "a models object with a data array");
+    if (!Value.Check(ModelsListSchema, body)) {
+      throw malformedResponse(
+        body,
+        "a models object with a data array or null",
+      );
     }
-    return body;
+    const data = (body as { data: readonly unknown[] | null }).data;
+    return { data };
   }
 
   private async fetchCompletion(
@@ -204,7 +425,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
         signal,
       },
     );
-    assertSuccessfulResponse(response, "text/event-stream");
+    await assertSuccessfulResponse(response, "text/event-stream");
     return response;
   }
 
@@ -212,16 +433,50 @@ export class OpenAiCompatibleProvider implements AiProvider {
     return new URL(relativePath, this.config.baseUrl).toString();
   }
 
-  private headers(jsonBody: boolean): Record<string, string> {
+  private headers(
+    jsonBody: boolean,
+    includeApiKey = true,
+  ): Record<string, string> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (jsonBody) {
       headers.Accept = "text/event-stream";
       headers["Content-Type"] = "application/json";
     }
-    if (this.config.apiKey)
+    if (includeApiKey && this.config.apiKey)
       headers.Authorization = `Bearer ${this.config.apiKey}`;
     return headers;
   }
+}
+
+function toLocalCloudModelId(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.endsWith(":cloud") || trimmed.endsWith("-cloud")) return trimmed;
+  return trimmed.includes(":") ? `${trimmed}-cloud` : `${trimmed}:cloud`;
+}
+
+function modelIdFromEntry(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || !("id" in entry)) return null;
+  const id = entry.id;
+  return typeof id === "string" ? id.trim() : null;
+}
+
+function ollamaTagNameFromEntry(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || !("name" in entry)) return null;
+  const name = entry.name;
+  return typeof name === "string" ? name.trim() : null;
+}
+
+function uniqueModelIds(ids: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 function serializeRequest(
@@ -441,10 +696,10 @@ function parseToolArguments(
   return parsed;
 }
 
-function assertSuccessfulResponse(
+async function assertSuccessfulResponse(
   response: Response,
   expectedType: string,
-): void {
+): Promise<void> {
   if (response.redirected) {
     throw new DomainError(
       "SECURITY",
@@ -454,7 +709,7 @@ function assertSuccessfulResponse(
   if (!response.ok) {
     throw new DomainError(
       "PROVIDER",
-      `Provider returned HTTP ${response.status}; expected 2xx`,
+      await providerHttpErrorMessage(response),
     );
   }
   const contentType = response.headers.get("content-type") ?? "";
@@ -464,6 +719,46 @@ function assertSuccessfulResponse(
       `Provider returned content type ${safeValue(contentType)}; expected ${expectedType}`,
     );
   }
+}
+
+async function providerHttpErrorMessage(response: Response): Promise<string> {
+  const detail = await readProviderErrorDetail(response);
+  if (response.status === 402) {
+    return detail
+      ? `Provider returned HTTP 402 (payment/usage required): ${detail}`
+      : "Provider returned HTTP 402 (payment/usage required); add Ollama cloud credits or enable auto-reload at https://ollama.com/settings";
+  }
+  return detail
+    ? `Provider returned HTTP ${response.status}: ${detail}`
+    : `Provider returned HTTP ${response.status}; expected 2xx`;
+}
+
+async function readProviderErrorDetail(
+  response: Response,
+): Promise<string | null> {
+  try {
+    const text = (await response.clone().text()).trim();
+    if (!text) return null;
+    try {
+      const body = JSON.parse(text) as { error?: unknown; message?: unknown };
+      const error =
+        typeof body.error === "string"
+          ? body.error
+          : typeof body.message === "string"
+            ? body.message
+            : null;
+      if (error?.trim()) return truncateErrorDetail(error.trim());
+    } catch {
+      // Fall through to raw text.
+    }
+    return truncateErrorDetail(text);
+  } catch {
+    return null;
+  }
+}
+
+function truncateErrorDetail(detail: string): string {
+  return detail.length > 300 ? `${detail.slice(0, 297)}...` : detail;
 }
 
 function createTimeoutSignal(
@@ -574,4 +869,22 @@ function assertToolArgumentLimit(totalChars: number): void {
     "LIMIT_EXCEEDED",
     `Provider tool arguments exceeded ${MAX_TOOL_ARGUMENT_CHARS} characters; expected a bounded response`,
   );
+}
+
+function findContextLength(
+  modelInfo: Record<string, unknown>,
+): number | null {
+  const keys = [
+    "llama.context_length",
+    "general.context_length",
+    "context_length",
+    "max_context_length",
+  ];
+  for (const key of keys) {
+    const value = modelInfo[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+  }
+  return null;
 }

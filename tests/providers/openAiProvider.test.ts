@@ -176,6 +176,31 @@ describe("OpenAiCompatibleProvider", () => {
     expect(transport.callCount).toBe(0);
   });
 
+  test("surfaces Ollama HTTP 402 payment/usage details from the provider body", async () => {
+    const transport = new FakeHttpTransport(
+      new Response(
+        JSON.stringify({
+          error:
+            "this model uses extra usage only (not included plan usage) and your extra usage balance is empty, add extra usage or turn on auto reload at https://ollama.com/settings",
+        }),
+        {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    const provider = new OpenAiCompatibleProvider(CONFIG, transport);
+
+    await expect(
+      collectEvents(
+        provider.streamChat(
+          { messages: [{ role: "user", content: "hi" }], tools: [] },
+          new AbortController().signal,
+        ),
+      ),
+    ).rejects.toThrow(/HTTP 402 \(payment\/usage required\).*extra usage balance is empty/);
+  });
+
   test("checks connectivity through GET models", async () => {
     const transport = new FakeHttpTransport(
       new Response(JSON.stringify({ data: [{ id: "test-model" }] }), {
@@ -190,5 +215,152 @@ describe("OpenAiCompatibleProvider", () => {
     expect(transport.lastUrl).toBe("http://localhost:11434/v1/models");
     expect(transport.lastInit?.method).toBe("GET");
     expect(transport.lastInit?.redirect).toBe("error");
+  });
+
+  test("lists models from Ollama /api/tags when /v1/models fails", async () => {
+    class TagsFallbackTransport implements HttpTransport {
+      public urls: string[] = [];
+
+      public async fetch(url: string, _init: RequestInit): Promise<Response> {
+        this.urls.push(url);
+        if (url.endsWith("/api/tags")) {
+          return new Response(
+            JSON.stringify({
+              models: [
+                { name: "glm-5.2:cloud" },
+                { name: "kimi-k3:cloud" },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }
+    }
+
+    const transport = new TagsFallbackTransport();
+    const provider = new OpenAiCompatibleProvider(CONFIG, transport);
+
+    await expect(
+      provider.listModels(new AbortController().signal),
+    ).resolves.toEqual(["glm-5.2:cloud", "kimi-k3:cloud"]);
+    expect(transport.urls[0]).toBe("http://localhost:11434/v1/models");
+    expect(transport.urls).toContain("http://localhost:11434/api/tags");
+    expect(transport.urls).toContain("https://ollama.com/api/tags");
+  });
+
+  test("treats null OpenAI models data as an empty online list", async () => {
+    class NullDataTransport implements HttpTransport {
+      public async fetch(url: string, _init: RequestInit): Promise<Response> {
+        if (url.includes("/v1/models")) {
+          return new Response(JSON.stringify({ object: "list", data: null }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url === "https://ollama.com/api/tags") {
+          return new Response(
+            JSON.stringify({
+              models: [
+                { name: "glm-5.2" },
+                { name: "kimi-k3" },
+                { name: "glm-5.1" },
+                { name: "kimi-k2.5" },
+                { name: "gpt-oss:20b" },
+                { name: "deepseek-v4-flash" },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (url.endsWith("/api/tags")) {
+          return new Response(JSON.stringify({ models: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }
+    }
+
+    const provider = new OpenAiCompatibleProvider(
+      CONFIG,
+      new NullDataTransport(),
+    );
+    await expect(
+      provider.testConnection(new AbortController().signal),
+    ).resolves.toBeUndefined();
+    await expect(
+      provider.listModels(new AbortController().signal),
+    ).resolves.toEqual(["glm-5.2:cloud", "kimi-k3:cloud"]);
+  });
+
+  test("verifies a model through Ollama /api/show", async () => {
+    class ShowTransport implements HttpTransport {
+      public async fetch(url: string, init: RequestInit): Promise<Response> {
+        if (url.endsWith("/api/show")) {
+          const rawBody = init.body;
+          const bodyText =
+            typeof rawBody === "string"
+              ? rawBody
+              : rawBody instanceof Uint8Array
+                ? new TextDecoder().decode(rawBody)
+                : "";
+          const body = JSON.parse(bodyText) as { name?: string };
+          if (body.name === "glm-5.2:cloud") {
+            return new Response(
+              JSON.stringify({
+                model_info: { "glm5.2.context_length": 1000 },
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            );
+          }
+          return new Response("missing", { status: 404 });
+        }
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
+    const provider = new OpenAiCompatibleProvider(CONFIG, new ShowTransport());
+    await expect(
+      provider.modelAvailable("glm-5.2:cloud", new AbortController().signal),
+    ).resolves.toBe(true);
+    await expect(
+      provider.modelAvailable("missing:cloud", new AbortController().signal),
+    ).resolves.toBe(false);
+  });
+
+  test("treats a successful Ollama /api/tags probe as online", async () => {
+    class TagsOnlyTransport implements HttpTransport {
+      public async fetch(url: string, _init: RequestInit): Promise<Response> {
+        if (url.endsWith("/api/tags")) {
+          return new Response(JSON.stringify({ models: [{ name: "glm-5.2:cloud" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }
+    }
+
+    const provider = new OpenAiCompatibleProvider(
+      CONFIG,
+      new TagsOnlyTransport(),
+    );
+    await expect(
+      provider.testConnection(new AbortController().signal),
+    ).resolves.toBeUndefined();
   });
 });

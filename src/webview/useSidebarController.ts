@@ -30,6 +30,7 @@ export interface SidebarController {
   readonly acceptedIds: ReadonlySet<string>;
   readonly setDraft: (value: string) => void;
   readonly submit: () => void;
+  readonly queueMessage: (text: string) => void;
   readonly cancel: () => void;
   readonly selectChat: (chatId: string) => void;
   readonly createChat: () => void;
@@ -41,6 +42,7 @@ export interface SidebarController {
   readonly markSecretNotebook: (notebookId: string) => void;
   readonly unmarkSecretNotebook: (notebookId: string) => void;
   readonly openNote: (noteId: string) => void;
+  readonly openLink: (url: string) => void;
   readonly runAssistantAction: (
     messageId: string,
     action: AssistantAction,
@@ -50,6 +52,11 @@ export interface SidebarController {
   readonly selectNoChanges: () => void;
   readonly applyChanges: () => void;
   readonly discardChanges: () => void;
+  readonly denyChanges: () => void;
+  readonly keepChange: (changeId: string) => void;
+  readonly keepAllChanges: () => void;
+  readonly undoChange: (changeId: string) => void;
+  readonly undoAllChanges: () => void;
   readonly openReview: () => void;
   readonly undo: () => void;
   readonly retry: () => void;
@@ -81,7 +88,57 @@ export function useSidebarController(): SidebarController {
     acceptedIds,
     setAcceptedIds,
   );
+  useQueuedFollowUp(
+    state,
+    dispatch,
+    draft,
+    setDraft,
+    submissionLock,
+    state.snapshot.activeChat?.id ?? null,
+    actions.submit,
+  );
   return { state, draft, acceptedIds, setDraft, ...actions };
+}
+
+function useQueuedFollowUp(
+  state: SidebarState,
+  dispatch: StateDispatch,
+  draft: string,
+  setDraft: React.Dispatch<React.SetStateAction<string>>,
+  submissionLock: React.MutableRefObject<boolean>,
+  activeChatId: string | null,
+  submit: () => void,
+): void {
+  const queuedRef = useRef<string | null>(null);
+  queuedRef.current = state.queuedMessage;
+
+  useEffect(() => {
+    if (state.busy || state.queuedMessage || !activeChatId) return;
+    // Nothing queued — nothing to fire.
+    if (!queuedRef.current) return;
+  }, [state.busy, state.queuedMessage, activeChatId]);
+
+  // When a run finishes (busy false) and there is a queued message with no
+  // proposed changes, load it into the draft and submit.
+  useEffect(() => {
+    if (state.busy || !state.queuedMessage) return;
+    if (hasProposedPending(state.snapshot.activeChat?.pendingChangeSet)) return;
+    if (submissionLock.current) return;
+    const text = state.queuedMessage;
+    dispatch({ type: "clear-queue" });
+    setDraft(text);
+    // Submit on the next tick so the draft is set before submit reads it.
+    // useSubmitAction reads draft from its closure, so we use a microtask.
+    void Promise.resolve().then(() => submit());
+  }, [
+    state.busy,
+    state.queuedMessage,
+    state.snapshot.activeChat?.pendingChangeSet,
+    dispatch,
+    setDraft,
+    submissionLock,
+    submit,
+  ]);
 }
 
 function usePanelEvents(
@@ -224,6 +281,7 @@ function createActions(
 ): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
   return {
     submit: input.submit,
+    queueMessage: (text) => queueMessage(input, text),
     cancel: () => cancelRun(input),
     selectChat: (chatId) => selectChat(input, chatId),
     createChat: () =>
@@ -254,6 +312,12 @@ function createActions(
         type: "note.open",
         payload: { noteId },
       }),
+    openLink: (url) =>
+      input.send({
+        ...input.envelope(),
+        type: "link.open",
+        payload: { url },
+      }),
     runAssistantAction: (messageId, action) =>
       runAssistantAction(input, messageId, action),
     toggleChange: (changeId) => toggleChange(input, changeId),
@@ -261,6 +325,15 @@ function createActions(
     selectNoChanges: () => input.setAcceptedIds(new Set()),
     applyChanges: () => applyChanges(input),
     discardChanges: () => discardChanges(input),
+    denyChanges: () => denyChanges(input),
+    keepChange: (changeId) => keepChanges(input, [changeId]),
+    keepAllChanges: () =>
+      keepChanges(
+        input,
+        input.pending?.changes.map((change) => change.id) ?? [],
+      ),
+    undoChange: (changeId) => undoSelectedChanges(input, [changeId]),
+    undoAllChanges: () => denyChanges(input),
     openReview: () => openReview(input),
     undo: () => undoRun(input),
     retry: () => retryRun(input),
@@ -290,7 +363,7 @@ function useSubmitAction(
       !text ||
       !activeChat ||
       state.busy ||
-      activeChat.pendingChangeSet ||
+      hasProposedPending(activeChat.pendingChangeSet) ||
       submissionLock.current
     )
       return;
@@ -314,6 +387,12 @@ function useSubmitAction(
     state.busy,
     submissionLock,
   ]);
+}
+
+function queueMessage(input: ActionInput, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed || !input.activeChat) return;
+  input.dispatch({ type: "queue", text: trimmed });
 }
 
 function cancelRun(input: ActionInput): void {
@@ -439,6 +518,66 @@ function discardChanges(input: ActionInput): void {
   });
 }
 
+function denyChanges(input: ActionInput): void {
+  if (!input.pending) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Denying and restoring changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.deny",
+    payload: { changeSetId: input.pending.changeSetId },
+  });
+}
+
+function keepChanges(input: ActionInput, changeIds: readonly string[]): void {
+  if (!input.pending || changeIds.length === 0) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Keeping changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.keep",
+    payload: {
+      changeSetId: input.pending.changeSetId,
+      changeIds: [...changeIds],
+    },
+  });
+}
+
+function undoSelectedChanges(
+  input: ActionInput,
+  changeIds: readonly string[],
+): void {
+  if (!input.pending || changeIds.length === 0) return;
+  const runId = input.pending.runId ?? input.pending.changeSetId;
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Undoing changes",
+    submission: false,
+  });
+  input.send({
+    ...input.envelope(),
+    runId,
+    type: "changes.undo",
+    payload: {
+      changeSetId: input.pending.changeSetId,
+      changeIds: [...changeIds],
+    },
+  });
+}
+
 function openReview(input: ActionInput): void {
   if (!input.pending) return;
   const runId = input.pending.runId ?? input.pending.changeSetId;
@@ -468,9 +607,19 @@ function undoRun(input: ActionInput): void {
 }
 
 function retryRun(input: ActionInput): void {
-  if (!input.activeChat || input.state.busy || input.pending) return;
+  if (
+    !input.activeChat ||
+    input.state.busy ||
+    hasProposedPending(input.pending)
+  )
+    return;
   const runId = identifier();
-  input.dispatch({ type: "begin", runId, phase: "Retrying", submission: false });
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Retrying",
+    submission: false,
+  });
   input.send({
     ...input.envelope(),
     runId,
@@ -542,6 +691,14 @@ function postRequest(
 function isTerminalEvent(event: PluginEvent): boolean {
   return ["changes.proposed", "run.failed", "run.completed"].includes(
     event.type,
+  );
+}
+
+function hasProposedPending(
+  pending: ActiveChat["pendingChangeSet"] | null | undefined,
+): boolean {
+  return Boolean(
+    pending?.changes.some((change) => change.status === "proposed"),
   );
 }
 

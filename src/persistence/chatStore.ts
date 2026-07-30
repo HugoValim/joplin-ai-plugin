@@ -67,6 +67,7 @@ const RunSummarySchema = Type.Object(
       Type.Literal("cancelled"),
       Type.Literal("awaiting-approval"),
       Type.Literal("applied"),
+      Type.Literal("denied"),
     ]),
     summary: Type.String({ maxLength: 10_000 }),
     completedAt: Type.Number({ minimum: 0 }),
@@ -97,6 +98,9 @@ const ChatSchema = Type.Object(
     references: Type.Array(CitationSchema, { maxItems: 1_000 }),
     runSummaries: Type.Array(RunSummarySchema, { maxItems: 1_000 }),
     pendingChangeSet: Type.Union([ChangeSetSchema, Type.Null()]),
+    parkedAppliedChangeSet: Type.Optional(
+      Type.Union([ChangeSetSchema, Type.Null()]),
+    ),
   },
   { additionalProperties: false },
 );
@@ -120,13 +124,14 @@ type StoredChatShape = Static<typeof ChatSchema>;
 type StoredContext = StoredChatShape["context"];
 export type PersistedChat = Omit<
   StoredChatShape,
-  "context" | "pendingChangeSet"
+  "context" | "pendingChangeSet" | "parkedAppliedChangeSet"
 > & {
   readonly context: Omit<StoredContext, "autoApply" | "interactionMode"> & {
     readonly autoApply: boolean;
     readonly interactionMode: "ask" | "agent";
   };
   readonly pendingChangeSet: ChangeSet | null;
+  readonly parkedAppliedChangeSet: ChangeSet | null;
 };
 export type PersistedChatMessage = Static<typeof MessageSchema>;
 export type PersistedChatSummary = Static<typeof ChatSummarySchema>;
@@ -175,6 +180,7 @@ export class ChatStore {
       references: [],
       runSummaries: [],
       pendingChangeSet: null,
+      parkedAppliedChangeSet: null,
     };
     await this.save(chat);
     return chat;
@@ -268,6 +274,7 @@ export class ChatStore {
       references: [],
       runSummaries: [],
       pendingChangeSet: null,
+      parkedAppliedChangeSet: null,
     };
     await this.save(cleared);
     return cleared;
@@ -349,6 +356,7 @@ function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
       autoApply: chat.context.autoApply ?? false,
       interactionMode: chat.context.interactionMode ?? "agent",
     },
+    parkedAppliedChangeSet: chat.parkedAppliedChangeSet ?? null,
   };
 }
 
@@ -376,10 +384,34 @@ function unknownChat(chatId: string): DomainError {
 }
 
 function isConsistentChat(chat: PersistedChat, expectedId: string): boolean {
-  const pending = chat.pendingChangeSet;
   return (
     chat.id === expectedId &&
-    (!pending || (pending.chatId === chat.id && pending.status === "proposed"))
+    isConsistentPending(chat.pendingChangeSet, chat.id) &&
+    isConsistentParked(chat.parkedAppliedChangeSet, chat.id)
+  );
+}
+
+function isConsistentPending(
+  pending: ChangeSet | null,
+  chatId: string,
+): boolean {
+  if (!pending) return true;
+  return (
+    pending.chatId === chatId &&
+    (pending.status === "proposed" ||
+      pending.status === "applied" ||
+      pending.status === "partial")
+  );
+}
+
+function isConsistentParked(
+  parked: ChangeSet | null,
+  chatId: string,
+): boolean {
+  if (!parked) return true;
+  return (
+    parked.chatId === chatId &&
+    (parked.status === "applied" || parked.status === "partial")
   );
 }
 
@@ -387,6 +419,6 @@ function assertConsistentChat(chat: PersistedChat): void {
   if (isConsistentChat(chat, chat.id)) return;
   throw new DomainError(
     "VALIDATION",
-    `Invalid chat ${chat.id} pending change-set ownership; expected matching chat ID and proposed status`,
+    `Invalid chat ${chat.id} pending change-set ownership; expected matching chat ID and proposed, applied, or partial status`,
   );
 }

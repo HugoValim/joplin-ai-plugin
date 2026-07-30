@@ -13,6 +13,9 @@ function composer(
     focusSequence: 0,
     lastRunId: null,
     lastUsage: null,
+    contextWindowMax: null,
+    queuedMessage: null,
+    onQueue: jest.fn(),
     disabled: false,
     history: [],
     onDraftChange: jest.fn(),
@@ -113,5 +116,35 @@ describe("Composer", () => {
 
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(onDraftChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("Composer token usage display", () => {
+  test("shows k-formatted usage with context window when available", () => {
+    render(
+      <Composer
+        {...composer({
+          lastUsage: { promptTokens: 12000, outputTokens: 1600, totalTokens: 13600 },
+          contextWindowMax: 128000,
+        })}
+      />,
+    );
+    expect(screen.getByLabelText("Token usage").textContent).toContain(
+      "13.6k / 128k",
+    );
+  });
+
+  test("shows usage without context window when max is null", () => {
+    render(
+      <Composer
+        {...composer({
+          lastUsage: { promptTokens: 120, outputTokens: 45, totalTokens: 165 },
+          contextWindowMax: null,
+        })}
+      />,
+    );
+    const usage = screen.getByLabelText("Token usage");
+    expect(usage.textContent).toContain("165 total");
+    expect(usage.textContent).not.toContain("/");
   });
 });

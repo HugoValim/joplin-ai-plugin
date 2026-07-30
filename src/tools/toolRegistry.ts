@@ -15,6 +15,20 @@ export const CONTENT_READ_TOOL_NAMES = new Set([
   "read_text_file",
 ]);
 
+/** Inventory/search tools blocked after significant vault discovery. */
+export const DISCOVERY_TOOL_NAMES = new Set([
+  "list_notebooks",
+  "list_notebook_notes",
+  "search_notes",
+]);
+
+export interface ToolDefinitionOptions {
+  readonly proposeOnly?: boolean;
+  readonly readOnly?: boolean;
+  /** When true, omit inventory/search tools so the model must plan and act. */
+  readonly blockDiscovery?: boolean;
+}
+
 export interface ToolExecutionContext {
   readonly chatId: string;
   readonly runId: string;
@@ -23,6 +37,7 @@ export interface ToolExecutionContext {
   readonly readableNoteIds: ReadonlySet<string>;
   readonly secretNotebookIds: ReadonlySet<string>;
   readonly agentPlan: AgentPlanState;
+  readonly readOnly: boolean;
 }
 
 export interface AgentTool<TInput, TOutput> {
@@ -82,13 +97,14 @@ export class ToolRegistry {
   /**
    * Returns only tools available for the current chat context.
    * When proposeOnly is set, read tools are omitted so the model must propose writes.
+   * When blockDiscovery is set, inventory/search tools are omitted after vault listing.
    *
    * @example registry.providerDefinitions(context)
    * @example registry.providerDefinitions(context, { proposeOnly: true })
    */
   public providerDefinitions(
     context: ToolExecutionContext,
-    options: { readonly proposeOnly?: boolean; readonly readOnly?: boolean } = {},
+    options: ToolDefinitionOptions = {},
   ): readonly ProviderToolDefinition[] {
     return [...this.tools.values()]
       .filter((tool) => tool.isAvailable(context))
@@ -102,11 +118,24 @@ export class ToolRegistry {
         (tool) =>
           !options.readOnly || tool.risk === "read" || tool.risk === "meta",
       )
+      .filter(
+        (tool) =>
+          !options.blockDiscovery || !DISCOVERY_TOOL_NAMES.has(tool.name),
+      )
       .map((tool) => ({
         name: tool.name,
         description: tool.description,
         parameters: tool.inputSchema,
       }));
+  }
+
+  /**
+   * Returns whether a tool name is an inventory/search discovery tool.
+   *
+   * @example registry.isDiscoveryTool("list_notebook_notes")
+   */
+  public isDiscoveryTool(name: string): boolean {
+    return DISCOVERY_TOOL_NAMES.has(name);
   }
 
   /**

@@ -68,6 +68,14 @@ export interface NoteDeleteProposalInput extends ChangeProposalBase {
   readonly expectedUpdatedTime: number;
 }
 
+export interface NoteRestoreProposalInput extends ChangeProposalBase {
+  readonly kind: "note";
+  readonly operation: "restore";
+  readonly noteId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId?: string;
+}
+
 export interface NotebookRenameProposalInput extends ChangeProposalBase {
   readonly kind: "notebook";
   readonly operation: "rename";
@@ -91,6 +99,14 @@ export interface NotebookDeleteProposalInput extends ChangeProposalBase {
   readonly expectedUpdatedTime: number;
 }
 
+export interface NotebookRestoreProposalInput extends ChangeProposalBase {
+  readonly kind: "notebook";
+  readonly operation: "restore";
+  readonly notebookId: string;
+  readonly expectedUpdatedTime: number;
+  readonly parentId?: string;
+}
+
 export type ChangeProposalInput =
   | FileChangeProposalInput
   | NoteUpdateProposalInput
@@ -100,9 +116,11 @@ export type ChangeProposalInput =
   | NoteMoveProposalInput
   | NoteReorderProposalInput
   | NoteDeleteProposalInput
+  | NoteRestoreProposalInput
   | NotebookRenameProposalInput
   | NotebookMoveProposalInput
-  | NotebookDeleteProposalInput;
+  | NotebookDeleteProposalInput
+  | NotebookRestoreProposalInput;
 
 interface ProposedChangeBase extends ChangeProposalBase {
   readonly id: string;
@@ -120,9 +138,11 @@ export type ProposedChange =
   | (ProposedChangeBase & NoteMoveProposalInput)
   | (ProposedChangeBase & NoteReorderProposalInput)
   | (ProposedChangeBase & NoteDeleteProposalInput)
+  | (ProposedChangeBase & NoteRestoreProposalInput)
   | (ProposedChangeBase & NotebookRenameProposalInput)
   | (ProposedChangeBase & NotebookMoveProposalInput)
-  | (ProposedChangeBase & NotebookDeleteProposalInput);
+  | (ProposedChangeBase & NotebookDeleteProposalInput)
+  | (ProposedChangeBase & NotebookRestoreProposalInput);
 
 export interface ChangeSet {
   readonly id: string;
@@ -235,6 +255,17 @@ const NoteDeleteSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const NoteRestoreSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("note"),
+    operation: Type.Literal("restore"),
+    noteId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    parentId: Type.Optional(Type.String({ maxLength: 128 })),
+  },
+  { additionalProperties: false },
+);
 const NotebookRenameSchema = Type.Object(
   {
     ...ChangeBaseSchema,
@@ -267,6 +298,17 @@ const NotebookDeleteSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const NotebookRestoreSchema = Type.Object(
+  {
+    ...ChangeBaseSchema,
+    kind: Type.Literal("notebook"),
+    operation: Type.Literal("restore"),
+    notebookId: Type.String({ minLength: 1, maxLength: 128 }),
+    expectedUpdatedTime: Type.Number({ minimum: 0 }),
+    parentId: Type.Optional(Type.String({ maxLength: 128 })),
+  },
+  { additionalProperties: false },
+);
 export const ChangeSetSchema = Type.Object(
   {
     id: Type.String({ minLength: 1, maxLength: 128 }),
@@ -289,11 +331,13 @@ export const ChangeSetSchema = Type.Object(
         NoteMoveSchema,
         NoteReorderSchema,
         NoteDeleteSchema,
+        NoteRestoreSchema,
         NotebookRenameSchema,
         NotebookMoveSchema,
         NotebookDeleteSchema,
+        NotebookRestoreSchema,
       ]),
-      { maxItems: 50 },
+      { maxItems: 100 },
     ),
     reviewNoteId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   },
@@ -314,6 +358,17 @@ export interface ChangeSetStore {
     changeSetId: string,
     results: readonly ProposedChange[],
   ): ChangeSet;
+  removeChanges(
+    changeSetId: string,
+    changeIds: readonly string[],
+    scope: ChangeSetScope,
+  ): ChangeSet | null;
+  absorbAppliedChanges(
+    targetChangeSetId: string,
+    extraChanges: readonly ProposedChange[],
+    scope: ChangeSetScope,
+  ): ChangeSet;
+  drop(changeSetId: string): void;
   attachReviewNote(changeSetId: string, reviewNoteId: string): ChangeSet;
   restore(changeSet: ChangeSet): void;
 }
@@ -408,6 +463,99 @@ export class InMemoryChangeSetStore implements ChangeSetStore {
     };
     this.sets.set(changeSetId, next);
     return cloneChangeSet(next);
+  }
+
+  /**
+   * Drops reviewed items from an applied/partial set after Keep or Undo.
+   *
+   * @example store.removeChanges(changeSetId, ["change-1"], scope)
+   */
+  public removeChanges(
+    changeSetId: string,
+    changeIds: readonly string[],
+    scope: ChangeSetScope,
+  ): ChangeSet | null {
+    const current = this.getScoped(changeSetId, scope);
+    if (current.status !== "applied" && current.status !== "partial") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(changeSetId)} has status ${current.status}; expected applied or partial status`,
+      );
+    }
+    const remove = new Set(changeIds);
+    const remaining = current.changes.filter(
+      (change) => !remove.has(change.id),
+    );
+    if (remaining.length === current.changes.length) {
+      const unknown = changeIds.find(
+        (changeId) => !current.changes.some((change) => change.id === changeId),
+      );
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown kept change ${safeValue(unknown)}; expected an ID in change set ${changeSetId}`,
+      );
+    }
+    if (remaining.length === 0) {
+      this.sets.delete(changeSetId);
+      return null;
+    }
+    const next: ChangeSet = { ...current, changes: remaining };
+    this.sets.set(changeSetId, next);
+    return cloneChangeSet(next);
+  }
+
+  /**
+   * Prepends earlier applied review items into the target applied batch.
+   *
+   * @example store.absorbAppliedChanges(targetId, parked.changes, scope)
+   */
+  public absorbAppliedChanges(
+    targetChangeSetId: string,
+    extraChanges: readonly ProposedChange[],
+    scope: ChangeSetScope,
+  ): ChangeSet {
+    const current = this.getScoped(targetChangeSetId, scope);
+    if (current.status !== "applied" && current.status !== "partial") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(targetChangeSetId)} has status ${current.status}; expected applied or partial status`,
+      );
+    }
+    if (extraChanges.length === 0) return cloneChangeSet(current);
+    const changes = [...extraChanges, ...current.changes];
+    if (changes.length > 100) {
+      throw new DomainError(
+        "VALIDATION",
+        `Merged change set would have ${changes.length} changes; expected at most 100`,
+      );
+    }
+    const status = changes.every((change) => change.status === "applied")
+      ? ("applied" as const)
+      : ("partial" as const);
+    const next: ChangeSet = {
+      id: current.id,
+      chatId: current.chatId,
+      runId: current.runId,
+      createdAt: current.createdAt,
+      status,
+      changes,
+    };
+    this.sets.set(targetChangeSetId, next);
+    return cloneChangeSet(next);
+  }
+
+  /**
+   * Drops a change set from memory after its items were absorbed elsewhere.
+   *
+   * @example store.drop(parkedChangeSetId)
+   */
+  public drop(changeSetId: string): void {
+    const current = this.sets.get(changeSetId);
+    if (!current) return;
+    this.sets.delete(changeSetId);
+    if (this.idsByRun.get(current.runId) === changeSetId) {
+      this.idsByRun.delete(current.runId);
+    }
   }
 
   /**

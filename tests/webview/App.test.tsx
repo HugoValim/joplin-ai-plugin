@@ -57,7 +57,8 @@ function snapshotEvent(): PluginEvent {
       modelName: "glm-5.2:cloud",
       privacyNotice: "Only enabled context is sent.",
       secretNotebookIds: [],
-      availableModels: ["glm-5.2:cloud"],
+      availableModels: ["glm-5.2:cloud", "kimi-k3:cloud"],
+      contextWindowMax: 128000,
     },
   };
 }
@@ -199,6 +200,28 @@ describe("App shell", () => {
     expect(screen.getByRole("feed").getAttribute("aria-live")).toBeNull();
   });
 
+  test("selects a model from the connection status picker", async () => {
+    const { api } = await renderReadyApp();
+    const summary = screen.getByLabelText(
+      "Connection online, model glm-5.2:cloud",
+    );
+    fireEvent.click(summary);
+
+    const listbox = screen.getByRole("listbox", { name: "Available models" });
+    expect(listbox).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "kimi-k3:cloud" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("option", { name: "kimi-k3:cloud" }));
+
+    expect(api.requests.at(-1)).toMatchObject({
+      type: "model.select",
+      payload: { model: "kimi-k3:cloud" },
+    });
+    expect(summary.closest("details")?.open).toBe(false);
+  });
+
   test("keeps destructive actions in a closing confirmed overflow menu", async () => {
     const { api } = await renderReadyApp();
     const confirmAction = jest
@@ -247,7 +270,9 @@ describe("App shell", () => {
       name: /Bypass permissions/,
     });
     expect(
-      screen.getByText(/Deletions still require ChangeReview/),
+      screen.getByText(
+        /Auto-apply non-delete proposals, then review with Keep\/Undo/,
+      ),
     ).toBeTruthy();
 
     fireEvent.click(toggle);
@@ -264,6 +289,29 @@ describe("App shell", () => {
     const guard = screen.getByRole("status", { name: "Panel too narrow" });
     expect(guard.textContent).toContain("Widen panel");
     expect(guard.textContent).toContain("Minimum width: 280px");
+  });
+
+  test("keeps composer editable while a run is busy so follow-ups can be queued", async () => {
+    const { api } = await renderReadyApp();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    fireEvent.change(composer, { target: { value: "Start run" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(composer.disabled).toBe(false);
+    fireEvent.change(composer, { target: { value: "follow up while busy" } });
+    expect(composer.value).toBe("follow up while busy");
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(screen.getByLabelText("Queued follow-up").textContent).toContain(
+      "follow up while busy",
+    );
+    expect(
+      api.requests.filter(
+        (r) => (r as { type?: unknown }).type === "chat.submit",
+      ),
+    ).toHaveLength(1);
   });
 
   test("keeps transcript visible with docked review and disables composer until resolved", async () => {
@@ -310,5 +358,31 @@ describe("App shell", () => {
     );
 
     expect(serious).toEqual([]);
+  });
+});
+
+describe("App compact config chrome", () => {
+  test("renders Mode control near the composer without expanding context details", async () => {
+    await renderReadyApp();
+
+    // Mode buttons should be visible (Ask/Agent) without opening a details panel.
+    const modeGroup = screen.getByRole("group", { name: "Interaction mode" });
+    expect(modeGroup).toBeTruthy();
+    expect(screen.getAllByText("Agent").length).toBeGreaterThan(0);
+  });
+
+  test("secondary context settings are reachable from an overflow control", async () => {
+    await renderReadyApp();
+
+    // The context summary should be a collapsed <details> by default.
+    const summary = screen.getByLabelText("Context settings");
+    expect(summary.closest("details")?.open).toBe(false);
+    // Vault RAG toggle is inside the collapsed details — the details element
+    // is closed by default, so the overflow content is not expanded.
+    const vaultToggle = screen.queryByText("Vault RAG");
+    if (vaultToggle) {
+      const details = vaultToggle.closest("details");
+      expect(details?.open).toBe(false);
+    }
   });
 });

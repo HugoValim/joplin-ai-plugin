@@ -19,6 +19,24 @@ export class RunCancellationRegistry {
     return true;
   }
 
+  /**
+   * Reports whether a run is currently active for the chat.
+   *
+   * @example if (registry.has(chatId)) keepOnline()
+   */
+  public has(chatId: string): boolean {
+    return this.runs.has(chatId);
+  }
+
+  /**
+   * Reports whether any chat currently has an active run.
+   *
+   * @example if (registry.isBusy()) skipOfflineFlip()
+   */
+  public isBusy(): boolean {
+    return this.runs.size > 0;
+  }
+
   public replace(
     chatId: string,
     runId: string,

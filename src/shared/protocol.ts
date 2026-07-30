@@ -152,7 +152,7 @@ const ChangesApplySchema = Type.Object(
       {
         changeSetId: IdentifierSchema,
         acceptedIds: Type.Array(IdentifierSchema, {
-          maxItems: 50,
+          maxItems: 100,
           uniqueItems: true,
         }),
         applyToken: Type.String({ minLength: 32, maxLength: 128 }),
@@ -169,6 +169,56 @@ const ChangesDiscardSchema = Type.Object(
     type: Type.Literal("changes.discard"),
     payload: Type.Object(
       { changeSetId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ChangesDenySchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.deny"),
+    payload: Type.Object(
+      { changeSetId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ChangesKeepSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.keep"),
+    payload: Type.Object(
+      {
+        changeSetId: IdentifierSchema,
+        changeIds: Type.Array(IdentifierSchema, {
+          minItems: 1,
+          maxItems: 100,
+          uniqueItems: true,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ChangesUndoSchema = Type.Object(
+  {
+    ...RunEnvelopeProperties,
+    type: Type.Literal("changes.undo"),
+    payload: Type.Object(
+      {
+        changeSetId: IdentifierSchema,
+        changeIds: Type.Array(IdentifierSchema, {
+          minItems: 1,
+          maxItems: 100,
+          uniqueItems: true,
+        }),
+      },
       { additionalProperties: false },
     ),
   },
@@ -205,6 +255,23 @@ const NoteOpenSchema = Type.Object(
     type: Type.Literal("note.open"),
     payload: Type.Object(
       { noteId: IdentifierSchema },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const LinkOpenSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("link.open"),
+    payload: Type.Object(
+      {
+        url: Type.String({
+          minLength: 8,
+          maxLength: 2_000,
+        }),
+      },
       { additionalProperties: false },
     ),
   },
@@ -270,9 +337,13 @@ const PanelRequestSchema = Type.Union([
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
+  ChangesDenySchema,
+  ChangesKeepSchema,
+  ChangesUndoSchema,
   ReviewOpenSchema,
   RunUndoSchema,
   NoteOpenSchema,
+  LinkOpenSchema,
   AssistantActionSchema,
   SecretsMarkSchema,
   SecretsUnmarkSchema,
@@ -311,10 +382,7 @@ const ContextSettingsSchema = Type.Object(
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
     autoApply: Type.Boolean(),
-    interactionMode: Type.Union([
-      Type.Literal("ask"),
-      Type.Literal("agent"),
-    ]),
+    interactionMode: Type.Union([Type.Literal("ask"), Type.Literal("agent")]),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,
@@ -332,6 +400,7 @@ const RunSummaryViewSchema = Type.Object(
       Type.Literal("cancelled"),
       Type.Literal("awaiting-approval"),
       Type.Literal("applied"),
+      Type.Literal("denied"),
     ]),
     summary: Type.String({ maxLength: 10_000 }),
     completedAt: Type.Number({ minimum: 0 }),
@@ -351,6 +420,7 @@ const ChangeOperationSchema = Type.Union([
   Type.Literal("create"),
   Type.Literal("update"),
   Type.Literal("delete"),
+  Type.Literal("restore"),
   Type.Literal("rename"),
   Type.Literal("move"),
   Type.Literal("reorder"),
@@ -378,6 +448,7 @@ const ChangeViewSchema = Type.Object(
       Type.Literal("skipped"),
     ]),
     message: Type.Optional(Type.String({ maxLength: 1_000 })),
+    undoable: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -386,9 +457,9 @@ const ChangeSetViewSchema = Type.Object(
   {
     changeSetId: IdentifierSchema,
     runId: Type.Optional(IdentifierSchema),
-    applyToken: Type.String({ minLength: 32, maxLength: 128 }),
+    applyToken: Type.String({ minLength: 0, maxLength: 128 }),
     reviewNoteId: Type.Optional(IdentifierSchema),
-    changes: Type.Array(ChangeViewSchema, { maxItems: 50 }),
+    changes: Type.Array(ChangeViewSchema, { maxItems: 100 }),
   },
   { additionalProperties: false },
 );
@@ -443,6 +514,10 @@ const StateSnapshotSchema = Type.Object(
           Type.String({ minLength: 1, maxLength: 500 }),
           { maxItems: 500 },
         ),
+        contextWindowMax: Type.Union([
+          Type.Integer({ minimum: 0 }),
+          Type.Null(),
+        ]),
       },
       { additionalProperties: false },
     ),

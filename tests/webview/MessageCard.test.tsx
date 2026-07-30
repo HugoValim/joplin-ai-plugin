@@ -32,6 +32,59 @@ const MESSAGE: ChatMessage = {
 };
 
 describe("MessageCard", () => {
+  test("opens http links outside the panel without navigating the webview", async () => {
+    const user = userEvent.setup();
+    const onOpenLink = jest.fn();
+    render(
+      <MessageCard
+        message={{
+          ...MESSAGE,
+          content: "See [docs](https://example.test/guide).",
+        }}
+        position={1}
+        total={1}
+        runSummary={null}
+        canRegenerate={false}
+        onOpenNote={jest.fn()}
+        onOpenLink={onOpenLink}
+        onAssistantAction={jest.fn()}
+        noteActionsDisabled={false}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "docs" });
+    expect(link.getAttribute("href")).toBe("https://example.test/guide");
+    expect(link.className).toContain("markdown-link");
+
+    await user.click(link);
+    expect(onOpenLink).toHaveBeenCalledWith("https://example.test/guide");
+  });
+
+  test("lets in-page hash links navigate without opening externally", async () => {
+    const user = userEvent.setup();
+    const onOpenLink = jest.fn();
+    render(
+      <MessageCard
+        message={{
+          ...MESSAGE,
+          content: "Jump to [section](#section).",
+        }}
+        position={1}
+        total={1}
+        runSummary={null}
+        canRegenerate={false}
+        onOpenNote={jest.fn()}
+        onOpenLink={onOpenLink}
+        onAssistantAction={jest.fn()}
+        noteActionsDisabled={false}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "section" });
+    await user.click(link);
+    expect(onOpenLink).not.toHaveBeenCalled();
+  });
+
   test("keeps Copy visible and closes keyboard action menus", async () => {
     const user = userEvent.setup();
     const clipboard = new RecordingClipboard();
@@ -48,6 +101,7 @@ describe("MessageCard", () => {
         runSummary={null}
         canRegenerate={false}
         onOpenNote={jest.fn()}
+        onOpenLink={jest.fn()}
         onAssistantAction={onAction}
         noteActionsDisabled={false}
       />,

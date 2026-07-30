@@ -13,6 +13,7 @@ const IdentifierSchema = Type.String({
 const FileItemSchema = Type.Object(
   {
     kind: Type.Literal("file"),
+    changeId: IdentifierSchema,
     chatId: IdentifierSchema,
     snapshot: Type.Object(
       {
@@ -30,6 +31,7 @@ const FileItemSchema = Type.Object(
 const NoteItemSchema = Type.Object(
   {
     kind: Type.Literal("note"),
+    changeId: IdentifierSchema,
     noteId: IdentifierSchema,
     originalBody: Type.String({ maxLength: 10_000_000 }),
     expectedAppliedUpdatedTime: Type.Number({ minimum: 0 }),
@@ -42,7 +44,7 @@ const RollbackSchema = Type.Object(
     chatId: IdentifierSchema,
     createdAt: Type.Number({ minimum: 0 }),
     items: Type.Array(Type.Union([FileItemSchema, NoteItemSchema]), {
-      maxItems: 50,
+      maxItems: 100,
     }),
   },
   { additionalProperties: false },

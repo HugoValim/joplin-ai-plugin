@@ -1,6 +1,5 @@
 import {
   agentPlanContinuationNudge,
-  pendingAgentPlanCount,
   type AgentPlan,
   type AgentPlanState,
 } from "./agentPlan";
@@ -11,6 +10,24 @@ import type {
 } from "../providers/types";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import { DomainError } from "../shared/errors";
+import { StuckLoopDetector } from "./stuckLoopDetector";
+import { executeAgentToolBatch } from "./agentToolBatch";
+import {
+  bootstrapPlanFromInventory,
+  planBootstrappedNudge,
+} from "./inventoryPlanBootstrap";
+import {
+  activateProposeOnlyIfNeeded,
+  isPlanRequiredBailout,
+  MAX_TEXT_ONLY_BAILOUTS,
+  needsAgentPlanAfterDiscovery,
+  PLAN_REQUIRED_BOOTSTRAP_AFTER,
+  planRequiredNudge,
+  textOnlyBailoutMessage,
+  withBailoutExhaustedNotice,
+  withMissingProposalNotice,
+  withStuckLoopNotice,
+} from "./agentLoopPolicy";
 import type {
   ToolRegistry,
   ToolExecutionContext,
@@ -19,8 +36,6 @@ import type {
 
 /** Safety only — not a normal stop for reorganization work. */
 const MAX_MODEL_STEPS = 200;
-/** After this many content-body reads without a proposal, force propose-write only. */
-const READ_BUDGET_TOOL_CALLS = 8;
 
 export interface AgentRunRequest {
   readonly chatId: string;
@@ -44,7 +59,7 @@ export interface AgentObserver {
   onToolStarted?(call: NormalizedToolCall): void;
   onToolCompleted?(result: ToolExecutionResult): void;
   onPlanUpdated?(plan: AgentPlan): void;
-  onStep?(current: number, total: number): void;
+  onStep?(current: number, total: number, label?: string): void;
 }
 
 export interface AgentRunOutcome {
@@ -133,13 +148,16 @@ export class AgentRunner {
     planState: AgentPlanState,
     abortSignal: AbortSignal,
   ): Promise<AgentRunOutcome> {
-    const context = toolContext(request, planState);
+    const context = this.buildToolContext(request, planState);
     let toolCallCount = initialToolCallCount;
     let assistantText = "";
     let readCallsSincePropose = 0;
     let proposeOnly = false;
+    let blockDiscovery = false;
+    let textOnlyBailouts = 0;
     let usage: TokenUsage | null = null;
     const toolNames: string[] = [];
+    const loopDetector = new StuckLoopDetector();
 
     for (let step = firstStep; step <= MAX_MODEL_STEPS; step += 1) {
       assertNotAborted(abortSignal);
@@ -158,10 +176,24 @@ export class AgentRunner {
         abortSignal,
         proposeOnly,
         request.readOnly,
+        blockDiscovery,
       );
       usage = mergeUsage(usage, modelStep.usage);
       assistantText += modelStep.text;
       messages.push(toAssistantMessage(modelStep));
+      if (
+        context.agentPlan.plan &&
+        modelStep.toolCalls.length &&
+        loopDetector.addStep(modelStep.text)
+      ) {
+        this.observer.onStep?.(step, MAX_MODEL_STEPS);
+        return completedOutcome(
+          messages,
+          withStuckLoopNotice(assistantText),
+          usage,
+          toolNames,
+        );
+      }
       if (!modelStep.toolCalls.length) {
         const bailout = textOnlyBailoutMessage(
           proposeOnly,
@@ -171,6 +203,55 @@ export class AgentRunner {
           toolNames,
         );
         if (bailout) {
+          // Post-inventory: stop further listing and give a fresh bailout budget.
+          if (
+            !blockDiscovery &&
+            !request.readOnly &&
+            isPlanRequiredBailout(bailout)
+          ) {
+            blockDiscovery = true;
+            textOnlyBailouts = 0;
+            messages.push(bailout);
+            continue;
+          }
+          textOnlyBailouts += 1;
+          if (
+            isPlanRequiredBailout(bailout) &&
+            textOnlyBailouts >= PLAN_REQUIRED_BOOTSTRAP_AFTER &&
+            !context.agentPlan.plan
+          ) {
+            const bootstrapped = tryBootstrapInventoryPlan(
+              messages,
+              context,
+              this.observer,
+            );
+            if (bootstrapped) {
+              blockDiscovery = true;
+              textOnlyBailouts = 0;
+              continue;
+            }
+          }
+          if (context.agentPlan.plan && loopDetector.addTextOnlyStep()) {
+            this.observer.onStep?.(step, MAX_MODEL_STEPS);
+            return completedOutcome(
+              messages,
+              withStuckLoopNotice(assistantText),
+              usage,
+              toolNames,
+            );
+          }
+          // Keep nudging PLAN REQUIRED; only exhaust propose/plan-in-progress loops.
+          if (
+            textOnlyBailouts >= MAX_TEXT_ONLY_BAILOUTS &&
+            !isPlanRequiredBailout(bailout)
+          ) {
+            return completedOutcome(
+              messages,
+              withBailoutExhaustedNotice(assistantText),
+              usage,
+              toolNames,
+            );
+          }
           if (step >= MAX_MODEL_STEPS) {
             return completedOutcome(
               messages,
@@ -184,17 +265,22 @@ export class AgentRunner {
         }
         return completedOutcome(messages, assistantText, usage, toolNames);
       }
+      textOnlyBailouts = 0;
       toolCallCount += modelStep.toolCalls.length;
-      const proposed = await this.executeTools(
-        modelStep.toolCalls,
+      const batch = await executeAgentToolBatch({
+        calls: modelStep.toolCalls,
         messages,
         context,
         abortSignal,
         proposeOnly,
-        request.readOnly,
+        readOnly: request.readOnly,
+        blockDiscovery,
         toolNames,
-      );
-      if (proposed) {
+        tools: this.tools,
+        observer: this.observer,
+      });
+      if (batch.discoveryCapped) blockDiscovery = true;
+      if (batch.proposed) {
         return {
           status: "awaiting-approval",
           messages,
@@ -214,6 +300,15 @@ export class AgentRunner {
         this.tools,
         modelStep.toolCalls,
       );
+      // After large inventory, block more listing and require a plan next.
+      if (
+        !blockDiscovery &&
+        !request.readOnly &&
+        needsAgentPlanAfterDiscovery(toolNames, context, this.tools)
+      ) {
+        blockDiscovery = true;
+        messages.push(planRequiredNudge());
+      }
     }
     throw new DomainError(
       "LIMIT_EXCEEDED",
@@ -227,6 +322,7 @@ export class AgentRunner {
     abortSignal: AbortSignal,
     proposeOnly: boolean,
     readOnly: boolean,
+    blockDiscovery: boolean,
   ): Promise<ModelStep & { readonly usage: TokenUsage | null }> {
     let text = "";
     const toolCalls: NormalizedToolCall[] = [];
@@ -234,7 +330,11 @@ export class AgentRunner {
     const stream = this.provider.streamChat(
       {
         messages,
-        tools: this.tools.providerDefinitions(context, { proposeOnly, readOnly }),
+        tools: this.tools.providerDefinitions(context, {
+          proposeOnly,
+          readOnly,
+          blockDiscovery,
+        }),
       },
       abortSignal,
     );
@@ -255,96 +355,21 @@ export class AgentRunner {
     return { text, toolCalls, usage };
   }
 
-  private async executeTools(
-    calls: readonly NormalizedToolCall[],
-    messages: ProviderMessage[],
-    context: ToolExecutionContext,
-    abortSignal: AbortSignal,
-    proposeOnly: boolean,
-    readOnly: boolean,
-    toolNames: string[],
-  ): Promise<boolean> {
-    let proposed = false;
-    for (const call of calls) {
-      assertNotAborted(abortSignal);
-      this.observer.onToolStarted?.(call);
-      const result = await this.executeOneTool(
-        call,
-        context,
-        proposeOnly,
-        readOnly,
-      );
-      toolNames.push(call.name);
-      this.observer.onToolCompleted?.(result);
-      if (result.risk === "meta" && context.agentPlan.plan) {
-        this.observer.onPlanUpdated?.(context.agentPlan.plan);
-      }
-      messages.push({
-        role: "tool",
-        toolCallId: call.id,
-        content: JSON.stringify(result.output),
-      });
-      if (result.risk === "propose-write") proposed = true;
-    }
-    return proposed;
+  private buildToolContext(
+    request: AgentRunRequest,
+    agentPlan: AgentPlanState,
+  ): ToolExecutionContext {
+    return {
+      chatId: request.chatId,
+      runId: request.runId,
+      hasFileWorkspace: request.hasFileWorkspace,
+      vault: request.vault,
+      readOnly: request.readOnly,
+      readableNoteIds: request.readableNoteIds,
+      secretNotebookIds: request.secretNotebookIds,
+      agentPlan,
+    };
   }
-
-  private async executeOneTool(
-    call: NormalizedToolCall,
-    context: ToolExecutionContext,
-    proposeOnly: boolean,
-    readOnly: boolean,
-  ): Promise<ToolExecutionResult> {
-    try {
-      if (readOnly && this.tools.riskFor(call.name) === "propose-write") {
-        return {
-          toolCallId: call.id,
-          name: call.name,
-          risk: "propose-write",
-          output: {
-            error: {
-              code: "NOT_AVAILABLE",
-              message: `Write tool ${call.name} is disabled in Ask mode; expected a read-only tool`,
-            },
-          },
-        };
-      }
-      if (proposeOnly) {
-        const risk = this.tools.riskFor(call.name);
-        if (risk === "read") {
-          return {
-            toolCallId: call.id,
-            name: call.name,
-            risk: "read",
-            output: {
-              error: {
-                code: "NOT_AVAILABLE",
-                message: `Read tool ${call.name} is disabled after the read budget; expected a propose-write tool`,
-              },
-            },
-          };
-        }
-      }
-      return await this.tools.execute(call, context);
-    } catch (error: unknown) {
-      return toolFailureResult(call, error);
-    }
-  }
-}
-
-function toolContext(
-  request: AgentRunRequest,
-  agentPlan: AgentPlanState,
-): ToolExecutionContext {
-  return {
-    chatId: request.chatId,
-    runId: request.runId,
-    hasFileWorkspace: request.hasFileWorkspace,
-    vault: request.vault,
-    readableNoteIds: request.readableNoteIds,
-    secretNotebookIds: request.secretNotebookIds,
-    agentPlan,
-  };
 }
 
 function countContentReads(
@@ -354,156 +379,17 @@ function countContentReads(
   return calls.filter((call) => tools.countsTowardReadBudget(call.name)).length;
 }
 
-function activateProposeOnlyIfNeeded(
-  proposeOnly: boolean,
-  readCallsSincePropose: number,
-  readOnly: boolean,
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
+function tryBootstrapInventoryPlan(
   messages: ProviderMessage[],
+  context: ToolExecutionContext,
+  observer: AgentObserver,
 ): boolean {
-  if (readOnly) return false;
-  if (proposeOnly) return true;
-  if (readCallsSincePropose < READ_BUDGET_TOOL_CALLS) return false;
-  if (!hasProposeWriteTools(tools, context)) return false;
-  messages.push(readBudgetNudgeMessage(tools, context));
+  const plan = bootstrapPlanFromInventory(messages);
+  if (!plan) return false;
+  context.agentPlan.plan = plan;
+  observer.onPlanUpdated?.(plan);
+  messages.push(planBootstrappedNudge(plan.items.length));
   return true;
-}
-
-function readBudgetNudgeMessage(
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
-): ProviderMessage {
-  const content = hasProposeWriteTools(tools, context)
-    ? [
-        "READ BUDGET EXCEEDED: Note and file body reads are disabled for the rest of this run segment.",
-        "Call the available propose-write tools now for notes already read in this segment.",
-        "Update the agent plan for completed items. Do not ask the user for opaque ID lists.",
-      ].join(" ")
-    : [
-        "READ BUDGET: You have completed several content reads without proposing changes.",
-        "Secret notebooks are excluded. Mark notebooks secret to hide them, or attach notes to seed prompt context.",
-        "Do not ask the user to paste notebook or note ID lists.",
-      ].join(" ");
-  return { role: "system", content };
-}
-
-function proposeRequiredMessage(): ProviderMessage {
-  return {
-    role: "system",
-    content: [
-      "PROPOSE REQUIRED: Do not end with a chat-only text plan.",
-      "Call propose-write tools now so ChangeReview can open, or update the agent plan and propose the next bounded batch.",
-    ].join(" "),
-  };
-}
-
-function planRequiredMessage(): ProviderMessage {
-  return {
-    role: "system",
-    content: [
-      "PLAN REQUIRED: You inventoried multiple notebooks or notes.",
-      "Call set_agent_plan now with a checklist of remaining work,",
-      "then read a few note bodies and call propose-write tools for the first batch.",
-      "Do not stop or ask the user to continue before the plan and first proposal batch.",
-    ].join(" "),
-  };
-}
-
-function planInProgressMessage(): ProviderMessage {
-  return {
-    role: "system",
-    content: [
-      "PLAN IN PROGRESS: An agent plan still has pending items.",
-      "Do not stop with chat-only text. Mark progress with update_agent_plan_item,",
-      "read the next pending note bodies, and call propose-write tools for a bounded batch now.",
-    ].join(" "),
-  };
-}
-
-function textOnlyBailoutMessage(
-  proposeOnly: boolean,
-  readOnly: boolean,
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
-  toolNames: readonly string[],
-): ProviderMessage | null {
-  if (readOnly) return null;
-  if (shouldRefuseProposeBailout(proposeOnly, tools, context)) {
-    return proposeRequiredMessage();
-  }
-  if (shouldRefusePendingPlanBailout(context, tools)) {
-    return planInProgressMessage();
-  }
-  if (shouldRefuseDiscoveryBailout(toolNames, context, tools)) {
-    return planRequiredMessage();
-  }
-  return null;
-}
-
-function shouldRefuseProposeBailout(
-  proposeOnly: boolean,
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
-): boolean {
-  return proposeOnly && hasProposeWriteTools(tools, context);
-}
-
-function shouldRefusePendingPlanBailout(
-  context: ToolExecutionContext,
-  tools: ToolRegistry,
-): boolean {
-  if (!hasProposeWriteTools(tools, context)) return false;
-  return pendingAgentPlanCount(context.agentPlan.plan) > 0;
-}
-
-/**
- * After inventory across notebooks, refuse chat-only stops until a plan exists.
- * Pure list_notebooks (no note listing) still allowed to complete.
- */
-function shouldRefuseDiscoveryBailout(
-  toolNames: readonly string[],
-  context: ToolExecutionContext,
-  tools: ToolRegistry,
-): boolean {
-  if (context.agentPlan.plan) return false;
-  if (toolNames.includes("set_agent_plan")) return false;
-  if (!hasAgentPlanTools(tools, context)) return false;
-  return isSignificantDiscovery(toolNames);
-}
-
-function isSignificantDiscovery(toolNames: readonly string[]): boolean {
-  const noteLists = toolNames.filter(
-    (name) => name === "list_notebook_notes",
-  ).length;
-  if (noteLists >= 2) return true;
-  return (
-    toolNames.includes("list_notebooks") &&
-    toolNames.includes("list_notebook_notes")
-  );
-}
-
-function hasAgentPlanTools(
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
-): boolean {
-  return tools
-    .providerDefinitions(context)
-    .some((tool) => tool.name === "set_agent_plan");
-}
-
-function withMissingProposalNotice(assistantText: string): string {
-  const notice =
-    "No propose-write tools were called, so ChangeReview did not open. Ask again to apply the changes.";
-  const trimmed = assistantText.trim();
-  return trimmed ? `${trimmed}\n\n${notice}` : notice;
-}
-
-function hasProposeWriteTools(
-  tools: ToolRegistry,
-  context: ToolExecutionContext,
-): boolean {
-  return tools.hasProposeWriteTools(context);
 }
 
 function toAssistantMessage(step: ModelStep): ProviderMessage {
@@ -547,32 +433,4 @@ function mergeUsage(
 function assertNotAborted(abortSignal: AbortSignal): void {
   if (!abortSignal.aborted) return;
   throw new DomainError("ABORTED", "Agent run cancelled", abortSignal.reason);
-}
-
-function toolFailureResult(
-  call: NormalizedToolCall,
-  error: unknown,
-): ToolExecutionResult {
-  if (error instanceof DomainError && shouldRethrowToolError(error)) {
-    throw error;
-  }
-  const failure =
-    error instanceof DomainError
-      ? error
-      : new DomainError("INTERNAL", "Unexpected tool failure", error);
-  return {
-    toolCallId: call.id,
-    name: call.name,
-    risk: "read",
-    output: {
-      error: {
-        code: failure.code,
-        message: failure.message,
-      },
-    },
-  };
-}
-
-function shouldRethrowToolError(error: DomainError): boolean {
-  return error.code === "ABORTED" || error.code === "LIMIT_EXCEEDED";
 }

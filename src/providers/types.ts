@@ -71,6 +71,20 @@ export interface AiProvider {
    * @example await provider.listModels(new AbortController().signal)
    */
   listModels(abortSignal: AbortSignal): Promise<readonly string[]>;
+
+  /**
+   * Resolves the context window max for a model, or null when unknown.
+   *
+   * @example await provider.contextWindow('llama3', new AbortController().signal)
+   */
+  contextWindow(model: string, abortSignal: AbortSignal): Promise<number | null>;
+
+  /**
+   * Returns whether a specific model is available/runnable on the endpoint.
+   *
+   * @example await provider.modelAvailable('glm-5.2:cloud', signal)
+   */
+  modelAvailable(model: string, abortSignal: AbortSignal): Promise<boolean>;
 }
 
 export interface HttpTransport {

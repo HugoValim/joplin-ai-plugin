@@ -3,8 +3,13 @@ import type {
   NoteMetadataRecord,
   NoteOrganizationRepository,
   NotebookMetadataRecord,
+  RestoreNoteInput,
+  RestoreNotebookInput,
+  TrashListing,
   TrashNoteInput,
   TrashNotebookInput,
+  TrashedNoteRecord,
+  TrashedNotebookRecord,
   UpdateNoteMetadataInput,
   UpdateNotebookMetadataInput,
 } from "../../src/notes/retriever";
@@ -71,6 +76,45 @@ class FakeNoteOrganizationRepository implements NoteOrganizationRepository {
   }
 
   public async trashNotebook(_input: TrashNotebookInput): Promise<void> {
+    throw new Error("Proposal tools must not write");
+  }
+
+  public async listTrash(): Promise<TrashListing> {
+    return {
+      notes: [
+        {
+          ...this.note,
+          deletedTime: 99,
+        },
+      ],
+      notebooks: [
+        {
+          ...this.notebook,
+          deletedTime: 99,
+        },
+      ],
+    };
+  }
+
+  public async readTrashedNote(): Promise<TrashedNoteRecord> {
+    return {
+      ...this.note,
+      deletedTime: 99,
+    };
+  }
+
+  public async readTrashedNotebook(): Promise<TrashedNotebookRecord> {
+    return {
+      ...this.notebook,
+      deletedTime: 99,
+    };
+  }
+
+  public async restoreNote(_input: RestoreNoteInput): Promise<void> {
+    throw new Error("Proposal tools must not write");
+  }
+
+  public async restoreNotebook(_input: RestoreNotebookInput): Promise<void> {
     throw new Error("Proposal tools must not write");
   }
 }
@@ -541,6 +585,107 @@ describe("note organization proposal tools", () => {
       }),
     ]);
   });
+
+  test("lists trashed notes and notebooks for restore targeting", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    const result = await registry.execute(
+      {
+        id: "call-list-trash",
+        name: "list_trash",
+        arguments: { limit: 25 },
+      },
+      toolContext({ runId: "run-list-trash" }),
+    );
+
+    expect(result.output).toEqual({
+      notes: [
+        {
+          id: "note-1",
+          title: "Draft",
+          parent_id: "folder-1",
+          updated_time: 10,
+          deleted_time: 99,
+        },
+      ],
+      notebooks: [
+        {
+          id: "folder-1",
+          title: "Projects",
+          parent_id: "",
+          updated_time: 40,
+          deleted_time: 99,
+        },
+      ],
+    });
+  });
+
+  test("proposes restoring a trashed note to a chosen notebook", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      changes,
+    );
+
+    await registry.execute(
+      {
+        id: "call-restore-note",
+        name: "restore_note",
+        arguments: {
+          note_id: "note-1",
+          expected_updated_time: 10,
+          parent_id: "folder-2",
+        },
+      },
+      toolContext({ runId: "run-restore-note" }),
+    );
+
+    expect(changes.getByRun("run-restore-note")?.changes).toEqual([
+      expect.objectContaining({
+        kind: "note",
+        operation: "restore",
+        noteId: "note-1",
+        parentId: "folder-2",
+      }),
+    ]);
+  });
+
+  test("proposes restoring a trashed notebook and its contents", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      changes,
+    );
+
+    await registry.execute(
+      {
+        id: "call-restore-notebook",
+        name: "restore_notebook",
+        arguments: {
+          notebook_id: "folder-1",
+          expected_updated_time: 40,
+        },
+      },
+      toolContext({ runId: "run-restore-notebook" }),
+    );
+
+    expect(changes.getByRun("run-restore-notebook")?.changes).toEqual([
+      expect.objectContaining({
+        kind: "notebook",
+        operation: "restore",
+        notebookId: "folder-1",
+      }),
+    ]);
+  });
 });
 
 describe("note organization secret notebooks", () => {
@@ -560,6 +705,33 @@ describe("note organization secret notebooks", () => {
           arguments: { notebook_id: "folder-1" },
         },
         toolContext({ secretNotebookIds: new Set(["folder-1"]) }),
+      ),
+    ).rejects.toThrow("marked secret");
+  });
+
+  test("rejects restoring a note into a secret notebook", async () => {
+    const registry = new ToolRegistry();
+    registerNoteOrganizationTools(
+      registry,
+      new FakeNoteOrganizationRepository(),
+      new InMemoryChangeSetStore(),
+    );
+
+    await expect(
+      registry.execute(
+        {
+          id: "call-restore-secret",
+          name: "restore_note",
+          arguments: {
+            note_id: "note-1",
+            expected_updated_time: 10,
+            parent_id: "folder-secret",
+          },
+        },
+        toolContext({
+          runId: "run-restore-secret",
+          secretNotebookIds: new Set(["folder-secret"]),
+        }),
       ),
     ).rejects.toThrow("marked secret");
   });

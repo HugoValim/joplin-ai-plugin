@@ -7,6 +7,7 @@ import {
   ChangeApplier,
   InMemoryRollbackStore,
 } from "../../src/agent/changeApplier";
+import { DomainError } from "../../src/shared/errors";
 import type {
   AtomicWritePort,
   FileCandidateFinder,
@@ -52,6 +53,7 @@ class BlockingProvider implements AiProvider {
   private readonly started = new Promise<void>((resolve) => {
     this.markStarted = resolve;
   });
+  private connectionOk = true;
 
   public async *streamChat(
     request: StreamChatRequest,
@@ -67,11 +69,25 @@ class BlockingProvider implements AiProvider {
   }
 
   public async testConnection(): Promise<void> {
+    if (!this.connectionOk) {
+      throw new Error("endpoint unreachable for connectivity check");
+    }
     return Promise.resolve();
   }
 
   public async listModels(): Promise<readonly string[]> {
+    if (!this.connectionOk) {
+      throw new Error("endpoint unreachable for model list");
+    }
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 
   public waitUntilStarted(): Promise<void> {
@@ -80,6 +96,10 @@ class BlockingProvider implements AiProvider {
 
   public release(): void {
     this.releaseRun?.();
+  }
+
+  public setConnectionOk(ok: boolean): void {
+    this.connectionOk = ok;
   }
 }
 
@@ -120,6 +140,14 @@ class ProposalThenCompletionProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 
@@ -245,6 +273,18 @@ class RecordingDialogs implements DialogPort {
 
 class EmptyCommands implements CommandPort {
   public async execute(): Promise<null> {
+    return null;
+  }
+}
+
+class RecordingCommands implements CommandPort {
+  public readonly calls: Array<{
+    readonly name: string;
+    readonly args: readonly unknown[];
+  }> = [];
+
+  public async execute(name: string, ...args: unknown[]): Promise<null> {
+    this.calls.push({ name, args });
     return null;
   }
 }
@@ -484,7 +524,11 @@ describe("ChatController", () => {
     expect(
       panel.events.some((event) => event.type === "changes.proposed"),
     ).toBe(false);
-    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.status).toBe("applied");
+    expect(
+      pending?.changes.every((change) => change.status === "applied"),
+    ).toBe(true);
   });
 
   test("requires trusted confirmation before enabling automatic apply", async () => {
@@ -556,5 +600,240 @@ describe("ChatController", () => {
     expect(dialogs.messages[0]).toContain(
       "Deletions still require manual ChangeReview",
     );
+    expect(dialogs.messages[0]).toContain("Keep/Undo");
+  });
+
+  test("keeps endpoint status online through a provider error during a busy run", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("StatusLock");
+    const provider = new (class implements AiProvider {
+      public async *streamChat(): AsyncIterable<ProviderEvent> {
+        yield { type: "text-delta", delta: "partial" };
+        throw new DomainError("PROVIDER", "transient provider failure");
+      }
+      public async testConnection(): Promise<void> {
+        return Promise.resolve();
+      }
+      public async listModels(): Promise<readonly string[]> {
+        return ["glm-5.2:cloud"];
+      }
+      public async modelAvailable(): Promise<boolean> {
+        return true;
+      }
+      public async contextWindow(): Promise<number | null> {
+        return null;
+      }
+    })();
+    const notes = new EmptyNoteRepository();
+    const source = new EmptyActiveNoteSource();
+    const changes = new InMemoryChangeSetStore();
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
+      () => provider,
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-status",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    panel.events.length = 0;
+
+    // Run throws a PROVIDER error mid-stream. recordFailure runs while the run
+    // is still registered (clearIfCurrent happens in finally, after). The
+    // snapshot emitted by recordFailure must NOT report offline while busy.
+    await controller.handle(submission(chat.id, "run-status", "Summarize"));
+
+    const snapshots = panel.events.filter(
+      (event) => event.type === "state.snapshot",
+    );
+    const failureSnapshot = snapshots.at(-1);
+    if (failureSnapshot?.type !== "state.snapshot") {
+      throw new Error("Expected a state.snapshot after the provider error");
+    }
+    expect(failureSnapshot.payload.endpointStatus).toBe("online");
+  });
+
+  test("marks endpoint online on first model step while the run is still busy", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("OnlineMidRun");
+    const provider = new BlockingProvider();
+    provider.setConnectionOk(false);
+    const notes = new EmptyNoteRepository();
+    const source = new EmptyActiveNoteSource();
+    const changes = new InMemoryChangeSetStore();
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(chats, source, notes, commands),
+      createSecretNotebookStore(),
+      () => provider,
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-offline",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "force-offline-check",
+      chatId: chat.id,
+      type: "model.select",
+      payload: { model: "glm-5.2:cloud" },
+    });
+    // model.select fires checkEndpoint without awaiting; wait for offline.
+    await waitForSnapshotStatus(panel, "offline");
+    provider.setConnectionOk(true);
+    panel.events.length = 0;
+
+    const run = controller.handle(
+      submission(chat.id, "run-mid-online", "Start a long task"),
+    );
+    await provider.waitUntilStarted();
+    await waitForSnapshotStatus(panel, "online");
+
+    const midRunSnapshot = [...panel.events]
+      .reverse()
+      .find((event) => event.type === "state.snapshot");
+    if (midRunSnapshot?.type !== "state.snapshot") {
+      throw new Error("Expected a state.snapshot while the run was busy");
+    }
+    expect(midRunSnapshot.payload.endpointStatus).toBe("online");
+
+    provider.release();
+    await run;
+  });
+
+  test("opens safe external links via openItem and rejects unsafe urls", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Links");
+    const commands = new RecordingCommands();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      new RecordingPanel(),
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "link-safe",
+      chatId: chat.id,
+      type: "link.open",
+      payload: { url: "https://example.test/doc" },
+    });
+    expect(commands.calls).toEqual([
+      { name: "openItem", args: ["https://example.test/doc"] },
+    ]);
+
+    await expect(
+      controller.handle({
+        version: PROTOCOL_VERSION,
+        messageId: "link-bad",
+        chatId: chat.id,
+        type: "link.open",
+        payload: { url: "javascript:alert(1)" },
+      }),
+    ).rejects.toThrow("expected an absolute http(s) URL");
+    expect(commands.calls).toHaveLength(1);
   });
 });
+
+async function waitForSnapshotStatus(
+  panel: RecordingPanel,
+  status: "online" | "offline" | "checking" | "unconfigured",
+): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const latest = [...panel.events]
+      .reverse()
+      .find((event) => event.type === "state.snapshot");
+    if (
+      latest?.type === "state.snapshot" &&
+      latest.payload.endpointStatus === status
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for endpointStatus ${status}`);
+}

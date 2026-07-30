@@ -19,8 +19,13 @@ import type {
   NoteSearchHit,
   NotebookMetadataRecord,
   NotebookRecord,
+  RestoreNoteInput,
+  RestoreNotebookInput,
+  TrashListing,
   TrashNoteInput,
   TrashNotebookInput,
+  TrashedNoteRecord,
+  TrashedNotebookRecord,
   UpdateNoteBodyInput,
   UpdateNoteMetadataInput,
   UpdateNotebookMetadataInput,
@@ -53,18 +58,35 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
   public readonly trashedNotes: TrashNoteInput[] = [];
   public readonly notebookMetadataUpdates: UpdateNotebookMetadataInput[] = [];
   public readonly trashedNotebooks: TrashNotebookInput[] = [];
-  public readonly note: NoteMetadataRecord = {
+  public readonly restoredNotes: RestoreNoteInput[] = [];
+  public readonly restoredNotebooks: RestoreNotebookInput[] = [];
+  public note: NoteMetadataRecord = {
     id: "note-1",
     parentId: "folder-1",
     title: "Draft",
     updatedTime: 10,
     order: 100,
   };
-  public readonly notebook: NotebookMetadataRecord = {
+  public notebook: NotebookMetadataRecord = {
     id: "folder-1",
     parentId: "",
     title: "Projects",
     updatedTime: 40,
+  };
+  public trashedNote: TrashedNoteRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Draft",
+    updatedTime: 10,
+    order: 100,
+    deletedTime: 99,
+  };
+  public trashedNotebook: TrashedNotebookRecord = {
+    id: "folder-1",
+    parentId: "",
+    title: "Projects",
+    updatedTime: 40,
+    deletedTime: 99,
   };
 
   public async readNoteMetadata(): Promise<NoteMetadataRecord> {
@@ -115,6 +137,21 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
   }
   public async trashNotebook(input: TrashNotebookInput): Promise<void> {
     this.trashedNotebooks.push(input);
+  }
+  public async listTrash(): Promise<TrashListing> {
+    return { notes: [this.trashedNote], notebooks: [this.trashedNotebook] };
+  }
+  public async readTrashedNote(): Promise<TrashedNoteRecord> {
+    return this.trashedNote;
+  }
+  public async readTrashedNotebook(): Promise<TrashedNotebookRecord> {
+    return this.trashedNotebook;
+  }
+  public async restoreNote(input: RestoreNoteInput): Promise<void> {
+    this.restoredNotes.push(input);
+  }
+  public async restoreNotebook(input: RestoreNotebookInput): Promise<void> {
+    this.restoredNotebooks.push(input);
   }
 }
 
@@ -485,6 +522,73 @@ describe("ChangeApplier", () => {
     ]);
   });
 
+  test("applies an approved note restore from Joplin Trash", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-restore-note", {
+      kind: "note",
+      operation: "restore",
+      noteId: "note-1",
+      expectedUpdatedTime: 10,
+      parentId: "folder-2",
+      targetLabel: "Draft",
+      before: "In Joplin Trash (soft-deleted).",
+      after: "Title: Draft\nNotebook: folder-2\nManual order: 100",
+    });
+    const changeSet = changes.getByRun("run-restore-note");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-restore-note",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.restoredNotes).toEqual([
+      { noteId: "note-1", expectedUpdatedTime: 10, parentId: "folder-2" },
+    ]);
+  });
+
+  test("applies an approved notebook restore from Joplin Trash", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-restore-notebook", {
+      kind: "notebook",
+      operation: "restore",
+      notebookId: "folder-1",
+      expectedUpdatedTime: 40,
+      targetLabel: "Projects",
+      before: "In Joplin Trash with contained items (soft-deleted).",
+      after: "Title: Projects\nParent notebook: (root)",
+    });
+    const changeSet = changes.getByRun("run-restore-notebook");
+    if (!changeSet) throw new Error("Expected change set");
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-restore-notebook",
+    });
+
+    expect(result.changes[0]?.status).toBe("applied");
+    expect(organizations.restoredNotebooks).toEqual([
+      { notebookId: "folder-1", expectedUpdatedTime: 40 },
+    ]);
+  });
+
   test("applies independent files, reports conflicts, and undoes exact originals", async () => {
     const changes = new InMemoryChangeSetStore();
     const good = changes.add("chat-1", "run-1", {
@@ -531,5 +635,94 @@ describe("ChangeApplier", () => {
     await applier.undo("run-1", "chat-1");
 
     expect(workspace.files.get("good.md")?.content).toBe("Good original");
+  });
+
+  test("undoes only selected change IDs and leaves other rollbacks", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const first = changes.add("chat-1", "run-2", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const second = changes.add("chat-1", "run-2", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(workspace),
+      new InMemoryRollbackStore(),
+    );
+    const changeSet = changes.getByRun("run-2");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await applier.apply(changeSet.id, [first.id, second.id], {
+      chatId: "chat-1",
+      runId: "run-2",
+    });
+    await applier.undo("run-2", "chat-1", [first.id]);
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+  });
+
+  test("merges parked run rollbacks into the target run for cumulative undo", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const older = changes.add("chat-1", "run-old", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const newer = changes.add("chat-1", "run-new", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const rollbacks = new InMemoryRollbackStore();
+    const applier = new ChangeApplier(
+      changes,
+      new UnusedNoteRepository(),
+      new FakeFileWorkspaceResolver(workspace),
+      rollbacks,
+    );
+    const oldSet = changes.getByRun("run-old");
+    const newSet = changes.getByRun("run-new");
+    if (!oldSet || !newSet) throw new Error("Expected change sets");
+
+    await applier.apply(oldSet.id, [older.id], {
+      chatId: "chat-1",
+      runId: "run-old",
+    });
+    await applier.apply(newSet.id, [newer.id], {
+      chatId: "chat-1",
+      runId: "run-new",
+    });
+    await applier.mergeRollbacks("run-new", "chat-1", "run-old");
+    await applier.undo("run-new", "chat-1", [older.id]);
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
   });
 });

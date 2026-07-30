@@ -90,4 +90,43 @@ describe("InMemoryChangeSetStore", () => {
       store.getScoped(changeSet.id, { chatId: "chat-2", runId: "run-1" }),
     ).toThrow("expected chat chat-2 run run-1");
   });
+
+  test("absorbs earlier applied changes and drops the source set", () => {
+    const store = new InMemoryChangeSetStore();
+    const older = store.add("chat-1", "run-old", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A0",
+      after: "A1",
+      expectedSha256: "a0",
+    });
+    const newer = store.add("chat-1", "run-new", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B0",
+      after: "B1",
+      expectedSha256: "b0",
+    });
+    const oldSet = store.getByRun("run-old");
+    const newSet = store.getByRun("run-new");
+    if (!oldSet || !newSet) throw new Error("Expected change sets");
+    store.setResults(oldSet.id, [{ ...older, status: "applied" }]);
+    store.setResults(newSet.id, [{ ...newer, status: "applied" }]);
+
+    const merged = store.absorbAppliedChanges(newSet.id, oldSet.changes, {
+      chatId: "chat-1",
+      runId: "run-new",
+    });
+    store.drop(oldSet.id);
+
+    expect(merged.changes.map((change) => change.targetLabel)).toEqual([
+      "a.md",
+      "b.md",
+    ]);
+    expect(store.get(oldSet.id)).toBeNull();
+    expect(store.getByRun("run-old")).toBeNull();
+    expect(store.getByRun("run-new")?.changes).toHaveLength(2);
+  });
 });

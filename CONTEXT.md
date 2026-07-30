@@ -19,7 +19,7 @@ controlled propose-write batches reviewed by the user before anything applies.
 
 - Aliases: proposal batch, pending changes, review batch
 - Lifecycle: `Proposed → Applied | Partial | Discarded`
-- Notes: at most fifty changes; may reference a Review Note while proposed.
+- Notes: at most one hundred changes; may reference a Review Note while proposed.
 
 ### Proposed Change
 
@@ -50,5 +50,7 @@ stops at direct assistant output actions (insert/replace/append/create note),
 which bypass ChangeReview. Integration points:
 
 - **Joplin editor** — Review Note opens in the normal note editor for reading.
-- **Joplin Trash** — applied deletions move targets to recoverable trash.
+- **Joplin Trash** — applied deletions move targets to recoverable trash;
+  restore proposals recover soft-deleted notes/notebooks through the same
+  review gates (permanent delete remains forbidden).
 - **External folder workspace** — file proposals appear in the same Review Note and ChangeReview list.

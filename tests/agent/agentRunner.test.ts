@@ -39,6 +39,14 @@ class RepeatingToolProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
@@ -86,7 +94,16 @@ class ContentReadTool implements AgentTool<
   }
 }
 
-class ListTool implements AgentTool<Record<string, never>, { ok: boolean }> {
+class ListTool implements AgentTool<
+  Record<string, never>,
+  {
+    notebooks: readonly {
+      id: string;
+      title: string;
+      parent_id: string;
+    }[];
+  }
+> {
   public readonly name = "list_notebooks";
   public readonly description = "List notebooks";
   public readonly risk = "read" as const;
@@ -94,36 +111,93 @@ class ListTool implements AgentTool<Record<string, never>, { ok: boolean }> {
     {},
     { additionalProperties: false },
   );
-  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+  public readonly outputSchema = Type.Object({
+    notebooks: Type.Array(
+      Type.Object({
+        id: Type.String(),
+        title: Type.String(),
+        parent_id: Type.String(),
+      }),
+    ),
+  });
 
   public isAvailable(): boolean {
     return true;
   }
 
-  public async execute(): Promise<{ ok: boolean }> {
-    return { ok: true };
+  public async execute(): Promise<{
+    notebooks: readonly {
+      id: string;
+      title: string;
+      parent_id: string;
+    }[];
+  }> {
+    return {
+      notebooks: [
+        { id: "nb-1", title: "RF", parent_id: "" },
+        { id: "nb-2", title: "Tools", parent_id: "" },
+      ],
+    };
   }
 }
 
 class ListNotebookNotesTool implements AgentTool<
-  Record<string, never>,
-  { ok: boolean }
+  { notebook_id: string },
+  {
+    notes: readonly {
+      id: string;
+      title: string;
+      updated_time: number;
+      order: number;
+    }[];
+  }
 > {
   public readonly name = "list_notebook_notes";
   public readonly description = "List notes in a notebook";
   public readonly risk = "read" as const;
   public readonly inputSchema = Type.Object(
-    {},
+    { notebook_id: Type.String({ minLength: 1 }) },
     { additionalProperties: false },
   );
-  public readonly outputSchema = Type.Object({ ok: Type.Boolean() });
+  public readonly outputSchema = Type.Object({
+    notes: Type.Array(
+      Type.Object({
+        id: Type.String(),
+        title: Type.String(),
+        updated_time: Type.Number(),
+        order: Type.Number(),
+      }),
+    ),
+  });
 
   public isAvailable(): boolean {
     return true;
   }
 
-  public async execute(): Promise<{ ok: boolean }> {
-    return { ok: true };
+  public async execute(input: { notebook_id: string }): Promise<{
+    notes: readonly {
+      id: string;
+      title: string;
+      updated_time: number;
+      order: number;
+    }[];
+  }> {
+    return {
+      notes: [
+        {
+          id: `${input.notebook_id}-n1`,
+          title: "Intro",
+          updated_time: 1,
+          order: 0,
+        },
+        {
+          id: `${input.notebook_id}-n2`,
+          title: "Links",
+          updated_time: 1,
+          order: 1,
+        },
+      ],
+    };
   }
 }
 
@@ -145,6 +219,14 @@ class SingleProposalProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 
@@ -171,6 +253,14 @@ class ProposalThenTextProvider implements AiProvider {
 
   public async listModels(): Promise<readonly string[]> {
     return [];
+  }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
   }
 }
 
@@ -256,6 +346,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
@@ -464,6 +556,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -505,7 +599,7 @@ describe("AgentRunner", () => {
         if (captured.length === 1) {
           yield {
             type: "tool-calls",
-            calls: Array.from({ length: 20 }, (_, index) => ({
+            calls: Array.from({ length: 8 }, (_, index) => ({
               id: `list-${index + 1}`,
               name: "list_notebooks",
               arguments: {},
@@ -519,6 +613,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ListTool());
@@ -569,7 +665,7 @@ describe("AgentRunner", () => {
               ...Array.from({ length: 3 }, (_, index) => ({
                 id: `notes-${index + 1}`,
                 name: "list_notebook_notes",
-                arguments: {},
+                arguments: { notebook_id: `nb-${(index % 2) + 1}` },
               })),
             ],
           };
@@ -616,6 +712,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ListTool());
@@ -682,7 +780,7 @@ describe("AgentRunner", () => {
           yield { type: "completed", finishReason: "tool_calls" };
           return;
         }
-        if (captured.length <= 5) {
+        if (captured.length <= 3) {
           yield { type: "text-delta", delta: "Here is my plan only." };
           yield { type: "completed", finishReason: "stop" };
           return;
@@ -701,6 +799,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -722,7 +822,7 @@ describe("AgentRunner", () => {
     );
 
     expect(result.status).toBe("awaiting-approval");
-    expect(captured.length).toBe(6);
+    expect(captured.length).toBe(4);
     expect(
       captured.filter((request) =>
         request.messages.some(
@@ -731,10 +831,10 @@ describe("AgentRunner", () => {
             message.content.includes("PROPOSE REQUIRED"),
         ),
       ).length,
-    ).toBeGreaterThanOrEqual(4);
+    ).toBeGreaterThanOrEqual(2);
   });
 
-  test("does not complete on a text-only plan after the read budget", async () => {
+  test("stops text-only bailouts early instead of burning the step budget", async () => {
     const captured: StreamChatRequest[] = [];
     const changes = new InMemoryChangeSetStore();
     const provider: AiProvider = {
@@ -757,6 +857,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registry.register(new ContentReadTool());
@@ -779,8 +881,386 @@ describe("AgentRunner", () => {
 
     expect(result.status).toBe("completed");
     expect(result.changeSet).toBeNull();
-    expect(captured.length).toBe(200);
-    expect(result.assistantText).toContain("ChangeReview did not open");
+    expect(captured.length).toBe(6);
+    expect(result.assistantText).toContain("BAILOUT EXHAUSTED");
+  });
+
+  test("blocks further inventory tools after significant discovery", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              { id: "nb", name: "list_notebooks", arguments: {} },
+              {
+                id: "notes-1",
+                name: "list_notebook_notes",
+                arguments: { notebook_id: "nb-1" },
+              },
+              {
+                id: "notes-2",
+                name: "list_notebook_notes",
+                arguments: { notebook_id: "nb-2" },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length === 2) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "plan-1",
+                name: "set_agent_plan",
+                arguments: {
+                  items: [{ id: "1", content: "Improve notes" }],
+                },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [{ id: "propose-1", name: "propose", arguments: {} }],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ListTool());
+    registry.register(new ListNotebookNotesTool());
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-block-discovery",
+        messages: [{ role: "user", content: "Improve all notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(captured.length).toBeGreaterThanOrEqual(2);
+    const secondTools = captured[1]?.tools.map((tool) => tool.name) ?? [];
+    expect(secondTools).toContain("set_agent_plan");
+    expect(secondTools).not.toContain("list_notebooks");
+    expect(secondTools).not.toContain("list_notebook_notes");
+    expect(
+      captured.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("PLAN REQUIRED"),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("bootstraps a plan after inventory when the model keeps narrating", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const plans: string[] = [];
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              { id: "nb", name: "list_notebooks", arguments: {} },
+              {
+                id: "notes-1",
+                name: "list_notebook_notes",
+                arguments: { notebook_id: "nb-1" },
+              },
+              {
+                id: "notes-2",
+                name: "list_notebook_notes",
+                arguments: { notebook_id: "nb-2" },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length <= 3) {
+          yield {
+            type: "text-delta",
+            delta: `Narrating inventory pass ${captured.length}.`,
+          };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [{ id: "propose-1", name: "propose", arguments: {} }],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ListTool());
+    registry.register(new ListNotebookNotesTool());
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes, {
+      onPlanUpdated(plan) {
+        plans.push(plan.items.map((item) => item.content).join("|"));
+      },
+    });
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-bootstrap-plan",
+        messages: [{ role: "user", content: "Improve all notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(plans.length).toBeGreaterThanOrEqual(1);
+    expect(plans[0]).toContain("RF");
+    expect(
+      captured.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "system" &&
+            message.content.includes("PLAN BOOTSTRAPPED"),
+        ),
+      ),
+    ).toBe(true);
+    expect(result.assistantText).not.toContain("BAILOUT EXHAUSTED");
+  });
+
+  test("caps discovery tools in one batch and then requires a plan", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              { id: "nb", name: "list_notebooks", arguments: {} },
+              ...Array.from({ length: 15 }, (_, index) => ({
+                id: `notes-${index + 1}`,
+                name: "list_notebook_notes",
+                arguments: { notebook_id: `nb-${(index % 2) + 1}` },
+              })),
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [
+            {
+              id: "plan-1",
+              name: "set_agent_plan",
+              arguments: {
+                items: [{ id: "1", content: "Improve notes" }],
+              },
+            },
+            { id: "propose-1", name: "propose", arguments: {} },
+          ],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registry.register(new ListTool());
+    registry.register(new ListNotebookNotesTool());
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-cap-discovery",
+        messages: [{ role: "user", content: "Improve all notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    const capped = result.messages.filter(
+      (message) =>
+        message.role === "tool" &&
+        message.content.includes("per-segment cap"),
+    );
+    expect(capped.length).toBeGreaterThanOrEqual(1);
+    expect(captured[1]?.tools.map((tool) => tool.name)).not.toContain(
+      "list_notebook_notes",
+    );
+  });
+
+  test("terminates varied text-only narration under an active plan", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const narrations = [
+      "Now let me propose improvements for batch 2 notes.",
+      "Let me propose the remaining batch 2 edits now.",
+      "I'll call propose-write tools for the next notes next.",
+    ];
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "plan-1",
+                name: "set_agent_plan",
+                arguments: {
+                  items: [
+                    { id: "1", content: "Improve batch 1", status: "completed" },
+                    { id: "2", content: "Improve batch 2" },
+                  ],
+                },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        const text = narrations[captured.length - 2] ?? "Still narrating only.";
+        yield { type: "text-delta", delta: text };
+        yield { type: "completed", finishReason: "stop" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-varied-narration",
+        messages: [{ role: "user", content: "Improve all notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(captured.length).toBe(4);
+    expect(result.assistantText).toContain("STUCK LOOP DETECTED");
+  });
+
+  test("recovers to propose-write after one text-only plan bailout", async () => {
+    const captured: StreamChatRequest[] = [];
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "plan-1",
+                name: "set_agent_plan",
+                arguments: {
+                  items: [{ id: "1", content: "Improve notes" }],
+                },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        if (captured.length === 2) {
+          yield {
+            type: "text-delta",
+            delta: "Plan ready. I'll propose edits next.",
+          };
+          yield { type: "completed", finishReason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool-calls",
+          calls: [{ id: "propose-1", name: "propose", arguments: {} }],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registerAgentPlanTools(registry);
+    registry.register(new ProposeTool(changes));
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-recover-propose",
+        messages: [{ role: "user", content: "Improve notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("awaiting-approval");
+    expect(captured.length).toBe(3);
+    expect(result.changeSet).not.toBeNull();
   });
 
   test("stores the agent plan on continuation after a propose-write pause", async () => {
@@ -808,6 +1288,8 @@ describe("AgentRunner", () => {
       },
       testConnection: async () => undefined,
       listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
     };
     const registry = new ToolRegistry();
     registerAgentPlanTools(registry);
@@ -872,6 +1354,14 @@ class InvalidThenRecoverProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class StrictMoveTool implements AgentTool<
@@ -899,3 +1389,70 @@ class StrictMoveTool implements AgentTool<
     return { ok: true };
   }
 }
+
+describe("AgentRunner stuck loop detection", () => {
+  test("terminates when assistant text repeats across tool steps under a plan", async () => {
+    const captured: StreamChatRequest[] = [];
+    const repeatedText = "Propose X and read remaining notes for the plan";
+    const changes = new InMemoryChangeSetStore();
+    const provider: AiProvider = {
+      async *streamChat(request, _signal) {
+        captured.push(request);
+        if (captured.length === 1) {
+          yield {
+            type: "tool-calls",
+            calls: [
+              {
+                id: "plan-1",
+                name: "set_agent_plan",
+                arguments: {
+                  items: [{ id: "1", content: "Improve notes" }],
+                },
+              },
+            ],
+          };
+          yield { type: "completed", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", delta: repeatedText };
+        yield {
+          type: "tool-calls",
+          calls: [
+            {
+              id: `echo-${captured.length}`,
+              name: "echo",
+              arguments: {},
+            },
+          ],
+        };
+        yield { type: "completed", finishReason: "tool_calls" };
+      },
+      testConnection: async () => undefined,
+      listModels: async () => [],
+      modelAvailable: async () => true,
+      contextWindow: async () => null,
+    };
+    const registry = new ToolRegistry();
+    registerAgentPlanTools(registry);
+    registry.register(new EchoTool());
+    const runner = new AgentRunner(provider, registry, changes);
+
+    const result = await runner.run(
+      {
+        chatId: "chat-1",
+        runId: "run-stuck",
+        messages: [{ role: "user", content: "Improve all my notes" }],
+        hasFileWorkspace: false,
+        vault: false,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(captured.length).toBe(4);
+    expect(result.assistantText).toContain("STUCK LOOP DETECTED");
+  });
+});

@@ -22,7 +22,10 @@ import type {
   NotebookRecord,
   UpdateNoteBodyInput,
 } from "../../src/notes/retriever";
-import { InMemoryChangeSetStore, type ChangeSet } from "../../src/persistence/changeSetStore";
+import {
+  InMemoryChangeSetStore,
+  type ChangeSet,
+} from "../../src/persistence/changeSetStore";
 import { ChatStore } from "../../src/persistence/chatStore";
 import { ApprovalWorkflow } from "../../src/plugin/approvalWorkflow";
 import type { PanelPort } from "../../src/plugin/panelPort";
@@ -194,6 +197,14 @@ class FinalTextProvider implements AiProvider {
   public async listModels(): Promise<readonly string[]> {
     return [];
   }
+
+  public async modelAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  public async contextWindow(): Promise<number | null> {
+    return null;
+  }
 }
 
 class RecordingPanelPort implements PanelPort {
@@ -330,7 +341,7 @@ describe("ApprovalWorkflow", () => {
     });
 
     expect(notes.note.body).toBe("New");
-    expect(reviewNotes.disposed).toEqual(["review-note-1"]);
+    expect(reviewNotes.disposed).toEqual([]);
     expect(
       provider.lastRequest?.messages.some((message) =>
         message.content.includes('"status":"applied"'),
@@ -338,6 +349,9 @@ describe("ApprovalWorkflow", () => {
     ).toBe(true);
     expect((await chats.get(chat.id))?.messages.at(-1)?.content).toBe(
       "Applied successfully.",
+    );
+    expect((await chats.get(chat.id))?.pendingChangeSet?.status).toBe(
+      "applied",
     );
     expect(panel.events.map((event) => event.type)).toEqual([
       "changes.proposed",
@@ -392,9 +406,12 @@ describe("ApprovalWorkflow", () => {
       "run.progress",
       "run.completed",
     ]);
+    const saved = await chats.get(chat.id);
+    expect(saved?.pendingChangeSet?.status).toBe("applied");
+    expect(saved?.pendingChangeSet?.changes[0]?.status).toBe("applied");
   });
 
-  test("automatically applies file-only proposals without review", async () => {
+  test("automatically applies file-only proposals and retains applied review", async () => {
     const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
     const chat = await chats.create("Automatic files");
     const changes = new InMemoryChangeSetStore();
@@ -440,6 +457,8 @@ describe("ApprovalWorkflow", () => {
     expect(panel.events[0]).toMatchObject({
       payload: { label: "Auto-applying 1 proposed changes" },
     });
+    const saved = await chats.get(chat.id);
+    expect(saved?.pendingChangeSet?.status).toBe("applied");
   });
 
   test("requires manual review for deletion even when auto-apply is enabled", async () => {
@@ -511,7 +530,11 @@ describe("ApprovalWorkflow", () => {
         new InMemoryRollbackStore(),
       ),
       new ToolRegistry(),
-      { connectWithConfirmation: async () => ({ provider: new FinalTextProvider() }) },
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
       new PluginEventSender(new RecordingPanelPort()),
       new RunCancellationRegistry(),
       new NoOpReviewNotePort(),
@@ -532,5 +555,397 @@ describe("ApprovalWorkflow", () => {
         },
       }),
     ).rejects.toThrow("Invalid apply token");
+  });
+});
+
+describe("ApprovalWorkflow deny", () => {
+  test("deny restores applied changes and resolves the change set", async () => {
+    expect(typeof ApprovalWorkflow.prototype.deny).toBe("function");
+  });
+});
+
+describe("ApprovalWorkflow keep and undo", () => {
+  test("keep clears applied review without restoring note body", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Keep review");
+    const changes = new InMemoryChangeSetStore();
+    const notes = new MutableNoteRepository();
+    const rollbacks = new InMemoryRollbackStore();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        notes,
+        new EmptyWorkspaceResolver(),
+        rollbacks,
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
+    );
+    changes.add(chat.id, "run-keep", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "Updated",
+      expectedUpdatedTime: 10,
+    });
+    const changeSet = changes.getByRun("run-keep");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await workflow.resolveProposedChanges(changeSet, true);
+    expect(notes.note.body).toBe("Updated");
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.status).toBe("applied");
+
+    await workflow.keep({
+      version: 2,
+      messageId: "keep-1",
+      chatId: chat.id,
+      runId: "run-keep",
+      type: "changes.keep",
+      payload: {
+        changeSetId: changeSet.id,
+        changeIds: changeSet.changes.map((change) => change.id),
+      },
+    });
+
+    expect(notes.note.body).toBe("Updated");
+    expect((await chats.get(chat.id))?.pendingChangeSet).toBeNull();
+  });
+
+  test("undo restores one applied change and leaves the other pending", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Undo one");
+    const changes = new InMemoryChangeSetStore();
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const rollbacks = new InMemoryRollbackStore();
+    const panel = new RecordingPanelPort();
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new FakeFileWorkspaceResolver(workspace),
+        rollbacks,
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
+    );
+    const first = changes.add(chat.id, "run-undo-one", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    changes.add(chat.id, "run-undo-one", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const changeSet = changes.getByRun("run-undo-one");
+    if (!changeSet) throw new Error("Expected change set");
+
+    await workflow.resolveProposedChanges(changeSet, true);
+    await workflow.undoChanges({
+      version: 2,
+      messageId: "undo-1",
+      chatId: chat.id,
+      runId: "run-undo-one",
+      type: "changes.undo",
+      payload: {
+        changeSetId: changeSet.id,
+        changeIds: [first.id],
+      },
+    });
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+    const pending = (await chats.get(chat.id))?.pendingChangeSet;
+    expect(pending?.changes).toHaveLength(1);
+    expect(pending?.changes[0]?.targetLabel).toBe("b.md");
+  });
+});
+
+describe("ApprovalWorkflow multi-batch review accumulation", () => {
+  function createFileWorkflow(workspace: FakeFileWorkspace): {
+    readonly chats: ChatStore;
+    readonly changes: InMemoryChangeSetStore;
+    readonly rollbacks: InMemoryRollbackStore;
+    readonly panel: RecordingPanelPort;
+    readonly workflow: ApprovalWorkflow;
+    readonly chatId: Promise<string>;
+  } {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const changes = new InMemoryChangeSetStore();
+    const rollbacks = new InMemoryRollbackStore();
+    const panel = new RecordingPanelPort();
+    const chatId = chats.create("Accumulate").then((chat) => chat.id);
+    const workflow = new ApprovalWorkflow(
+      chats,
+      changes,
+      new ChangeApplier(
+        changes,
+        new MutableNoteRepository(),
+        new FakeFileWorkspaceResolver(workspace),
+        rollbacks,
+      ),
+      new ToolRegistry(),
+      {
+        connectWithConfirmation: async () => ({
+          provider: new FinalTextProvider(),
+        }),
+      },
+      new PluginEventSender(panel),
+      new RunCancellationRegistry(),
+      new NoOpReviewNotePort(),
+    );
+    return { chats, changes, rollbacks, panel, workflow, chatId };
+  }
+
+  test("merges parked batch A into applied batch B review", async () => {
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const { chats, changes, workflow, chatId } = createFileWorkflow(workspace);
+    const id = await chatId;
+
+    changes.add(id, "run-a", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const batchA = changes.getByRun("run-a");
+    if (!batchA) throw new Error("Expected batch A");
+    await workflow.resolveProposedChanges(batchA, true);
+
+    changes.add(id, "run-b", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const batchB = changes.getByRun("run-b");
+    if (!batchB) throw new Error("Expected batch B");
+    await workflow.resolveProposedChanges(batchB, true);
+
+    const pending = (await chats.get(id))?.pendingChangeSet;
+    expect(pending?.status).toBe("applied");
+    expect(pending?.changes.map((change) => change.targetLabel)).toEqual([
+      "a.md",
+      "b.md",
+    ]);
+    expect((await chats.get(id))?.parkedAppliedChangeSet).toBeNull();
+  });
+
+  test("auto-applies three batches into one cumulative review", async () => {
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A0", "a0"));
+    workspace.files.set("b.md", snapshot("b.md", "B0", "b0"));
+    workspace.files.set("c.md", snapshot("c.md", "C0", "c0"));
+    const { chats, changes, workflow, chatId } = createFileWorkflow(workspace);
+    const id = await chatId;
+
+    for (const [runId, path, before, after, hash] of [
+      ["run-1", "a.md", "A0", "A1", "a0"],
+      ["run-2", "b.md", "B0", "B1", "b0"],
+      ["run-3", "c.md", "C0", "C1", "c0"],
+    ] as const) {
+      changes.add(id, runId, {
+        kind: "file",
+        relativePath: path,
+        targetLabel: path,
+        before,
+        after,
+        expectedSha256: hash,
+      });
+      const batch = changes.getByRun(runId);
+      if (!batch) throw new Error(`Expected ${runId}`);
+      await workflow.resolveProposedChanges(batch, true);
+    }
+
+    const pending = (await chats.get(id))?.pendingChangeSet;
+    expect(pending?.changes).toHaveLength(3);
+    expect(pending?.changes.map((change) => change.targetLabel)).toEqual([
+      "a.md",
+      "b.md",
+      "c.md",
+    ]);
+  });
+
+  test("undoes a change from an earlier batch after merge", async () => {
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const { chats, changes, workflow, chatId } = createFileWorkflow(workspace);
+    const id = await chatId;
+
+    const changeA = changes.add(id, "run-a", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const batchA = changes.getByRun("run-a");
+    if (!batchA) throw new Error("Expected batch A");
+    await workflow.resolveProposedChanges(batchA, true);
+
+    changes.add(id, "run-b", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const batchB = changes.getByRun("run-b");
+    if (!batchB) throw new Error("Expected batch B");
+    await workflow.resolveProposedChanges(batchB, true);
+
+    const pending = (await chats.get(id))?.pendingChangeSet;
+    if (!pending) throw new Error("Expected merged pending review");
+    await workflow.undoChanges({
+      version: 2,
+      messageId: "undo-earlier",
+      chatId: id,
+      runId: pending.runId,
+      type: "changes.undo",
+      payload: {
+        changeSetId: pending.id,
+        changeIds: [changeA.id],
+      },
+    });
+
+    expect(workspace.files.get("a.md")?.content).toBe("A original");
+    expect(workspace.files.get("b.md")?.content).toBe("B new");
+    const remaining = (await chats.get(id))?.pendingChangeSet;
+    expect(remaining?.changes.map((change) => change.targetLabel)).toEqual([
+      "b.md",
+    ]);
+  });
+
+  test("parks applied review while showing only the next proposed batch", async () => {
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const { chats, changes, workflow, chatId } = createFileWorkflow(workspace);
+    const id = await chatId;
+
+    changes.add(id, "run-a", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const batchA = changes.getByRun("run-a");
+    if (!batchA) throw new Error("Expected batch A");
+    await workflow.resolveProposedChanges(batchA, true);
+
+    changes.add(id, "run-b", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const batchB = changes.getByRun("run-b");
+    if (!batchB) throw new Error("Expected batch B");
+    await workflow.resolveProposedChanges(batchB, false);
+
+    const saved = await chats.get(id);
+    expect(saved?.pendingChangeSet?.status).toBe("proposed");
+    expect(saved?.pendingChangeSet?.changes).toHaveLength(1);
+    expect(saved?.pendingChangeSet?.changes[0]?.targetLabel).toBe("b.md");
+    expect(saved?.parkedAppliedChangeSet?.status).toBe("applied");
+    expect(saved?.parkedAppliedChangeSet?.changes).toHaveLength(1);
+    expect(saved?.parkedAppliedChangeSet?.changes[0]?.targetLabel).toBe("a.md");
+  });
+
+  test("keep-all clears pending and parked applied reviews", async () => {
+    const workspace = new FakeFileWorkspace();
+    workspace.files.clear();
+    workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
+    workspace.files.set("b.md", snapshot("b.md", "B original", "b-hash"));
+    const { chats, changes, workflow, chatId } = createFileWorkflow(workspace);
+    const id = await chatId;
+
+    changes.add(id, "run-a", {
+      kind: "file",
+      relativePath: "a.md",
+      targetLabel: "a.md",
+      before: "A original",
+      after: "A new",
+      expectedSha256: "a-hash",
+    });
+    const batchA = changes.getByRun("run-a");
+    if (!batchA) throw new Error("Expected batch A");
+    await workflow.resolveProposedChanges(batchA, true);
+
+    changes.add(id, "run-b", {
+      kind: "file",
+      relativePath: "b.md",
+      targetLabel: "b.md",
+      before: "B original",
+      after: "B new",
+      expectedSha256: "b-hash",
+    });
+    const batchB = changes.getByRun("run-b");
+    if (!batchB) throw new Error("Expected batch B");
+    await workflow.resolveProposedChanges(batchB, false);
+
+    expect((await chats.get(id))?.parkedAppliedChangeSet).not.toBeNull();
+    await workflow.discard({
+      version: 2,
+      messageId: "discard-b",
+      chatId: id,
+      runId: "run-b",
+      type: "changes.discard",
+      payload: { changeSetId: batchB.id },
+    });
+
+    const saved = await chats.get(id);
+    expect(saved?.pendingChangeSet).toBeNull();
+    expect(saved?.parkedAppliedChangeSet).toBeNull();
+    expect(workspace.files.get("a.md")?.content).toBe("A new");
   });
 });

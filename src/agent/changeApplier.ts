@@ -44,12 +44,14 @@ export interface FileWorkspaceWriteResolver {
 export type RollbackItem =
   | {
       readonly kind: "file";
+      readonly changeId: string;
       readonly chatId: string;
       readonly snapshot: FileRollbackSnapshot;
       readonly expectedAppliedSha256: string;
     }
   | {
       readonly kind: "note";
+      readonly changeId: string;
       readonly noteId: string;
       readonly originalBody: string;
       readonly expectedAppliedUpdatedTime: number;
@@ -173,10 +175,15 @@ export class ChangeApplier {
 
   /**
    * Restores applied note bodies and exact file bytes if they remain unchanged.
+   * When `changeIds` is set, only matching rollback items are restored.
    *
-   * @example await applier.undo(runId, chatId)
+   * @example await applier.undo(runId, chatId, ["change-1"])
    */
-  public async undo(runId: string, chatId: string): Promise<UndoResult> {
+  public async undo(
+    runId: string,
+    chatId: string,
+    changeIds?: readonly string[],
+  ): Promise<UndoResult> {
     const record = await this.rollbacks.get(runId);
     if (!record) {
       throw new DomainError(
@@ -190,17 +197,70 @@ export class ChangeApplier {
         `Rollback ${safeValue(runId)} belongs to chat ${record.chatId}; expected chat ${chatId}`,
       );
     }
+    const selected = selectRollbackItems(record.items, changeIds);
     let restored = 0;
     const conflicts: string[] = [];
+    const remaining: RollbackItem[] = [];
     for (const item of record.items) {
+      if (!selected.has(item.changeId)) {
+        remaining.push(item);
+        continue;
+      }
       try {
         await this.restoreItem(item);
         restored += 1;
       } catch (error: unknown) {
         conflicts.push(errorMessage(error));
+        remaining.push(item);
       }
     }
+    await this.rollbacks.save({ ...record, items: remaining });
     return { runId, restored, conflicts };
+  }
+
+  /**
+   * Merges undo snapshots from a parked run into the target cumulative run.
+   *
+   * @example await applier.mergeRollbacks(targetRunId, chatId, parkedRunId)
+   */
+  public async mergeRollbacks(
+    targetRunId: string,
+    chatId: string,
+    sourceRunId: string,
+  ): Promise<void> {
+    if (targetRunId === sourceRunId) return;
+    const source = await this.rollbacks.get(sourceRunId);
+    if (!source) return;
+    if (source.chatId !== chatId) {
+      throw new DomainError(
+        "SECURITY",
+        `Rollback ${safeValue(sourceRunId)} belongs to chat ${source.chatId}; expected chat ${chatId}`,
+      );
+    }
+    const target = await this.rollbacks.get(targetRunId);
+    if (target && target.chatId !== chatId) {
+      throw new DomainError(
+        "SECURITY",
+        `Rollback ${safeValue(targetRunId)} belongs to chat ${target.chatId}; expected chat ${chatId}`,
+      );
+    }
+    const items = [...(target?.items ?? []), ...source.items];
+    if (items.length > 100) {
+      throw new DomainError(
+        "VALIDATION",
+        `Merged rollback would have ${items.length} items; expected at most 100`,
+      );
+    }
+    await this.rollbacks.save({
+      runId: targetRunId,
+      chatId,
+      createdAt: target?.createdAt ?? source.createdAt,
+      items,
+    });
+    await this.rollbacks.save({
+      ...source,
+      items: [],
+    });
   }
 
   private requireProposedSet(
@@ -291,6 +351,7 @@ export class ChangeApplier {
       );
       return {
         kind: "file",
+        changeId: item.change.id,
         chatId: item.chatId,
         snapshot: item.original,
         expectedAppliedSha256: applied.sha256,
@@ -318,6 +379,7 @@ export class ChangeApplier {
     });
     return {
       kind: "note",
+      changeId: item.change.id,
       noteId: item.change.noteId,
       originalBody: item.original.body,
       expectedAppliedUpdatedTime: applied.updatedTime,
@@ -434,4 +496,25 @@ function cloneRollback(record: RollbackRecord): RollbackRecord {
         : { ...item },
     ),
   };
+}
+
+function selectRollbackItems(
+  items: readonly RollbackItem[],
+  changeIds: readonly string[] | undefined,
+): ReadonlySet<string> {
+  if (!changeIds) {
+    return new Set(items.map((item) => item.changeId));
+  }
+  const known = new Set(items.map((item) => item.changeId));
+  const selected = new Set<string>();
+  for (const changeId of changeIds) {
+    if (!known.has(changeId)) {
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown undo change ${safeValue(changeId)}; expected a rollback change ID`,
+      );
+    }
+    selected.add(changeId);
+  }
+  return selected;
 }

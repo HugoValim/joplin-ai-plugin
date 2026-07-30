@@ -7,6 +7,7 @@ interface ContextSummaryProps {
   readonly activeNote: ActiveNoteSummary;
   readonly secretNotebookIds: readonly string[];
   readonly disabled: boolean;
+  readonly compact?: boolean;
   readonly onUpdate: (next: Partial<ActiveChat["context"]>) => void;
   readonly onToggleAttached: () => void;
   readonly onSelectFolder: () => void;
@@ -27,53 +28,39 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
     Boolean(activeNotebookId) &&
     props.secretNotebookIds.includes(activeNotebookId);
   return (
-    <details className="context-summary">
+    <details
+      key={props.compact ? "context-compact" : "context-full"}
+      className={`context-summary${props.compact ? " context-summary-compact" : ""}`}
+    >
       <summary aria-label="Context settings">
         <ContextChip
           label={props.activeNote?.title ?? "No active note"}
           title={props.activeNote?.title}
         />
-        <ContextChip label={`${attached} attached`} />
-        <ContextChip
-          label={`Vault ${props.chat.context.vault ? "on" : "off"}`}
-        />
-        <ContextChip label={`${secretCount} secret`} />
-        <ContextChip
-          label={props.chat.context.interactionMode === "ask" ? "Ask" : "Agent"}
-        />
-        <ContextChip
-          label={props.chat.context.autoApply ? "Bypass on" : "Writes review"}
-        />
-        <ContextChip
-          label={props.chat.externalRoot ?? "Add folder"}
-          title={props.chat.externalRoot ?? undefined}
-        />
+        {props.compact ? (
+          <ContextChip
+            label={props.chat.context.autoApply ? "Bypass on" : "Writes review"}
+          />
+        ) : (
+          <>
+            <ContextChip label={`${attached} attached`} />
+            <ContextChip
+              label={`Vault ${props.chat.context.vault ? "on" : "off"}`}
+            />
+            <ContextChip label={`${secretCount} secret`} />
+            <ContextChip
+              label={
+                props.chat.context.autoApply ? "Bypass on" : "Writes review"
+              }
+            />
+            <ContextChip
+              label={props.chat.externalRoot ?? "Add folder"}
+              title={props.chat.externalRoot ?? undefined}
+            />
+          </>
+        )}
       </summary>
       <div className="context-details">
-        <div className="context-control mode-switch" role="group" aria-label="Interaction mode">
-          <div>
-            <strong>Mode</strong>
-            <p>Ask is read-only. Agent can propose note and file changes.</p>
-          </div>
-          <div className="mode-switch-buttons">
-            <button
-              type="button"
-              disabled={props.disabled}
-              aria-pressed={props.chat.context.interactionMode === "ask"}
-              onClick={() => props.onUpdate({ interactionMode: "ask" })}
-            >
-              Ask
-            </button>
-            <button
-              type="button"
-              disabled={props.disabled}
-              aria-pressed={props.chat.context.interactionMode === "agent"}
-              onClick={() => props.onUpdate({ interactionMode: "agent" })}
-            >
-              Agent
-            </button>
-          </div>
-        </div>
         <ContextToggle
           label="Active Note"
           description="Include a fresh snapshot of the selected note for each turn."
@@ -125,7 +112,7 @@ export function ContextSummary(props: ContextSummaryProps): JSX.Element {
         </div>
         <ContextToggle
           label="Bypass permissions"
-          description="Apply non-delete proposals without review. Deletions still require ChangeReview."
+          description="Auto-apply non-delete proposals, then review with Keep/Undo. Deletions still require ChangeReview before apply."
           checked={props.chat.context.autoApply}
           disabled={props.disabled}
           onChange={(checked) => props.onUpdate({ autoApply: checked })}

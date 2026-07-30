@@ -17,6 +17,7 @@ import {
   type OrganizationProposalOutput,
 } from "./organizationTool";
 import { registerNotebookOrganizationTools } from "./notebookOrganizationTools";
+import { registerTrashOrganizationTools } from "./trashOrganizationTools";
 
 interface ReadNotebookInput {
   readonly notebook_id: string;
@@ -432,5 +433,6 @@ export function registerNoteOrganizationTools(
   registry.register(new MoveNoteTool(repository, changes));
   registry.register(new ReorderNoteTool(repository, changes));
   registry.register(new DeleteNoteTool(repository, changes));
+  registerTrashOrganizationTools(registry, repository, changes);
   registerNotebookOrganizationTools(registry, repository, changes);
 }

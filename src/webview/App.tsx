@@ -18,6 +18,9 @@ export function App(): JSX.Element {
   const { state } = controller;
   const activeChat = state.snapshot.activeChat;
   const pendingChanges = activeChat?.pendingChangeSet ?? null;
+  const hasProposedPending = Boolean(
+    pendingChanges?.changes.some((change) => change.status === "proposed"),
+  );
   const hasActivity = Boolean(
     state.tools.length || state.plan.length || state.progress || state.failure,
   );
@@ -27,11 +30,13 @@ export function App(): JSX.Element {
       plan={state.plan}
       progress={state.progress}
       failure={state.failure}
-      canRetry={Boolean(state.failure && !state.busy && !pendingChanges)}
+      canRetry={Boolean(state.failure && !state.busy && !hasProposedPending)}
       onRetry={controller.retry}
     />
   ) : null;
-  const composerDisabled = state.busy || Boolean(pendingChanges);
+  // Composer stays editable while busy (queue follow-ups); proposed ChangeReview locks it.
+  const shellLocked = state.busy || hasProposedPending;
+  const composerDisabled = hasProposedPending;
 
   return (
     <main className={`app-shell${pendingChanges ? " has-review" : ""}`}>
@@ -61,7 +66,8 @@ export function App(): JSX.Element {
           chat={activeChat}
           activeNote={state.activeNote}
           secretNotebookIds={state.snapshot.secretNotebookIds}
-          disabled={composerDisabled}
+          disabled={shellLocked}
+          compact={Boolean(pendingChanges)}
           onUpdate={controller.updateContext}
           onToggleAttached={controller.toggleAttachedNote}
           onSelectFolder={controller.selectFolder}
@@ -80,6 +86,7 @@ export function App(): JSX.Element {
           busy={state.busy}
           submissionSequence={state.submissionSequence}
           onOpenNote={controller.openNote}
+          onOpenLink={controller.openLink}
           onAssistantAction={controller.runAssistantAction}
           onRegenerate={controller.regenerate}
           onSuggestion={controller.useSuggestion}
@@ -88,7 +95,7 @@ export function App(): JSX.Element {
               ? promptSuggestions(activeChat, state.activeNote)
               : undefined
           }
-          noteActionsDisabled={composerDisabled || !state.activeNote}
+          noteActionsDisabled={shellLocked || !state.activeNote}
           activity={activity}
         />
         {activeChat && pendingChanges ? (
@@ -102,19 +109,38 @@ export function App(): JSX.Element {
             onSelectNone={controller.selectNoChanges}
             onApply={controller.applyChanges}
             onDiscard={controller.discardChanges}
+            onDeny={controller.denyChanges}
             onOpenReview={controller.openReview}
+            onKeep={controller.keepChange}
+            onKeepAll={controller.keepAllChanges}
+            onUndoChange={controller.undoChange}
+            onUndoAll={controller.undoAllChanges}
           />
         ) : null}
       </div>
+      {activeChat ? (
+        <ModeControl
+          mode={activeChat.context.interactionMode}
+          disabled={shellLocked}
+          onUpdate={controller.updateContext}
+        />
+      ) : null}
       <Composer
         key={activeChat?.id ?? "bootstrap"}
         draft={controller.draft}
         busy={state.busy}
         disabled={composerDisabled}
-        phase={pendingChanges ? "Resolve proposed changes to continue" : state.phase}
+        phase={
+          hasProposedPending
+            ? "Resolve proposed changes to continue"
+            : state.phase
+        }
         focusSequence={state.focusSequence}
         lastRunId={state.lastRunId}
         lastUsage={state.lastUsage}
+        contextWindowMax={state.snapshot.contextWindowMax}
+        queuedMessage={state.queuedMessage}
+        onQueue={controller.queueMessage}
         history={composerHistory(activeChat?.messages ?? [])}
         onDraftChange={controller.setDraft}
         onSubmit={controller.submit}
@@ -131,6 +157,37 @@ export function App(): JSX.Element {
  *
  * @example composerHistory(chat.messages)
  */
+function ModeControl({
+  mode,
+  disabled,
+  onUpdate,
+}: {
+  readonly mode: "ask" | "agent";
+  readonly disabled: boolean;
+  readonly onUpdate: (next: { interactionMode: "ask" | "agent" }) => void;
+}): JSX.Element {
+  return (
+    <div className="mode-control" role="group" aria-label="Interaction mode">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={mode === "ask"}
+        onClick={() => onUpdate({ interactionMode: "ask" })}
+      >
+        Ask
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={mode === "agent"}
+        onClick={() => onUpdate({ interactionMode: "agent" })}
+      >
+        Agent
+      </button>
+    </div>
+  );
+}
+
 function composerHistory(
   messages: ActiveChatView["messages"],
 ): readonly string[] {

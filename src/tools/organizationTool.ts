@@ -3,6 +3,8 @@ import type {
   NoteMetadataRecord,
   NoteOrganizationRepository,
   NotebookMetadataRecord,
+  TrashedNoteRecord,
+  TrashedNotebookRecord,
 } from "../notes/retriever";
 import { DomainError } from "../shared/errors";
 import type { AgentTool, ToolExecutionContext, ToolRisk } from "./toolRegistry";
@@ -127,6 +129,42 @@ export async function readVersionedNotebookMetadata(
   input: VersionedNotebookInput,
 ): Promise<NotebookMetadataRecord> {
   const notebook = await repository.readNotebook(input.notebook_id);
+  assertOrganizationVersion(
+    notebook.id,
+    notebook.updatedTime,
+    input.expected_updated_time,
+  );
+  return notebook;
+}
+
+/**
+ * Reads trashed note metadata and verifies the model-provided version.
+ *
+ * @example await readVersionedTrashedNote(repository, input)
+ */
+export async function readVersionedTrashedNote(
+  repository: NoteOrganizationRepository,
+  input: VersionedNoteInput,
+): Promise<TrashedNoteRecord> {
+  const note = await repository.readTrashedNote(input.note_id);
+  assertOrganizationVersion(
+    note.id,
+    note.updatedTime,
+    input.expected_updated_time,
+  );
+  return note;
+}
+
+/**
+ * Reads trashed notebook metadata and verifies the model-provided version.
+ *
+ * @example await readVersionedTrashedNotebook(repository, input)
+ */
+export async function readVersionedTrashedNotebook(
+  repository: NoteOrganizationRepository,
+  input: VersionedNotebookInput,
+): Promise<TrashedNotebookRecord> {
+  const notebook = await repository.readTrashedNotebook(input.notebook_id);
   assertOrganizationVersion(
     notebook.id,
     notebook.updatedTime,

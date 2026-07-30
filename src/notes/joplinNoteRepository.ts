@@ -11,12 +11,22 @@ import type {
   NoteSearchHit,
   NotebookMetadataRecord,
   NotebookRecord,
+  RestoreNotebookInput,
+  RestoreNoteInput,
+  TrashListing,
   TrashNotebookInput,
   TrashNoteInput,
+  TrashedNotebookRecord,
+  TrashedNoteRecord,
   UpdateNoteBodyInput,
   UpdateNoteMetadataInput,
   UpdateNotebookMetadataInput,
 } from "./retriever";
+import { JoplinTrashOperations } from "./joplinTrashOperations";
+import {
+  noteMetadataUpdateBody,
+  notebookMetadataUpdateBody,
+} from "./joplinMetadataUpdates";
 
 export interface JoplinDataPort {
   get(path: string[], query?: Record<string, unknown>): Promise<unknown>;
@@ -99,7 +109,11 @@ const NoteMetadataPageSchema = Type.Object(
 export class JoplinNoteRepository
   implements NoteRepository, NoteOrganizationRepository
 {
-  public constructor(private readonly dataPort: JoplinDataPort) {}
+  private readonly trash: JoplinTrashOperations;
+
+  public constructor(private readonly dataPort: JoplinDataPort) {
+    this.trash = new JoplinTrashOperations(dataPort);
+  }
 
   /**
    * Searches note metadata through Joplin's bounded search endpoint.
@@ -278,30 +292,43 @@ export class JoplinNoteRepository
     return this.readNotebook(input.notebookId);
   }
 
-  /**
-   * Moves a note to Joplin Trash after a version check.
-   *
-   * @example await repository.trashNote({ noteId, expectedUpdatedTime })
-   */
+  /** Soft-deletes a note into Joplin Trash after a version check. */
   public async trashNote(input: TrashNoteInput): Promise<void> {
     const current = await this.readNoteMetadata(input.noteId);
-    assertVersion(input.noteId, current.updatedTime, input.expectedUpdatedTime);
-    await this.dataPort.delete(["notes", input.noteId]);
+    await this.trash.trashNote(input, current.updatedTime);
   }
 
-  /**
-   * Moves a notebook and its contents to Joplin Trash after a version check.
-   *
-   * @example await repository.trashNotebook({ notebookId, expectedUpdatedTime })
-   */
+  /** Soft-deletes a notebook and its contents into Joplin Trash. */
   public async trashNotebook(input: TrashNotebookInput): Promise<void> {
     const current = await this.readNotebook(input.notebookId);
-    assertVersion(
-      input.notebookId,
-      current.updatedTime,
-      input.expectedUpdatedTime,
-    );
-    await this.dataPort.delete(["folders", input.notebookId]);
+    await this.trash.trashNotebook(input, current.updatedTime);
+  }
+
+  /** Lists soft-deleted notes and notebooks from Joplin Trash. */
+  public listTrash(limit: number): Promise<TrashListing> {
+    return this.trash.listTrash(limit);
+  }
+
+  /** Reads one trashed note; rejects items not in Trash. */
+  public readTrashedNote(noteId: string): Promise<TrashedNoteRecord> {
+    return this.trash.readTrashedNote(noteId);
+  }
+
+  /** Reads one trashed notebook; rejects items not in Trash. */
+  public readTrashedNotebook(
+    notebookId: string,
+  ): Promise<TrashedNotebookRecord> {
+    return this.trash.readTrashedNotebook(notebookId);
+  }
+
+  /** Restores a soft-deleted note from Joplin Trash. */
+  public restoreNote(input: RestoreNoteInput): Promise<void> {
+    return this.trash.restoreNote(input);
+  }
+
+  /** Restores a soft-deleted notebook and its trashed contents. */
+  public restoreNotebook(input: RestoreNotebookInput): Promise<void> {
+    return this.trash.restoreNotebook(input);
   }
 
   /**
@@ -423,73 +450,5 @@ function assertVersion(itemId: string, actual: number, expected: number): void {
   throw new DomainError(
     "CONFLICT",
     `Item ${itemId} has updated_time ${actual}; expected updated_time ${expected}`,
-  );
-}
-
-function noteMetadataUpdateBody(
-  input: UpdateNoteMetadataInput,
-): Record<string, unknown> {
-  validateNoteMetadataUpdate(input);
-  return {
-    ...(input.title !== undefined ? { title: input.title } : {}),
-    ...(input.parentId !== undefined ? { parent_id: input.parentId } : {}),
-    ...(input.order !== undefined ? { order: input.order } : {}),
-  };
-}
-
-function validateNoteMetadataUpdate(input: UpdateNoteMetadataInput): void {
-  if (input.title !== undefined) assertTitle(input.title, "note title");
-  if (input.parentId !== undefined)
-    assertIdentifier(input.parentId, "parent notebook ID");
-  if (input.order !== undefined) assertFiniteOrder(input.order);
-  if (
-    input.title !== undefined ||
-    input.parentId !== undefined ||
-    input.order !== undefined
-  )
-    return;
-  throw new DomainError(
-    "VALIDATION",
-    `Invalid note metadata update ${safeValue(input)}; expected title, parentId, or order`,
-  );
-}
-
-function assertFiniteOrder(order: number): void {
-  if (Number.isFinite(order)) return;
-  throw new DomainError(
-    "VALIDATION",
-    `Invalid note order ${safeValue(order)}; expected a finite number`,
-  );
-}
-
-function notebookMetadataUpdateBody(
-  input: UpdateNotebookMetadataInput,
-): Record<string, unknown> {
-  validateNotebookMetadataUpdate(input);
-  return {
-    ...(input.title !== undefined ? { title: input.title } : {}),
-    ...(input.parentId !== undefined ? { parent_id: input.parentId } : {}),
-  };
-}
-
-function validateNotebookMetadataUpdate(
-  input: UpdateNotebookMetadataInput,
-): void {
-  if (input.title !== undefined) assertTitle(input.title, "notebook title");
-  if (input.parentId !== undefined) validateNotebookParent(input);
-  if (input.title !== undefined || input.parentId !== undefined) return;
-  throw new DomainError(
-    "VALIDATION",
-    `Invalid notebook metadata update ${safeValue(input)}; expected title or parentId`,
-  );
-}
-
-function validateNotebookParent(input: UpdateNotebookMetadataInput): void {
-  if (input.parentId === undefined) return;
-  assertOptionalIdentifier(input.parentId, "parent notebook ID");
-  if (input.parentId !== input.notebookId) return;
-  throw new DomainError(
-    "VALIDATION",
-    `Invalid parent notebook ID ${safeValue(input.parentId)}; expected a different notebook ID or root`,
   );
 }
