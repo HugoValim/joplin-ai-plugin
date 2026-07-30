@@ -249,6 +249,18 @@ class EmptyCommands implements CommandPort {
   }
 }
 
+class RecordingCommands implements CommandPort {
+  public readonly calls: Array<{
+    readonly name: string;
+    readonly args: readonly unknown[];
+  }> = [];
+
+  public async execute(name: string, ...args: unknown[]): Promise<null> {
+    this.calls.push({ name, args });
+    return null;
+  }
+}
+
 class RecordingPanel implements PanelPort {
   public readonly events: PluginEvent[] = [];
 
@@ -556,5 +568,68 @@ describe("ChatController", () => {
     expect(dialogs.messages[0]).toContain(
       "Deletions still require manual ChangeReview",
     );
+  });
+
+  test("opens safe external links via openItem and rejects unsafe urls", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Links");
+    const commands = new RecordingCommands();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      new RecordingPanel(),
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "link-safe",
+      chatId: chat.id,
+      type: "link.open",
+      payload: { url: "https://example.test/doc" },
+    });
+    expect(commands.calls).toEqual([
+      { name: "openItem", args: ["https://example.test/doc"] },
+    ]);
+
+    await expect(
+      controller.handle({
+        version: PROTOCOL_VERSION,
+        messageId: "link-bad",
+        chatId: chat.id,
+        type: "link.open",
+        payload: { url: "javascript:alert(1)" },
+      }),
+    ).rejects.toThrow("expected an absolute http(s) URL");
+    expect(commands.calls).toHaveLength(1);
   });
 });

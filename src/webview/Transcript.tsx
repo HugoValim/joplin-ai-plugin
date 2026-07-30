@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { safeMarkdownUrlTransform } from "./markdownSecurity";
+import { markdownLinkComponents } from "./markdownLinkComponents";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 import { MessageCard } from "./MessageCard";
 import { runSummaryForMessage } from "./runSummaryMatch";
@@ -32,6 +33,7 @@ interface TranscriptProps {
   readonly busy: boolean;
   readonly submissionSequence: number;
   readonly onOpenNote: (noteId: string) => void;
+  readonly onOpenLink: (url: string) => void;
   readonly onAssistantAction: (
     messageId: string,
     action: AssistantAction,
@@ -56,6 +58,7 @@ export function Transcript({
   busy,
   submissionSequence,
   onOpenNote,
+  onOpenLink,
   onAssistantAction,
   onRegenerate,
   onSuggestion,
@@ -200,9 +203,12 @@ export function Transcript({
             total={messages.length}
             runSummary={runSummaryForMessage(message, messages, runSummaries)}
             canRegenerate={
-              !busy && message.id === latestAssistantId && message.role === "assistant"
+              !busy &&
+              message.id === latestAssistantId &&
+              message.role === "assistant"
             }
             onOpenNote={onOpenNote}
+            onOpenLink={onOpenLink}
             onAssistantAction={onAssistantAction}
             onRegenerate={onRegenerate}
             noteActionsDisabled={noteActionsDisabled}
@@ -212,6 +218,7 @@ export function Transcript({
           <StreamingMessage
             content={streamingText}
             position={messages.length + 1}
+            onOpenLink={onOpenLink}
           />
         ) : null}
         {activity ? (
@@ -321,9 +328,11 @@ function focusAfterFinalPrepend(
 function StreamingMessage({
   content,
   position,
+  onOpenLink,
 }: {
   readonly content: string;
   readonly position: number;
+  readonly onOpenLink: (url: string) => void;
 }): JSX.Element {
   return (
     <article
@@ -341,6 +350,7 @@ function StreamingMessage({
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeSanitize]}
           urlTransform={safeMarkdownUrlTransform}
+          components={markdownLinkComponents(onOpenLink)}
         >
           {content}
         </ReactMarkdown>

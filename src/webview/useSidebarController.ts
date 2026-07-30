@@ -41,6 +41,7 @@ export interface SidebarController {
   readonly markSecretNotebook: (notebookId: string) => void;
   readonly unmarkSecretNotebook: (notebookId: string) => void;
   readonly openNote: (noteId: string) => void;
+  readonly openLink: (url: string) => void;
   readonly runAssistantAction: (
     messageId: string,
     action: AssistantAction,
@@ -253,6 +254,12 @@ function createActions(
         ...input.envelope(),
         type: "note.open",
         payload: { noteId },
+      }),
+    openLink: (url) =>
+      input.send({
+        ...input.envelope(),
+        type: "link.open",
+        payload: { url },
       }),
     runAssistantAction: (messageId, action) =>
       runAssistantAction(input, messageId, action),
@@ -470,7 +477,12 @@ function undoRun(input: ActionInput): void {
 function retryRun(input: ActionInput): void {
   if (!input.activeChat || input.state.busy || input.pending) return;
   const runId = identifier();
-  input.dispatch({ type: "begin", runId, phase: "Retrying", submission: false });
+  input.dispatch({
+    type: "begin",
+    runId,
+    phase: "Retrying",
+    submission: false,
+  });
   input.send({
     ...input.envelope(),
     runId,

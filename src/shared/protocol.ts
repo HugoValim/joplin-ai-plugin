@@ -211,6 +211,23 @@ const NoteOpenSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const LinkOpenSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("link.open"),
+    payload: Type.Object(
+      {
+        url: Type.String({
+          minLength: 8,
+          maxLength: 2_000,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const AssistantActionSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -273,6 +290,7 @@ const PanelRequestSchema = Type.Union([
   ReviewOpenSchema,
   RunUndoSchema,
   NoteOpenSchema,
+  LinkOpenSchema,
   AssistantActionSchema,
   SecretsMarkSchema,
   SecretsUnmarkSchema,
@@ -311,10 +329,7 @@ const ContextSettingsSchema = Type.Object(
     activeNote: Type.Boolean(),
     vault: Type.Boolean(),
     autoApply: Type.Boolean(),
-    interactionMode: Type.Union([
-      Type.Literal("ask"),
-      Type.Literal("agent"),
-    ]),
+    interactionMode: Type.Union([Type.Literal("ask"), Type.Literal("agent")]),
     attachedNoteIds: Type.Array(IdentifierSchema, {
       maxItems: 50,
       uniqueItems: true,

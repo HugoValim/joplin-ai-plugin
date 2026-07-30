@@ -28,6 +28,7 @@ function renderTranscript(
       busy={Boolean(streamingText)}
       submissionSequence={0}
       onOpenNote={jest.fn()}
+      onOpenLink={jest.fn()}
       onAssistantAction={jest.fn()}
       onRegenerate={jest.fn()}
       onSuggestion={jest.fn()}
@@ -76,6 +77,7 @@ describe("Transcript", () => {
         busy
         submissionSequence={0}
         onOpenNote={jest.fn()}
+        onOpenLink={jest.fn()}
         onAssistantAction={jest.fn()}
         onRegenerate={jest.fn()}
         onSuggestion={jest.fn()}
@@ -105,6 +107,7 @@ describe("Transcript", () => {
         busy={false}
         submissionSequence={0}
         onOpenNote={jest.fn()}
+        onOpenLink={jest.fn()}
         onAssistantAction={jest.fn()}
         onRegenerate={jest.fn()}
         onSuggestion={jest.fn()}

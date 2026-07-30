@@ -77,6 +77,16 @@
   margin-bottom: 0;
 }
 
+.message-content a.markdown-link {
+  color: var(--joplin-color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-content a.markdown-link:visited {
+  color: var(--joplin-color-accent);
+}
+
 .message-content p,
 .message-content li {
   line-height: 1.55;
