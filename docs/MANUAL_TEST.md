@@ -58,6 +58,10 @@ notes or folders.
 - [ ] `Ctrl+L` does not submit the draft or call the provider.
 - [ ] With no editor selection, `Ctrl+L` opens the sidebar without changing the
       draft.
+- [ ] With a selection, press `Ctrl+Shift+L`: a **new** chat is created, the
+      sidebar opens, and the selection is pasted into that chat's composer.
+- [ ] With no selection, `Ctrl+Shift+L` still opens a new empty chat.
+- [ ] Existing `Ctrl+L` behavior is unchanged after adding `Ctrl+Shift+L`.
 
 ## Bypass permissions
 

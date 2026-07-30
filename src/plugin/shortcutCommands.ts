@@ -38,6 +38,10 @@ interface SelectedTextSource {
   selectedText(): Promise<string>;
 }
 
+interface NewChatWithSelectionLifecycle {
+  startNewChatWithSelection(text: string): Promise<void>;
+}
+
 /**
  * Registers the global shortcut that shows or hides the AI sidebar.
  *
@@ -96,6 +100,36 @@ function selectionShortcutCommand(
       if (text) panel.post(selectionPrefillEvent(text));
     },
   };
+}
+
+/**
+ * Registers Ctrl+Shift+L to open a new AI chat and paste the editor selection.
+ *
+ * @example await registerNewChatWithSelectionShortcut(commands, menuItems, panel, source, lifecycle)
+ */
+export async function registerNewChatWithSelectionShortcut(
+  commands: ShortcutCommandRegistry,
+  menuItems: ShortcutMenuRegistry,
+  panel: SelectionPanel,
+  source: SelectedTextSource,
+  lifecycle: NewChatWithSelectionLifecycle,
+): Promise<void> {
+  const commandName = "joplinAiAgent.newChatWithSelection";
+  await commands.register({
+    name: commandName,
+    label: "New AI chat with selection",
+    execute: async () => {
+      const text = await source.selectedText();
+      await panel.show();
+      await lifecycle.startNewChatWithSelection(text);
+    },
+  });
+  await menuItems.create(
+    "joplinAiAgent.newChatWithSelectionMenuItem",
+    commandName,
+    MenuItemLocation.Tools,
+    { accelerator: "Ctrl+Shift+L" },
+  );
 }
 
 function selectionPrefillEvent(text: string): PluginEvent {

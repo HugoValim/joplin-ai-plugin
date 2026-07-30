@@ -1,5 +1,6 @@
 import { MenuItemLocation } from "../../api/types";
 import {
+  registerNewChatWithSelectionShortcut,
   registerSelectionToChatShortcut,
   registerToggleSidebarShortcut,
 } from "../../src/plugin/shortcutCommands";
@@ -127,5 +128,53 @@ describe("shortcut commands", () => {
 
     expect(panel.showCount).toBe(1);
     expect(panel.events).toEqual([]);
+  });
+
+  test("registers Ctrl+Shift+L to start a new chat and paste selection", async () => {
+    const commands = new RecordingCommandRegistry();
+    const menuItems = new RecordingMenuItemRegistry();
+    const panel = new RecordingShortcutPanel();
+    const lifecycle = {
+      startNewChatWithSelection: jest.fn(async (_text: string) => undefined),
+    };
+
+    await registerNewChatWithSelectionShortcut(
+      commands,
+      menuItems,
+      panel,
+      new SelectedTextSource("selected for new chat"),
+      lifecycle,
+    );
+    expect(menuItems.items[0]).toEqual({
+      id: "joplinAiAgent.newChatWithSelectionMenuItem",
+      commandName: "joplinAiAgent.newChatWithSelection",
+      location: MenuItemLocation.Tools,
+      accelerator: "Ctrl+Shift+L",
+    });
+
+    await commands.commands[0]?.execute();
+    expect(panel.showCount).toBe(1);
+    expect(lifecycle.startNewChatWithSelection).toHaveBeenCalledWith(
+      "selected for new chat",
+    );
+  });
+
+  test("Ctrl+Shift+L still opens a new chat when selection is empty", async () => {
+    const commands = new RecordingCommandRegistry();
+    const panel = new RecordingShortcutPanel();
+    const lifecycle = {
+      startNewChatWithSelection: jest.fn(async (_text: string) => undefined),
+    };
+    await registerNewChatWithSelectionShortcut(
+      commands,
+      new RecordingMenuItemRegistry(),
+      panel,
+      new SelectedTextSource(""),
+      lifecycle,
+    );
+
+    await commands.commands[0]?.execute();
+    expect(panel.showCount).toBe(1);
+    expect(lifecycle.startNewChatWithSelection).toHaveBeenCalledWith("");
   });
 });

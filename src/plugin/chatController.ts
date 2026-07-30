@@ -257,6 +257,18 @@ export class ChatController {
     await this.selectChat(chat.id);
   }
 
+  /**
+   * Creates a new chat, selects it, and optionally prefills the composer.
+   *
+   * @example await controller.startNewChatWithSelection(selectedText)
+   */
+  public async startNewChatWithSelection(text: string): Promise<void> {
+    await this.createChat();
+    const chatId = this.activeChatId;
+    if (!chatId || !text.trim()) return;
+    this.events.post("composer.prefill", chatId, { text });
+  }
+
   private async selectChat(chatId: string): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
     this.activeChatId = chat.id;

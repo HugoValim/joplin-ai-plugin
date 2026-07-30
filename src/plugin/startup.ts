@@ -37,6 +37,7 @@ import {
 import { JoplinPanelPort } from "./panelPort";
 import { registerPluginSettings } from "./settings";
 import {
+  registerNewChatWithSelectionShortcut,
   registerSelectionToChatShortcut,
   registerToggleSidebarShortcut,
 } from "./shortcutCommands";
@@ -137,6 +138,13 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     joplin.views.menuItems,
     panel,
     activeSource,
+  );
+  await registerNewChatWithSelectionShortcut(
+    joplin.commands,
+    joplin.views.menuItems,
+    panel,
+    activeSource,
+    controller,
   );
   controller.workspaceChanged(await activeNoteSummary(activeSource));
   await joplin.workspace.onNoteSelectionChange(() => {
