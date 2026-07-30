@@ -21,4 +21,13 @@ describe("panel layout", () => {
       expect(computed.overflow).toBe("hidden");
     }
   });
+
+  test("lets transcript messages grow with panel width instead of hard ch caps", () => {
+    const css = readFileSync(resolve("src/webview/message.css"), "utf8");
+    expect(css).not.toMatch(/max-width:\s*min\([^)]*72ch/);
+    expect(css).not.toMatch(/max-width:\s*min\([^)]*56ch/);
+    expect(css).toMatch(/\.message\s*\{[^}]*max-width:\s*94%/s);
+    expect(css).toMatch(/\.message-user\s*\{[^}]*max-width:\s*86%/s);
+    expect(css).toMatch(/\.run-activity\s*\{[^}]*width:\s*100%/s);
+  });
 });
