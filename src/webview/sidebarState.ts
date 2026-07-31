@@ -108,10 +108,8 @@ export function sidebarReducer(
     return { ...state, phase: "Cancellation requested" };
   if (action.type === "focus")
     return { ...state, focusSequence: state.focusSequence + 1 };
-  if (action.type === "queue")
-    return { ...state, queuedMessage: action.text };
-  if (action.type === "clear-queue")
-    return { ...state, queuedMessage: null };
+  if (action.type === "queue") return { ...state, queuedMessage: action.text };
+  if (action.type === "clear-queue") return { ...state, queuedMessage: null };
   return failPost(state, action.message);
 }
 
@@ -136,8 +134,8 @@ function reducePluginEvent(
       progress: event.payload.label,
       phase: event.payload.label,
     };
-  if (event.type === "run.plan")
-    return { ...state, plan: event.payload.items };
+  if (event.type === "run.plan") return { ...state, plan: event.payload.items };
+  if (event.type === "mention.results") return state;
   return reduceToolOrTerminalEvent(state, event);
 }
 
@@ -150,6 +148,7 @@ function reduceToolOrTerminalEvent(
         | "state.snapshot"
         | "workspace.changed"
         | "composer.prefill"
+        | "mention.results"
         | "run.started"
         | "assistant.delta"
         | "run.progress"

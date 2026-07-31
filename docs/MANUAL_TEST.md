@@ -66,6 +66,17 @@ notes or folders.
       pasting anything.
 - [ ] `Ctrl+L` (append to current chat) is unchanged by `Ctrl+Shift+L`.
 
+## @-mention picker
+
+- [ ] Typing `@` in the composer opens a searchable note/notebook picker.
+- [ ] Typing a query filters the candidate list; results update as the query
+      changes.
+- [ ] Selecting a note attaches it to the chat context (same path as
+      **Attach current**).
+- [ ] Selecting a notebook references it for context.
+- [ ] `Escape` and outside dismissal close the picker without submitting the
+      draft.
+
 ## Bypass permissions
 
 - [ ] New and pre-feature chats show **Writes review** and require the normal

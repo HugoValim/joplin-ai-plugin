@@ -70,6 +70,7 @@ describe("panel protocol", () => {
     ["link.open", { url: "https://example.test/doc" }],
     ["secrets.mark", { notebookId: "nb-1" }],
     ["secrets.unmark", { notebookId: "nb-1" }],
+    ["mention.search", { query: "deploy", requestId: "req-1" }],
   ])("accepts %s requests", (type, payload) => {
     const runId =
       type.startsWith("run.") ||
@@ -161,6 +162,16 @@ describe("plugin protocol", () => {
       },
     ],
     ["composer.prefill", { text: "selected note text" }],
+    [
+      "mention.results",
+      {
+        requestId: "req-1",
+        candidates: [
+          { kind: "note", id: "note-1", title: "Deploy guide" },
+          { kind: "notebook", id: "nb-1", title: "Deploy", parentId: "nb-0" },
+        ],
+      },
+    ],
     ["run.started", { startedAt: 1 }],
     ["assistant.delta", { delta: "Hello" }],
     ["tool.started", { toolCallId: "tool-1", name: "read_note" }],
@@ -189,6 +200,7 @@ describe("plugin protocol", () => {
       "state.snapshot",
       "workspace.changed",
       "composer.prefill",
+      "mention.results",
     ].includes(type);
     const event = {
       version: PROTOCOL_VERSION,

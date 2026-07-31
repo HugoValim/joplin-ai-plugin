@@ -22,7 +22,21 @@ function composer(
     onSubmit: jest.fn(),
     onCancel: jest.fn(),
     onUndo: jest.fn(),
+    mention: closedMention(),
     ...overrides,
+  };
+}
+
+function closedMention(): React.ComponentProps<typeof Composer>["mention"] {
+  return {
+    open: false,
+    query: "",
+    candidates: [],
+    loading: false,
+    openAt: jest.fn(),
+    setQuery: jest.fn(),
+    dismiss: jest.fn(),
+    select: jest.fn(),
   };
 }
 
@@ -124,7 +138,11 @@ describe("Composer token usage display", () => {
     render(
       <Composer
         {...composer({
-          lastUsage: { promptTokens: 12000, outputTokens: 1600, totalTokens: 13600 },
+          lastUsage: {
+            promptTokens: 12000,
+            outputTokens: 1600,
+            totalTokens: 13600,
+          },
           contextWindowMax: 128000,
         })}
       />,

@@ -12,6 +12,8 @@ import {
   type PluginEvent,
 } from "../shared/protocol";
 import { parseWebviewPluginEvent } from "./pluginEventTransport";
+import { useMentionPicker } from "./useMentionPicker";
+import type { MentionCandidate } from "../shared/protocol";
 import {
   INITIAL_SIDEBAR_STATE,
   sidebarReducer,
@@ -64,6 +66,18 @@ export interface SidebarController {
   readonly renameChat: (title: string) => void;
   readonly selectModel: (model: string) => void;
   readonly useSuggestion: (suggestion: string) => void;
+  readonly mention: MentionController;
+}
+
+export interface MentionController {
+  readonly open: boolean;
+  readonly query: string;
+  readonly candidates: readonly MentionCandidate[];
+  readonly loading: boolean;
+  readonly openAt: (query: string) => void;
+  readonly setQuery: (query: string) => void;
+  readonly dismiss: () => void;
+  readonly select: (candidate: MentionCandidate) => void;
 }
 
 /**
@@ -78,7 +92,31 @@ export function useSidebarController(): SidebarController {
   const [acceptedIds, setAcceptedIds] = useAcceptedChanges(
     state.snapshot.activeChat?.pendingChangeSet ?? null,
   );
-  usePanelEvents(dispatch, submissionLock, setDraft);
+  const mentionResultsRef = useRef<MentionResultsHandler | null>(null);
+  usePanelEvents(dispatch, submissionLock, setDraft, mentionResultsRef);
+  const attachMention = useCallback(
+    (candidate: MentionCandidate) => {
+      const activeChat = state.snapshot.activeChat;
+      if (!activeChat) return;
+      const current = activeChat.context.attachedNoteIds;
+      if (current.includes(candidate.id)) return;
+      const attachedNoteIds: string[] = [...current, candidate.id];
+      sendContextUpdate(state, attachedNoteIds);
+    },
+    [state],
+  );
+  const mention = useMentionPicker({
+    chatId: state.snapshot.activeChat?.id,
+    send: (request) => postRequest(request, dispatch, submissionLock),
+    onAttach: attachMention,
+    consumeResults: (handler) => {
+      mentionResultsRef.current = handler;
+      return () => {
+        if (mentionResultsRef.current === handler)
+          mentionResultsRef.current = null;
+      };
+    },
+  });
   const actions = useSidebarActions(
     state,
     draft,
@@ -97,7 +135,7 @@ export function useSidebarController(): SidebarController {
     state.snapshot.activeChat?.id ?? null,
     actions.submit,
   );
-  return { state, draft, acceptedIds, setDraft, ...actions };
+  return { state, draft, acceptedIds, setDraft, mention, ...actions };
 }
 
 function useQueuedFollowUp(
@@ -145,13 +183,20 @@ function usePanelEvents(
   dispatch: StateDispatch,
   submissionLock: React.MutableRefObject<boolean>,
   setDraft: React.Dispatch<React.SetStateAction<string>>,
+  mentionResults: React.MutableRefObject<MentionResultsHandler | null>,
 ): void {
   useEffect(() => {
     webviewApi.onMessage((input) =>
-      receivePanelEvent(input, dispatch, submissionLock, setDraft),
+      receivePanelEvent(
+        input,
+        dispatch,
+        submissionLock,
+        setDraft,
+        mentionResults,
+      ),
     );
     postRequest(readyRequest(), dispatch, submissionLock);
-  }, [dispatch, setDraft, submissionLock]);
+  }, [dispatch, setDraft, submissionLock, mentionResults]);
 }
 
 function receivePanelEvent(
@@ -159,9 +204,13 @@ function receivePanelEvent(
   dispatch: StateDispatch,
   submissionLock: React.MutableRefObject<boolean>,
   setDraft: React.Dispatch<React.SetStateAction<string>>,
+  mentionResults: React.MutableRefObject<MentionResultsHandler | null>,
 ): void {
   try {
     const event = parseWebviewPluginEvent(input);
+    if (event.type === "mention.results") {
+      mentionResults.current?.(event);
+    }
     if (event.type === "composer.prefill") {
       setDraft((current) =>
         applyComposerPrefill(
@@ -208,6 +257,9 @@ function useAcceptedChanges(
 }
 
 type StateDispatch = React.Dispatch<Parameters<typeof sidebarReducer>[1]>;
+type MentionResultsHandler = (
+  event: Extract<PluginEvent, { type: "mention.results" }>,
+) => void;
 type AcceptedDispatch = React.Dispatch<
   React.SetStateAction<ReadonlySet<string>>
 >;
@@ -220,7 +272,10 @@ function useSidebarActions(
   submissionLock: React.MutableRefObject<boolean>,
   acceptedIds: ReadonlySet<string>,
   setAcceptedIds: AcceptedDispatch,
-): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
+): Omit<
+  SidebarController,
+  "state" | "draft" | "acceptedIds" | "setDraft" | "mention"
+> {
   const activeChat = state.snapshot.activeChat;
   const pending = activeChat?.pendingChangeSet ?? null;
   const envelope = useCallback(
@@ -287,7 +342,10 @@ interface ActionInput {
 
 function createActions(
   input: ActionInput,
-): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
+): Omit<
+  SidebarController,
+  "state" | "draft" | "acceptedIds" | "setDraft" | "mention"
+> {
   return {
     submit: input.submit,
     queueMessage: (text) => queueMessage(input, text),
@@ -671,6 +729,26 @@ function selectModel(input: ActionInput, model: string): void {
     payload: { model },
   });
 }
+
+function sendContextUpdate(
+  state: SidebarState,
+  attachedNoteIds: readonly string[],
+): void {
+  const activeChat = state.snapshot.activeChat;
+  if (!activeChat) return;
+  postRequest(
+    {
+      ...requestEnvelope(activeChat.id),
+      type: "context.update",
+      payload: { ...activeChat.context, attachedNoteIds: [...attachedNoteIds] },
+    },
+    noOpDispatch,
+    noOpLock,
+  );
+}
+
+const noOpDispatch: StateDispatch = () => undefined;
+const noOpLock: React.MutableRefObject<boolean> = { current: false };
 
 function requestEnvelope(
   chatId: string,

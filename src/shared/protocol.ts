@@ -144,6 +144,31 @@ const FolderSelectSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MentionCandidateSchema = Type.Object(
+  {
+    kind: Type.Union([Type.Literal("note"), Type.Literal("notebook")]),
+    id: IdentifierSchema,
+    title: Type.String({ minLength: 1, maxLength: 1_000 }),
+    parentId: Type.Optional(Type.String({ maxLength: 128 })),
+  },
+  { additionalProperties: false },
+);
+
+const MentionSearchSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("mention.search"),
+    payload: Type.Object(
+      {
+        query: Type.String({ minLength: 0, maxLength: 200 }),
+        requestId: IdentifierSchema,
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const ChangesApplySchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -348,8 +373,10 @@ const PanelRequestSchema = Type.Union([
   SecretsMarkSchema,
   SecretsUnmarkSchema,
   ModelSelectSchema,
+  MentionSearchSchema,
 ]);
 export type PanelRequest = Static<typeof PanelRequestSchema>;
+export type MentionCandidate = Static<typeof MentionCandidateSchema>;
 const CitationSchema = Type.Object(
   {
     kind: Type.Union([Type.Literal("note"), Type.Literal("file")]),
@@ -702,10 +729,26 @@ const RunCompletedSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MentionResultsSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("mention.results"),
+    payload: Type.Object(
+      {
+        requestId: IdentifierSchema,
+        candidates: Type.Array(MentionCandidateSchema, { maxItems: 50 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const PluginEventSchema = Type.Union([
   StateSnapshotSchema,
   WorkspaceChangedSchema,
   ComposerPrefillSchema,
+  MentionResultsSchema,
   RunStartedSchema,
   AssistantDeltaSchema,
   ToolStartedSchema,

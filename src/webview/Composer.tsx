@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { formatUsageSummary } from "./usageFormat";
+import { MentionPicker } from "./MentionPicker";
+import type { MentionController } from "./useSidebarController";
 import type { UsageSnapshot } from "./sidebarState";
 
 interface ComposerProps {
@@ -18,6 +20,7 @@ interface ComposerProps {
   readonly onSubmit: () => void;
   readonly onCancel: () => void;
   readonly onUndo: () => void;
+  readonly mention: MentionController;
 }
 
 interface HistoryBrowse {
@@ -56,9 +59,14 @@ export function Composer(props: ComposerProps): JSX.Element {
     >
       <div className="composer-status" id="composer-status">
         <span>{props.phase}</span>
-        {!props.busy && formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined }) ? (
+        {!props.busy &&
+        formatUsageSummary(props.lastUsage, {
+          contextWindowMax: props.contextWindowMax ?? undefined,
+        }) ? (
           <span className="usage-summary" aria-label="Token usage">
-            {formatUsageSummary(props.lastUsage, { contextWindowMax: props.contextWindowMax ?? undefined })}
+            {formatUsageSummary(props.lastUsage, {
+              contextWindowMax: props.contextWindowMax ?? undefined,
+            })}
           </span>
         ) : null}
         {props.queuedMessage ? (
@@ -76,6 +84,16 @@ export function Composer(props: ComposerProps): JSX.Element {
         <label className="sr-only" htmlFor="prompt">
           Message
         </label>
+        {props.mention.open ? (
+          <MentionPicker
+            query={props.mention.query}
+            candidates={props.mention.candidates}
+            loading={props.mention.loading}
+            onSelect={props.mention.select}
+            onQueryChange={props.mention.setQuery}
+            onDismiss={props.mention.dismiss}
+          />
+        ) : null}
         <textarea
           ref={textarea}
           id="prompt"
@@ -88,6 +106,7 @@ export function Composer(props: ComposerProps): JSX.Element {
           onChange={(event) => {
             browse.current = null;
             props.onDraftChange(event.target.value);
+            maybeOpenMention(event.target.value, props.mention);
           }}
           onInput={(event) => resizeTextarea(event.currentTarget)}
           onKeyDown={(event) => handleComposerKey(event, props, browse)}
@@ -150,7 +169,11 @@ function recallOlderHistory(
     if (event.currentTarget.selectionEnd !== 0) return;
   }
   event.preventDefault();
-  const next = stepOlderBrowse(browse.current, props.draft, props.history.length);
+  const next = stepOlderBrowse(
+    browse.current,
+    props.draft,
+    props.history.length,
+  );
   browse.current = next;
   props.onDraftChange(historyEntry(props.history, next.index));
 }
@@ -207,4 +230,9 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
   textarea.style.overflowY =
     textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+function maybeOpenMention(draft: string, mention: MentionController): void {
+  if (!draft.endsWith("@")) return;
+  mention.openAt("");
 }

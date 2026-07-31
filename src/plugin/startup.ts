@@ -17,7 +17,10 @@ import {
 } from "../persistence/adapters";
 import { ChatStore, type JsonFilePort } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
-import { SecretNotebookStore, type JsonFilePort as SecretNotebookJsonPort } from "../persistence/secretNotebookStore";
+import {
+  SecretNotebookStore,
+  type JsonFilePort as SecretNotebookJsonPort,
+} from "../persistence/secretNotebookStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
 import { registerAgentPlanTools } from "../tools/agentPlanTools";
 import { registerFileTools } from "../tools/fileTools";
@@ -32,6 +35,7 @@ import {
   JoplinSettingsAdapter,
 } from "./joplinPorts";
 import { JoplinPanelPort } from "./panelPort";
+import { searchMentions, type MentionSearchPort } from "./mentionSearch";
 import { registerPluginSettings } from "./settings";
 import {
   registerNewChatSelectionShortcut,
@@ -102,6 +106,9 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     notes,
   );
   const dialogs = new JoplinDialogAdapter(joplin);
+  const mentionSearch: MentionSearchPort = {
+    searchMentions: (query) => searchMentions(notes, query),
+  };
   const panel = new JoplinPanelPort(joplin.views.panels, structuredWarning);
   const controller = new ChatController(
     panel,
@@ -118,6 +125,7 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     secretNotebooks,
     (config) => new OpenAiCompatibleProvider(config),
     new ReviewNoteService(notes, secretNotebooks, commands),
+    mentionSearch,
   );
   await panel.initialize((request) => controller.handle(request));
   await registerToggleSidebarShortcut(

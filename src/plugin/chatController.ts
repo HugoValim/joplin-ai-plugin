@@ -40,6 +40,8 @@ import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
 import type { SecretNotebookStore } from "../persistence/secretNotebookStore";
 import { NoOpReviewNotePort, type ReviewNotePort } from "./reviewNoteService";
+import type { MentionSearchPort } from "./mentionSearch";
+import type { MentionCandidate } from "../shared/protocol";
 
 const AUTO_APPLY_WARNING =
   "Security warning: Bypass permissions will auto-apply every model-proposed non-delete change, then keep an inline Keep/Undo review in the sidebar. Deletions still require manual ChangeReview before apply. Conflicts are still blocked. Enable for this chat?";
@@ -71,6 +73,7 @@ export class ChatController {
     private readonly secretNotebooks: SecretNotebookStore,
     createProvider: ProviderFactory,
     reviewNotes: ReviewNotePort = new NoOpReviewNotePort(),
+    private readonly mentionSearch: MentionSearchPort = noOpMentionSearch,
   ) {
     this.providerConnector = new ProviderConnector(
       settings,
@@ -212,6 +215,16 @@ export class ChatController {
       case "model.select":
         await this.selectModel(request.payload.model);
         return;
+      case "mention.search": {
+        const candidates = await this.mentionSearch.searchMentions(
+          request.payload.query,
+        );
+        this.events.post("mention.results", request.chatId, {
+          requestId: request.payload.requestId,
+          candidates,
+        });
+        return;
+      }
     }
   }
 
@@ -723,3 +736,7 @@ export class ChatController {
     });
   }
 }
+
+const noOpMentionSearch: MentionSearchPort = {
+  searchMentions: () => Promise.resolve<readonly MentionCandidate[]>([]),
+};

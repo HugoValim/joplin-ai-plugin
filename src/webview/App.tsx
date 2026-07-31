@@ -146,6 +146,7 @@ export function App(): JSX.Element {
         onSubmit={controller.submit}
         onCancel={controller.cancel}
         onUndo={controller.undo}
+        mention={controller.mention}
       />
       <RunLiveRegion announcement={state.phase} />
     </main>

@@ -42,6 +42,9 @@ import {
   type PluginEvent,
 } from "../../src/shared/protocol";
 import { ToolRegistry } from "../../src/tools/toolRegistry";
+import { NoOpReviewNotePort } from "../../src/plugin/reviewNoteService";
+import type { MentionCandidate } from "../../src/shared/protocol";
+import type { MentionSearchPort } from "../../src/plugin/mentionSearch";
 import { registerNoteTools } from "../../src/tools/noteTools";
 import { SecretNotebookStore } from "../../src/persistence/secretNotebookStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
@@ -874,6 +877,70 @@ describe("ChatController", () => {
     }
     expect(snapshot.payload.activeChat?.id).toBe(newChatId);
     expect(await chats.get(newChatId)).not.toBeNull();
+  });
+
+  test("returns mention candidates for a mention.search request", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Mentions");
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const source = new EmptyActiveNoteSource();
+    const candidates: readonly MentionCandidate[] = [
+      { kind: "note", id: "note-1", title: "Deploy guide" },
+    ];
+    const mentionSearch: MentionSearchPort = {
+      searchMentions: async () => candidates,
+    };
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        source,
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      new NoOpReviewNotePort(),
+      mentionSearch,
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "mention-1",
+      chatId: chat.id,
+      type: "mention.search",
+      payload: { query: "deploy", requestId: "req-1" },
+    });
+
+    const results = panel.events
+      .filter((event) => event.type === "mention.results")
+      .at(-1);
+    if (results?.type !== "mention.results") {
+      throw new Error("Expected a mention.results event");
+    }
+    expect(results.payload.requestId).toBe("req-1");
+    expect(results.payload.candidates).toEqual(candidates);
   });
 });
 
