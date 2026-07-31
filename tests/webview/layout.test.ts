@@ -30,4 +30,16 @@ describe("panel layout", () => {
     expect(css).toMatch(/\.message-user\s*\{[^}]*max-width:\s*86%/s);
     expect(css).toMatch(/\.run-activity\s*\{[^}]*width:\s*100%/s);
   });
+
+  test("lets tables and pre blocks use available width with overflow scrolling", () => {
+    const css = readFileSync(resolve("src/webview/message.css"), "utf8");
+    expect(css).toMatch(/\.message-content pre\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(css).toMatch(/\.message-content table\s*\{[^}]*overflow-x:\s*auto/s);
+  });
+
+  test("preserves the narrow-panel min-width guard at 280px", () => {
+    const css = readFileSync(resolve("src/webview/layout.css"), "utf8");
+    expect(css).toMatch(/@media\s*\(max-width:\s*279px\)/);
+    expect(css).toMatch(/\.panel-width-guard\s*\{[^}]*display:\s*grid/s);
+  });
 });
