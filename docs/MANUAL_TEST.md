@@ -66,6 +66,14 @@ notes or folders.
       pasting anything.
 - [ ] `Ctrl+L` (append to current chat) is unchanged by `Ctrl+Shift+L`.
 
+## Drag-drop note/notebook references
+
+- [ ] Dragging a Joplin note onto the composer attaches it to the chat context
+      (same path as `@` mentions).
+- [ ] Dragging a notebook onto the composer references it for context.
+- [ ] Invalid drops (no recognisable reference) are ignored and the composer
+      draft is unchanged.
+
 ## @-mention picker
 
 - [ ] Typing `@` in the composer opens a searchable note/notebook picker.

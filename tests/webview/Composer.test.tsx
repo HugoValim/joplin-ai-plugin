@@ -37,6 +37,7 @@ function closedMention(): React.ComponentProps<typeof Composer>["mention"] {
     setQuery: jest.fn(),
     dismiss: jest.fn(),
     select: jest.fn(),
+    attach: jest.fn(),
   };
 }
 
@@ -131,7 +132,72 @@ describe("Composer", () => {
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(onDraftChange).not.toHaveBeenCalled();
   });
+
+  test("attaches a dropped note reference without changing the draft", () => {
+    const attach = jest.fn();
+    render(
+      <Composer
+        {...composer({ draft: "Existing", mention: openMention(attach) })}
+      />,
+    );
+    const form = screen
+      .getByRole("textbox", { name: "Message" })
+      .closest("form");
+    if (!form) throw new Error("Expected composer form");
+
+    fireEvent.drop(form, {
+      dataTransfer: {
+        types: ["text/plain"],
+        getData: () => "note abc123def456gh78",
+      },
+    });
+
+    expect(attach).toHaveBeenCalledWith({
+      kind: "note",
+      id: "abc123def456gh78",
+      title: "note abc123def456gh78",
+    });
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message" })
+        .value,
+    ).toBe("Existing");
+  });
+
+  test("ignores a drop without a recognisable reference", () => {
+    const attach = jest.fn();
+    render(
+      <Composer
+        {...composer({ draft: "Existing", mention: openMention(attach) })}
+      />,
+    );
+    const form = screen
+      .getByRole("textbox", { name: "Message" })
+      .closest("form");
+    if (!form) throw new Error("Expected composer form");
+
+    fireEvent.drop(form, {
+      dataTransfer: { types: ["text/plain"], getData: () => "no id here" },
+    });
+
+    expect(attach).not.toHaveBeenCalled();
+  });
 });
+
+function openMention(
+  attach: jest.Mock,
+): React.ComponentProps<typeof Composer>["mention"] {
+  return {
+    open: false,
+    query: "",
+    candidates: [],
+    loading: false,
+    openAt: jest.fn(),
+    setQuery: jest.fn(),
+    dismiss: jest.fn(),
+    select: jest.fn(),
+    attach,
+  };
+}
 
 describe("Composer token usage display", () => {
   test("shows k-formatted usage with context window when available", () => {

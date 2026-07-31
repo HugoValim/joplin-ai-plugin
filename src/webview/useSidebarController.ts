@@ -78,6 +78,7 @@ export interface MentionController {
   readonly setQuery: (query: string) => void;
   readonly dismiss: () => void;
   readonly select: (candidate: MentionCandidate) => void;
+  readonly attach: (candidate: MentionCandidate) => void;
 }
 
 /**
@@ -135,7 +136,14 @@ export function useSidebarController(): SidebarController {
     state.snapshot.activeChat?.id ?? null,
     actions.submit,
   );
-  return { state, draft, acceptedIds, setDraft, mention, ...actions };
+  return {
+    state,
+    draft,
+    acceptedIds,
+    setDraft,
+    mention: { ...mention, attach: attachMention },
+    ...actions,
+  };
 }
 
 function useQueuedFollowUp(

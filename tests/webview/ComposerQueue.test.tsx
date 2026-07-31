@@ -38,6 +38,7 @@ function closedMention(): React.ComponentProps<typeof Composer>["mention"] {
     setQuery: jest.fn(),
     dismiss: jest.fn(),
     select: jest.fn(),
+    attach: jest.fn(),
   };
 }
 

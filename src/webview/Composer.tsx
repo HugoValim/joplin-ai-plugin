@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { formatUsageSummary } from "./usageFormat";
 import { MentionPicker } from "./MentionPicker";
+import { parseDroppedReference } from "./dragDrop";
 import type { MentionController } from "./useSidebarController";
 import type { UsageSnapshot } from "./sidebarState";
 
@@ -55,6 +56,17 @@ export function Composer(props: ComposerProps): JSX.Element {
           return;
         }
         if (!props.disabled) props.onSubmit();
+      }}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("text/plain")) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        const candidate = parseDroppedReference(event.dataTransfer, "note");
+        if (!candidate) return;
+        event.preventDefault();
+        props.mention.attach(candidate);
       }}
     >
       <div className="composer-status" id="composer-status">
