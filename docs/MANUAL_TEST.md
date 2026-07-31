@@ -167,6 +167,15 @@ links, a table, LF/CRLF variants, a BOM file, and a file ignored by
 
 ## Assistant output actions
 
+- [ ] Assistant `http(s)` links use the theme accent color and underline, readable
+      on light, dark, and high-contrast themes; keyboard focus shows the accent
+      outline.
+- [ ] Clicking a safe `http(s)` link opens it outside the sidebar; the AI panel
+      does not navigate or turn white.
+- [ ] `javascript:`, `data:`, and other unsafe schemes do not navigate the panel
+      and do not call the provider.
+- [ ] In-page `#anchor` links navigate within the transcript without opening
+      externally.
 - [ ] **Copy** remains visible; **Sources (N)** and **More actions** work by
       keyboard and close with Escape.
 - [ ] **Insert** adds one saved assistant response at the editor cursor.

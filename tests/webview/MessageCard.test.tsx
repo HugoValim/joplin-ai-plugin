@@ -85,6 +85,34 @@ describe("MessageCard", () => {
     expect(onOpenLink).not.toHaveBeenCalled();
   });
 
+  test("does not open unsafe-scheme links and prevents webview navigation", async () => {
+    const user = userEvent.setup();
+    const onOpenLink = jest.fn();
+    render(
+      <MessageCard
+        message={{
+          ...MESSAGE,
+          content: "Run [evil](javascript:alert(1)).",
+        }}
+        position={1}
+        total={1}
+        runSummary={null}
+        canRegenerate={false}
+        onOpenNote={jest.fn()}
+        onOpenLink={onOpenLink}
+        onAssistantAction={jest.fn()}
+        noteActionsDisabled={false}
+      />,
+    );
+
+    const link = screen.getByText("evil");
+    expect(link.tagName).toBe("A");
+    expect(link.getAttribute("href")).toBeFalsy();
+    expect(link.className).toContain("markdown-link");
+    await user.click(link);
+    expect(onOpenLink).not.toHaveBeenCalled();
+  });
+
   test("keeps Copy visible and closes keyboard action menus", async () => {
     const user = userEvent.setup();
     const clipboard = new RecordingClipboard();

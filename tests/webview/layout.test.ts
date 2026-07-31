@@ -42,4 +42,17 @@ describe("panel layout", () => {
     expect(css).toMatch(/@media\s*\(max-width:\s*279px\)/);
     expect(css).toMatch(/\.panel-width-guard\s*\{[^}]*display:\s*grid/s);
   });
+
+  test("styles markdown links for readable contrast and keyboard focus", () => {
+    const css = readFileSync(resolve("src/webview/message.css"), "utf8");
+    expect(css).toMatch(
+      /\.message-content a\.markdown-link\s*\{[^}]*color:\s*var\(--joplin-color-accent\)/s,
+    );
+    expect(css).toMatch(
+      /\.message-content a\.markdown-link\s*\{[^}]*text-decoration:\s*underline/s,
+    );
+    expect(css).toMatch(
+      /\.message-content a\.markdown-link:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--joplin-color-accent\)/s,
+    );
+  });
 });
