@@ -816,6 +816,65 @@ describe("ChatController", () => {
     ).rejects.toThrow("expected an absolute http(s) URL");
     expect(commands.calls).toHaveLength(1);
   });
+
+  test("createNewChat creates and selects a fresh chat", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const prior = await chats.create("Prior");
+    const panel = new RecordingPanel();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const source = new EmptyActiveNoteSource();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(source, new EmptyRetrievalPort(), async () => null),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        source,
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-prior",
+      chatId: prior.id,
+      type: "chat.select",
+      payload: {},
+    });
+
+    const newChatId = await controller.createNewChat();
+
+    expect(newChatId).not.toBe(prior.id);
+    const snapshot = panel.events
+      .filter((event) => event.type === "state.snapshot")
+      .at(-1);
+    if (snapshot?.type !== "state.snapshot") {
+      throw new Error("Expected a state.snapshot after createNewChat");
+    }
+    expect(snapshot.payload.activeChat?.id).toBe(newChatId);
+    expect(await chats.get(newChatId)).not.toBeNull();
+  });
 });
 
 async function waitForSnapshotStatus(

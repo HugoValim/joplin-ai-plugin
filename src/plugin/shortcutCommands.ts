@@ -107,3 +107,61 @@ function selectionPrefillEvent(text: string): PluginEvent {
     payload: { text },
   });
 }
+
+interface NewChatFactory {
+  createNewChat(): Promise<string>;
+}
+
+/**
+ * Registers the shortcut that opens a new AI chat and pastes the editor
+ * selection into its composer. Distinct from `Ctrl+L`, which appends to the
+ * current chat.
+ *
+ * @example await registerNewChatSelectionShortcut(commands, menuItems, panel, source, factory)
+ */
+export async function registerNewChatSelectionShortcut(
+  commands: ShortcutCommandRegistry,
+  menuItems: ShortcutMenuRegistry,
+  panel: SelectionPanel,
+  source: SelectedTextSource,
+  factory: NewChatFactory,
+): Promise<void> {
+  const command = newChatSelectionShortcutCommand(panel, source, factory);
+  await commands.register(command);
+  await menuItems.create(
+    "joplinAiAgent.newChatSelectionMenuItem",
+    command.name,
+    MenuItemLocation.Tools,
+    { accelerator: "Ctrl+Shift+L" },
+  );
+}
+
+function newChatSelectionShortcutCommand(
+  panel: SelectionPanel,
+  source: SelectedTextSource,
+  factory: NewChatFactory,
+): ShortcutCommand {
+  return {
+    name: "joplinAiAgent.newChatSelection",
+    label: "New AI chat with selection",
+    execute: async () => {
+      const text = await source.selectedText();
+      const chatId = await factory.createNewChat();
+      await panel.show();
+      if (text) panel.post(selectionPrefillEventForChat(text, chatId));
+    },
+  };
+}
+
+function selectionPrefillEventForChat(
+  text: string,
+  chatId: string,
+): PluginEvent {
+  return parsePluginEvent({
+    version: PROTOCOL_VERSION,
+    messageId: randomUUID(),
+    chatId,
+    type: "composer.prefill",
+    payload: { text, replace: true },
+  });
+}

@@ -252,6 +252,17 @@ export class ChatController {
     await this.selectChat(chat.id);
   }
 
+  /**
+   * Creates a fresh chat, selects it, and returns its id for caller prefill.
+   *
+   * @example const chatId = await controller.createNewChat()
+   */
+  public async createNewChat(): Promise<string> {
+    const chat = await this.chats.create();
+    await this.selectChat(chat.id);
+    return chat.id;
+  }
+
   private async selectChat(chatId: string): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
     this.activeChatId = chat.id;

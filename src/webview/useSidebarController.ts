@@ -164,7 +164,11 @@ function receivePanelEvent(
     const event = parseWebviewPluginEvent(input);
     if (event.type === "composer.prefill") {
       setDraft((current) =>
-        appendComposerSelection(current, event.payload.text),
+        applyComposerPrefill(
+          current,
+          event.payload.text,
+          event.payload.replace,
+        ),
       );
     }
     if (isTerminalEvent(event)) submissionLock.current = false;
@@ -175,7 +179,12 @@ function receivePanelEvent(
   }
 }
 
-function appendComposerSelection(current: string, selection: string): string {
+function applyComposerPrefill(
+  current: string,
+  selection: string,
+  replace: boolean | undefined,
+): string {
+  if (replace) return selection;
   return current ? `${current}\n\n${selection}` : selection;
 }
 

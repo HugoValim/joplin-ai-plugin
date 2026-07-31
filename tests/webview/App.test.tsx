@@ -177,6 +177,72 @@ describe("App shell", () => {
     ).toBe(false);
   });
 
+  test("replaces the draft when a new chat prefills with replace", async () => {
+    const { api } = await renderReadyApp();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    fireEvent.change(composer, { target: { value: "Old draft" } });
+
+    await act(async () =>
+      api.emit({
+        version: PROTOCOL_VERSION,
+        messageId: "new-chat-1",
+        chatId: "chat-2",
+        type: "state.snapshot",
+        payload: {
+          chats: [
+            { id: "chat-1", title: "Plan", updatedAt: 1 },
+            { id: "chat-2", title: "New chat", updatedAt: 2 },
+          ],
+          activeChat: {
+            id: "chat-2",
+            title: "New chat",
+            messages: [],
+            context: {
+              activeNote: true,
+              vault: false,
+              autoApply: false,
+              interactionMode: "agent",
+              attachedNoteIds: [],
+            },
+            externalRoot: null,
+            pendingChangeSet: null,
+            runSummaries: [],
+          },
+          endpointStatus: "online",
+          modelName: "glm-5.2:cloud",
+          privacyNotice: "Only enabled context is sent.",
+          secretNotebookIds: [],
+          availableModels: ["glm-5.2:cloud"],
+          contextWindowMax: 128000,
+        },
+      }),
+    );
+    await act(async () =>
+      api.emit({
+        version: PROTOCOL_VERSION,
+        messageId: "selection-1",
+        chatId: "chat-2",
+        type: "composer.prefill",
+        payload: { text: "pasted selection", replace: true },
+      }),
+    );
+
+    const composerAfterSwitch = screen.getByRole<HTMLTextAreaElement>(
+      "textbox",
+      { name: "Message" },
+    );
+    expect(composerAfterSwitch.value).toBe("pasted selection");
+    expect(document.activeElement).toBe(composerAfterSwitch);
+    expect(
+      api.requests.some(
+        (request) =>
+          (request as { readonly type?: unknown }).type === "chat.submit",
+      ),
+    ).toBe(false);
+  });
+
   test("shows trusted model and active-note title without transcript live region", async () => {
     const { api } = await renderReadyApp();
     await act(async () =>
@@ -209,9 +275,7 @@ describe("App shell", () => {
 
     const listbox = screen.getByRole("listbox", { name: "Available models" });
     expect(listbox).toBeTruthy();
-    expect(
-      screen.getByRole("option", { name: "kimi-k3:cloud" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: "kimi-k3:cloud" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("option", { name: "kimi-k3:cloud" }));
 

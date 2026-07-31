@@ -58,6 +58,13 @@ notes or folders.
 - [ ] `Ctrl+L` does not submit the draft or call the provider.
 - [ ] With no editor selection, `Ctrl+L` opens the sidebar without changing the
       draft.
+- [ ] Select note text and press `Ctrl+Shift+L`: a new chat opens, the sidebar
+      is shown, and the selection replaces the composer draft (focus moves to
+      the composer).
+- [ ] `Ctrl+Shift+L` does not submit the draft or call the provider.
+- [ ] With no editor selection, `Ctrl+Shift+L` opens a new empty chat without
+      pasting anything.
+- [ ] `Ctrl+L` (append to current chat) is unchanged by `Ctrl+Shift+L`.
 
 ## Bypass permissions
 

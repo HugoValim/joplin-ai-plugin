@@ -1,5 +1,6 @@
 import { MenuItemLocation } from "../../api/types";
 import {
+  registerNewChatSelectionShortcut,
   registerSelectionToChatShortcut,
   registerToggleSidebarShortcut,
 } from "../../src/plugin/shortcutCommands";
@@ -125,6 +126,67 @@ describe("shortcut commands", () => {
 
     await commands.commands[0]?.execute();
 
+    expect(panel.showCount).toBe(1);
+    expect(panel.events).toEqual([]);
+  });
+});
+
+class RecordingNewChatFactory {
+  public callCount = 0;
+
+  public async createNewChat(): Promise<string> {
+    this.callCount += 1;
+    return "new-chat-1";
+  }
+}
+
+describe("new chat selection shortcut", () => {
+  test("registers Ctrl+Shift+L and pastes selection into a new chat", async () => {
+    const commands = new RecordingCommandRegistry();
+    const menuItems = new RecordingMenuItemRegistry();
+    const panel = new RecordingShortcutPanel();
+    const factory = new RecordingNewChatFactory();
+
+    await registerNewChatSelectionShortcut(
+      commands,
+      menuItems,
+      panel,
+      new SelectedTextSource("selected note text"),
+      factory,
+    );
+    expect(menuItems.items[0]).toEqual({
+      id: "joplinAiAgent.newChatSelectionMenuItem",
+      commandName: "joplinAiAgent.newChatSelection",
+      location: MenuItemLocation.Tools,
+      accelerator: "Ctrl+Shift+L",
+    });
+
+    await commands.commands[0]?.execute();
+    expect(factory.callCount).toBe(1);
+    expect(panel.showCount).toBe(1);
+    expect(panel.events[0]).toMatchObject({
+      version: 2,
+      chatId: "new-chat-1",
+      type: "composer.prefill",
+      payload: { text: "selected note text", replace: true },
+    });
+  });
+
+  test("creates a new chat without prefill when selection is empty", async () => {
+    const commands = new RecordingCommandRegistry();
+    const panel = new RecordingShortcutPanel();
+    const factory = new RecordingNewChatFactory();
+    await registerNewChatSelectionShortcut(
+      commands,
+      new RecordingMenuItemRegistry(),
+      panel,
+      new SelectedTextSource(""),
+      factory,
+    );
+
+    await commands.commands[0]?.execute();
+
+    expect(factory.callCount).toBe(1);
     expect(panel.showCount).toBe(1);
     expect(panel.events).toEqual([]);
   });

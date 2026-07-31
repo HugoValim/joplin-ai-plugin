@@ -554,7 +554,10 @@ const ComposerPrefillSchema = Type.Object(
     ...EnvelopeProperties,
     type: Type.Literal("composer.prefill"),
     payload: Type.Object(
-      { text: Type.String({ minLength: 1, maxLength: 20_000 }) },
+      {
+        text: Type.String({ minLength: 1, maxLength: 20_000 }),
+        replace: Type.Optional(Type.Boolean()),
+      },
       { additionalProperties: false },
     ),
   },
