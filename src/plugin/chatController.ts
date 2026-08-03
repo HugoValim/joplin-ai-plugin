@@ -17,6 +17,13 @@ import type {
 import { DomainError, safeValue } from "../shared/errors";
 import type { PanelRequest } from "../shared/protocol";
 import { isSafeExternalMarkdownUrl } from "../shared/safeExternalUrl";
+import {
+  resolveSelectionRange,
+  type LineRange,
+  type NoteSelectionRef,
+  type SelectionRefInput,
+} from "../shared/selectionRef";
+import { searchMentionHits, type MentionSearchPort } from "./mentionSearch";
 import type { ToolRegistry, ToolExecutionResult } from "../tools/toolRegistry";
 import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
@@ -43,6 +50,15 @@ import { NoOpReviewNotePort, type ReviewNotePort } from "./reviewNoteService";
 
 const AUTO_APPLY_WARNING =
   "Security warning: Bypass permissions will auto-apply every model-proposed non-delete change, then keep an inline Keep/Undo review in the sidebar. Deletions still require manual ChangeReview before apply. Conflicts are still blocked. Enable for this chat?";
+
+const MAX_ATTACHED_NOTES = 50;
+const MAX_ATTACHED_NOTEBOOKS = 20;
+const MAX_SELECTION_REFS = 20;
+
+export interface DropSelectionPort {
+  selectedNoteIds(): Promise<readonly string[]>;
+  selectedFolderId(): Promise<string | null>;
+}
 
 export class ChatController {
   private activeChatId: string | null = null;
@@ -71,6 +87,8 @@ export class ChatController {
     private readonly secretNotebooks: SecretNotebookStore,
     createProvider: ProviderFactory,
     reviewNotes: ReviewNotePort = new NoOpReviewNotePort(),
+    private readonly mentionSearch: MentionSearchPort | null = null,
+    private readonly dropSelection: DropSelectionPort | null = null,
   ) {
     this.providerConnector = new ProviderConnector(
       settings,
@@ -140,6 +158,12 @@ export class ChatController {
         return;
       case "context.update":
         await this.updateContext(request);
+        return;
+      case "context.search":
+        await this.searchContext(request);
+        return;
+      case "context.attachDropped":
+        await this.attachDropped(request);
         return;
       case "folder.select":
         await this.selectFolder(request.chatId);
@@ -250,6 +274,95 @@ export class ChatController {
   private async createChat(title?: string): Promise<void> {
     const chat = await this.chats.create(title);
     await this.selectChat(chat.id);
+  }
+
+  /**
+   * Attaches a line-range selection ref to the active chat composer.
+   *
+   * @example await controller.attachSelectionRef({ noteId, title, body, selection })
+   */
+  public async attachSelectionRef(input: SelectionRefInput): Promise<void> {
+    const chatId = this.activeChatId;
+    if (!chatId) return;
+    await this.persistSelectionRef(chatId, input);
+  }
+
+  /**
+   * Creates a new chat and optionally attaches a selection line-range ref.
+   *
+   * @example await controller.startNewChatWithSelection(refInput)
+   */
+  public async startNewChatWithSelection(
+    input: SelectionRefInput | null,
+  ): Promise<void> {
+    await this.createChat();
+    const chatId = this.activeChatId;
+    if (!chatId || !input) return;
+    await this.persistSelectionRef(chatId, input);
+  }
+
+  /**
+   * Stores a selection ref and shows it in the composer as `@Title:L12-L40`.
+   *
+   * When the selection cannot be located in the body (Rich Text hands us
+   * rendered text), it degrades to the note's full line range rather than a
+   * bare `@Title`, so the composer never hides that a selection was requested.
+   */
+  private async persistSelectionRef(
+    chatId: string,
+    input: SelectionRefInput,
+  ): Promise<void> {
+    const chat = await requireChat(this.chats, chatId);
+    const range = resolveSelectionRange(input) ?? wholeBodyRange(input.body);
+    if (!range) {
+      const attachedNoteIds = appendUniqueId(
+        chat.context.attachedNoteIds,
+        input.noteId,
+        MAX_ATTACHED_NOTES,
+      );
+      await this.chats.save({
+        ...chat,
+        updatedAt: Date.now(),
+        context: { ...chat.context, attachedNoteIds },
+      });
+      this.events.post("context.dropped", chatId, {
+        hits: [
+          {
+            kind: "note",
+            id: input.noteId,
+            title: input.title.trim() || "Untitled",
+          },
+        ],
+      });
+      await this.sendSnapshot();
+      return;
+    }
+    const selectionRef: NoteSelectionRef = {
+      noteId: input.noteId,
+      startLine: range.startLine,
+      endLine: range.endLine,
+    };
+    const attachedNoteIds = appendUniqueId(
+      chat.context.attachedNoteIds,
+      input.noteId,
+      MAX_ATTACHED_NOTES,
+    );
+    const selectionRefs = appendSelectionRef(
+      chat.context.selectionRefs ?? [],
+      selectionRef,
+      MAX_SELECTION_REFS,
+    );
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      context: { ...chat.context, attachedNoteIds, selectionRefs },
+    });
+    this.events.post("composer.selectionRef", chatId, {
+      title: input.title.trim() || "Untitled",
+      startLine: range.startLine,
+      endLine: range.endLine,
+    });
+    await this.sendSnapshot();
   }
 
   private async selectChat(chatId: string): Promise<void> {
@@ -618,6 +731,131 @@ export class ChatController {
     await this.checkEndpoint();
   }
 
+  private async searchContext(
+    request: Extract<PanelRequest, { type: "context.search" }>,
+  ): Promise<void> {
+    const hits = this.mentionSearch
+      ? await searchMentionHits(
+          this.mentionSearch,
+          request.payload.query,
+          this.secretNotebookIds,
+          request.payload.limit ?? 10,
+        )
+      : [];
+    this.events.post("context.search.results", request.chatId, {
+      requestId: request.payload.requestId,
+      hits,
+    });
+  }
+
+  private async attachDropped(
+    request: Extract<PanelRequest, { type: "context.attachDropped" }>,
+  ): Promise<void> {
+    const chat = await requireChat(this.chats, request.chatId);
+    const hits = await this.resolveDroppedHits(request.payload);
+    if (hits.length === 0) {
+      await this.sendSnapshot();
+      return;
+    }
+    let attachedNoteIds = [...chat.context.attachedNoteIds];
+    let attachedNotebookIds = [...(chat.context.attachedNotebookIds ?? [])];
+    for (const hit of hits) {
+      if (hit.kind === "note") {
+        attachedNoteIds = appendUniqueId(
+          attachedNoteIds,
+          hit.id,
+          MAX_ATTACHED_NOTES,
+        );
+      } else {
+        attachedNotebookIds = appendUniqueId(
+          attachedNotebookIds,
+          hit.id,
+          MAX_ATTACHED_NOTEBOOKS,
+        );
+      }
+    }
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      context: {
+        ...chat.context,
+        attachedNoteIds,
+        attachedNotebookIds,
+      },
+    });
+    this.events.post("context.dropped", request.chatId, { hits });
+    await this.sendSnapshot();
+  }
+
+  private async resolveDroppedHits(
+    payload: Extract<
+      PanelRequest,
+      { type: "context.attachDropped" }
+    >["payload"],
+  ): Promise<
+    readonly { kind: "note" | "notebook"; id: string; title: string }[]
+  > {
+    const kind = payload.kind;
+    const explicitIds = payload.ids ?? [];
+    if (explicitIds.length > 0) {
+      if (kind === "notebook") {
+        return this.resolveNotebookHits(explicitIds);
+      }
+      return this.resolveNoteHits(explicitIds);
+    }
+    if (!this.dropSelection) return [];
+    if (kind !== "notebook") {
+      const noteIds = await this.dropSelection.selectedNoteIds();
+      if (noteIds.length > 0) return this.resolveNoteHits(noteIds);
+    }
+    if (kind === "note") return [];
+    const folderId = await this.dropSelection.selectedFolderId();
+    return folderId ? this.resolveNotebookHits([folderId]) : [];
+  }
+
+  private async resolveNoteHits(
+    ids: readonly string[],
+  ): Promise<{ kind: "note"; id: string; title: string }[]> {
+    const hits: { kind: "note"; id: string; title: string }[] = [];
+    for (const id of ids.slice(0, MAX_ATTACHED_NOTES)) {
+      const title = await this.resolveNoteTitle(id);
+      hits.push({ kind: "note", id, title });
+    }
+    return hits;
+  }
+
+  private async resolveNotebookHits(
+    ids: readonly string[],
+  ): Promise<{ kind: "notebook"; id: string; title: string }[]> {
+    const hits: { kind: "notebook"; id: string; title: string }[] = [];
+    for (const id of ids.slice(0, MAX_ATTACHED_NOTEBOOKS)) {
+      const title = await this.resolveNotebookTitle(id);
+      hits.push({ kind: "notebook", id, title });
+    }
+    return hits;
+  }
+
+  private async resolveNoteTitle(noteId: string): Promise<string> {
+    if (!this.mentionSearch) return noteId;
+    try {
+      const note = await this.mentionSearch.readNote(noteId);
+      return note.title.trim() || "Untitled";
+    } catch {
+      return noteId;
+    }
+  }
+
+  private async resolveNotebookTitle(notebookId: string): Promise<string> {
+    if (!this.mentionSearch) return notebookId;
+    try {
+      const notebooks = await this.mentionSearch.listNotebooks();
+      const match = notebooks.find((notebook) => notebook.id === notebookId);
+      return match?.title.trim() || "Untitled notebook";
+    } catch {
+      return notebookId;
+    }
+  }
+
   private async updateContext(
     request: Extract<PanelRequest, { type: "context.update" }>,
   ): Promise<void> {
@@ -629,7 +867,12 @@ export class ChatController {
     await this.chats.save({
       ...chat,
       updatedAt: Date.now(),
-      context: request.payload,
+      context: {
+        ...request.payload,
+        attachedNotebookIds: request.payload.attachedNotebookIds ?? [],
+        selectionRefs:
+          request.payload.selectionRefs ?? chat.context.selectionRefs ?? [],
+      },
     });
     await this.sendSnapshot();
   }
@@ -711,4 +954,34 @@ export class ChatController {
       contextWindowMax: this.contextWindowMax,
     });
   }
+}
+
+function appendUniqueId(
+  ids: readonly string[],
+  id: string,
+  max: number,
+): string[] {
+  if (!id.trim() || ids.includes(id) || ids.length >= max) return [...ids];
+  return [...ids, id];
+}
+
+function wholeBodyRange(body: string): LineRange | null {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  if (!body.trim()) return null;
+  return { startLine: 1, endLine: lines.length };
+}
+
+function appendSelectionRef(
+  refs: readonly NoteSelectionRef[],
+  next: NoteSelectionRef,
+  max: number,
+): NoteSelectionRef[] {
+  const duplicate = refs.some(
+    (ref) =>
+      ref.noteId === next.noteId &&
+      ref.startLine === next.startLine &&
+      ref.endLine === next.endLine,
+  );
+  if (duplicate || refs.length >= max) return [...refs];
+  return [...refs, next];
 }

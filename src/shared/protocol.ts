@@ -6,6 +6,14 @@ export const PROTOCOL_VERSION = 2 as const;
 
 const IdentifierSchema = Type.String({ minLength: 1, maxLength: 128 });
 const EmptyPayloadSchema = Type.Object({}, { additionalProperties: false });
+const SelectionRefSchema = Type.Object(
+  {
+    noteId: IdentifierSchema,
+    startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+    endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  },
+  { additionalProperties: false },
+);
 const EnvelopeProperties = {
   version: Type.Literal(PROTOCOL_VERSION),
   messageId: IdentifierSchema,
@@ -128,6 +136,52 @@ const ContextUpdateSchema = Type.Object(
           maxItems: 50,
           uniqueItems: true,
         }),
+        attachedNotebookIds: Type.Optional(
+          Type.Array(IdentifierSchema, {
+            maxItems: 20,
+            uniqueItems: true,
+          }),
+        ),
+        selectionRefs: Type.Optional(
+          Type.Array(SelectionRefSchema, { maxItems: 20 }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ContextSearchSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.search"),
+    payload: Type.Object(
+      {
+        requestId: IdentifierSchema,
+        query: Type.String({ maxLength: 200 }),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ContextAttachDroppedSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.attachDropped"),
+    payload: Type.Object(
+      {
+        kind: Type.Union([
+          Type.Literal("note"),
+          Type.Literal("notebook"),
+          Type.Literal("auto"),
+        ]),
+        ids: Type.Optional(
+          Type.Array(IdentifierSchema, { maxItems: 50, uniqueItems: true }),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -334,6 +388,8 @@ const PanelRequestSchema = Type.Union([
   ChatRegenerateSchema,
   RunCancelSchema,
   ContextUpdateSchema,
+  ContextSearchSchema,
+  ContextAttachDroppedSchema,
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
@@ -387,6 +443,15 @@ const ContextSettingsSchema = Type.Object(
       maxItems: 50,
       uniqueItems: true,
     }),
+    attachedNotebookIds: Type.Optional(
+      Type.Array(IdentifierSchema, {
+        maxItems: 20,
+        uniqueItems: true,
+      }),
+    ),
+    selectionRefs: Type.Optional(
+      Type.Array(SelectionRefSchema, { maxItems: 20 }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -560,6 +625,60 @@ const ComposerPrefillSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const ComposerSelectionRefSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("composer.selectionRef"),
+    payload: Type.Object(
+      {
+        title: Type.String({ minLength: 1, maxLength: 500 }),
+        startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+        endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const MentionHitSchema = Type.Object(
+  {
+    kind: Type.Union([Type.Literal("note"), Type.Literal("notebook")]),
+    id: IdentifierSchema,
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+
+const ContextSearchResultsSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.search.results"),
+    payload: Type.Object(
+      {
+        requestId: IdentifierSchema,
+        hits: Type.Array(MentionHitSchema, { maxItems: 40 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ContextDroppedSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.dropped"),
+    payload: Type.Object(
+      {
+        hits: Type.Array(MentionHitSchema, { maxItems: 50 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const RunStartedSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -703,6 +822,9 @@ const PluginEventSchema = Type.Union([
   StateSnapshotSchema,
   WorkspaceChangedSchema,
   ComposerPrefillSchema,
+  ComposerSelectionRefSchema,
+  ContextSearchResultsSchema,
+  ContextDroppedSchema,
   RunStartedSchema,
   AssistantDeltaSchema,
   ToolStartedSchema,

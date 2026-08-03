@@ -19,18 +19,25 @@ function composerProps(
     onQueue: jest.fn(),
     disabled: false,
     history: [],
+    mentionHits: [],
     onDraftChange: jest.fn(),
     onSubmit: jest.fn(),
     onCancel: jest.fn(),
     onUndo: jest.fn(),
+    onMentionQueryChange: jest.fn(),
+    onMentionSelect: jest.fn(),
     ...overrides,
   };
 }
 
 describe("Composer follow-up queue", () => {
   test("accepts typing while busy", () => {
-    render(<Composer {...composerProps({ draft: "queued text", busy: true })} />);
-    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message" });
+    render(
+      <Composer {...composerProps({ draft: "queued text", busy: true })} />,
+    );
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
     expect(textarea.value).toBe("queued text");
     expect(textarea.disabled).toBe(false);
   });

@@ -11,10 +11,12 @@ import {
   type PanelRequest,
   type PluginEvent,
 } from "../shared/protocol";
+import { appendMentionLabels, appendSelectionRefLabel } from "./mentionQuery";
 import { parseWebviewPluginEvent } from "./pluginEventTransport";
 import {
   INITIAL_SIDEBAR_STATE,
   sidebarReducer,
+  type MentionHit,
   type SidebarState,
 } from "./sidebarState";
 
@@ -64,6 +66,13 @@ export interface SidebarController {
   readonly renameChat: (title: string) => void;
   readonly selectModel: (model: string) => void;
   readonly useSuggestion: (suggestion: string) => void;
+  readonly mentionHits: readonly MentionHit[];
+  readonly onMentionQueryChange: (query: string | null) => void;
+  readonly attachMention: (hit: MentionHit) => void;
+  readonly attachDropped: (
+    kind: "note" | "notebook" | "auto",
+    ids?: readonly string[],
+  ) => void;
 }
 
 /**
@@ -165,6 +174,24 @@ function receivePanelEvent(
     if (event.type === "composer.prefill") {
       setDraft((current) =>
         appendComposerSelection(current, event.payload.text),
+      );
+    }
+    if (event.type === "composer.selectionRef") {
+      setDraft((current) =>
+        appendSelectionRefLabel(
+          current,
+          event.payload.title,
+          event.payload.startLine,
+          event.payload.endLine,
+        ),
+      );
+    }
+    if (event.type === "context.dropped") {
+      setDraft((current) =>
+        appendMentionLabels(
+          current,
+          event.payload.hits.map((hit) => hit.title),
+        ),
       );
     }
     if (isTerminalEvent(event)) submissionLock.current = false;
@@ -344,6 +371,10 @@ function createActions(
       input.setDraft(suggestion);
       input.dispatch({ type: "focus" });
     },
+    mentionHits: input.state.mentionHits,
+    onMentionQueryChange: (query) => requestMentionSearch(input, query),
+    attachMention: (hit) => attachMention(input, hit),
+    attachDropped: (kind, ids) => attachDropped(input, kind, ids),
   };
 }
 
@@ -420,10 +451,77 @@ function updateContext(
   next: Partial<ActiveChat["context"]>,
 ): void {
   if (!input.activeChat) return;
+  const context = input.activeChat.context;
   input.send({
     ...input.envelope(),
     type: "context.update",
-    payload: { ...input.activeChat.context, ...next },
+    payload: {
+      ...context,
+      attachedNotebookIds: context.attachedNotebookIds ?? [],
+      selectionRefs: context.selectionRefs ?? [],
+      ...next,
+    },
+  });
+}
+
+const MAX_ATTACHED_NOTES = 50;
+const MAX_ATTACHED_NOTEBOOKS = 20;
+
+function attachMention(input: ActionInput, hit: MentionHit): void {
+  if (!input.activeChat) return;
+  const context = input.activeChat.context;
+  if (hit.kind === "note") {
+    updateContext(input, {
+      attachedNoteIds: addMentionId(
+        context.attachedNoteIds,
+        hit.id,
+        MAX_ATTACHED_NOTES,
+      ),
+    });
+    return;
+  }
+  updateContext(input, {
+    attachedNotebookIds: addMentionId(
+      context.attachedNotebookIds ?? [],
+      hit.id,
+      MAX_ATTACHED_NOTEBOOKS,
+    ),
+  });
+}
+
+function attachDropped(
+  input: ActionInput,
+  kind: "note" | "notebook" | "auto",
+  ids?: readonly string[],
+): void {
+  if (!input.activeChat) return;
+  input.send({
+    ...input.envelope(),
+    type: "context.attachDropped",
+    payload: ids && ids.length > 0 ? { kind, ids: [...ids] } : { kind },
+  });
+}
+
+function addMentionId(
+  ids: readonly string[],
+  id: string,
+  max: number,
+): string[] {
+  if (ids.includes(id) || ids.length >= max) return [...ids];
+  return [...ids, id];
+}
+
+function requestMentionSearch(input: ActionInput, query: string | null): void {
+  if (query === null) {
+    input.dispatch({ type: "mention-query", requestId: null });
+    return;
+  }
+  const requestId = identifier();
+  input.dispatch({ type: "mention-query", requestId });
+  input.send({
+    ...input.envelope(),
+    type: "context.search",
+    payload: { requestId, query },
   });
 }
 

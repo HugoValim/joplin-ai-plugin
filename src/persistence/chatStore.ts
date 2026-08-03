@@ -55,6 +55,25 @@ const ContextSchema = Type.Object(
       maxItems: 50,
       uniqueItems: true,
     }),
+    attachedNotebookIds: Type.Optional(
+      Type.Array(IdentifierSchema, {
+        maxItems: 20,
+        uniqueItems: true,
+      }),
+    ),
+    selectionRefs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            noteId: IdentifierSchema,
+            startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+            endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 20 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -175,6 +194,8 @@ export class ChatStore {
         autoApply: false,
         interactionMode: "agent",
         attachedNoteIds: [],
+        attachedNotebookIds: [],
+        selectionRefs: [],
       },
       externalRoot: null,
       references: [],
@@ -355,6 +376,8 @@ function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
       ...chat.context,
       autoApply: chat.context.autoApply ?? false,
       interactionMode: chat.context.interactionMode ?? "agent",
+      attachedNotebookIds: chat.context.attachedNotebookIds ?? [],
+      selectionRefs: chat.context.selectionRefs ?? [],
     },
     parkedAppliedChangeSet: chat.parkedAppliedChangeSet ?? null,
   };
@@ -404,10 +427,7 @@ function isConsistentPending(
   );
 }
 
-function isConsistentParked(
-  parked: ChangeSet | null,
-  chatId: string,
-): boolean {
+function isConsistentParked(parked: ChangeSet | null, chatId: string): boolean {
   if (!parked) return true;
   return (
     parked.chatId === chatId &&

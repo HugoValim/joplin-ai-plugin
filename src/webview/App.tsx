@@ -1,7 +1,13 @@
+import { useState } from "react";
 import type { ActiveChatView } from "../shared/protocol";
 import { Composer } from "./Composer";
 import { ContextSummary } from "./ContextSummary";
 import { ChangeReview } from "./ChangeReview";
+import {
+  canAcceptNoteDrop,
+  dropKindFromDataTransfer,
+  parseNoteDropPayload,
+} from "./noteDrop";
 import { promptSuggestions } from "./promptSuggestions";
 import { RunActivity, RunLiveRegion } from "./RunStatus";
 import { SidebarHeader } from "./SidebarHeader";
@@ -16,6 +22,7 @@ import { useSidebarController } from "./useSidebarController";
 export function App(): JSX.Element {
   const controller = useSidebarController();
   const { state } = controller;
+  const [dropActive, setDropActive] = useState(false);
   const activeChat = state.snapshot.activeChat;
   const pendingChanges = activeChat?.pendingChangeSet ?? null;
   const hasProposedPending = Boolean(
@@ -39,7 +46,30 @@ export function App(): JSX.Element {
   const composerDisabled = hasProposedPending;
 
   return (
-    <main className={`app-shell${pendingChanges ? " has-review" : ""}`}>
+    <main
+      className={`app-shell${pendingChanges ? " has-review" : ""}`}
+      onDragOver={(event) => {
+        if (!activeChat || !canAcceptNoteDrop(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDropActive(true);
+      }}
+      onDragLeave={(event) => {
+        const next = event.relatedTarget as Node | null;
+        if (next && event.currentTarget.contains(next)) return;
+        setDropActive(false);
+      }}
+      onDrop={(event) => {
+        setDropActive(false);
+        if (!activeChat || !canAcceptNoteDrop(event.dataTransfer)) return;
+        event.preventDefault();
+        const parsed = parseNoteDropPayload(event.dataTransfer);
+        controller.attachDropped(
+          parsed?.kind ?? dropKindFromDataTransfer(event.dataTransfer),
+          parsed?.ids,
+        );
+      }}
+    >
       <aside
         className="panel-width-guard"
         role="status"
@@ -142,10 +172,14 @@ export function App(): JSX.Element {
         queuedMessage={state.queuedMessage}
         onQueue={controller.queueMessage}
         history={composerHistory(activeChat?.messages ?? [])}
+        mentionHits={controller.mentionHits}
+        dropActive={dropActive}
         onDraftChange={controller.setDraft}
         onSubmit={controller.submit}
         onCancel={controller.cancel}
         onUndo={controller.undo}
+        onMentionQueryChange={controller.onMentionQueryChange}
+        onMentionSelect={controller.attachMention}
       />
       <RunLiveRegion announcement={state.phase} />
     </main>

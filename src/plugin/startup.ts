@@ -17,7 +17,10 @@ import {
 } from "../persistence/adapters";
 import { ChatStore, type JsonFilePort } from "../persistence/chatStore";
 import { JsonRollbackStore } from "../persistence/rollbackStore";
-import { SecretNotebookStore, type JsonFilePort as SecretNotebookJsonPort } from "../persistence/secretNotebookStore";
+import {
+  SecretNotebookStore,
+  type JsonFilePort as SecretNotebookJsonPort,
+} from "../persistence/secretNotebookStore";
 import { OpenAiCompatibleProvider } from "../providers/openAiProvider";
 import { registerAgentPlanTools } from "../tools/agentPlanTools";
 import { registerFileTools } from "../tools/fileTools";
@@ -34,9 +37,14 @@ import {
 import { JoplinPanelPort } from "./panelPort";
 import { registerPluginSettings } from "./settings";
 import {
+  registerNewChatWithSelectionShortcut,
   registerSelectionToChatShortcut,
   registerToggleSidebarShortcut,
 } from "./shortcutCommands";
+import {
+  MarkdownSelectionLineRangeQuery,
+  registerSelectionLineRangeScript,
+} from "./editorSelectionRange";
 import {
   JoplinActiveNoteContextSource,
   PerChatWorkspaceResolver,
@@ -74,6 +82,10 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
       } catch {
         return null;
       }
+    },
+    async (notebookId) => {
+      const listed = await notes.listNotebookNotes(notebookId, 25);
+      return listed.map((note) => note.id);
     },
   );
   const finder = new FastGlobCandidateFinder(fileSystem);
@@ -117,6 +129,11 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     secretNotebooks,
     (config) => new OpenAiCompatibleProvider(config),
     new ReviewNoteService(notes, secretNotebooks, commands),
+    notes,
+    {
+      selectedNoteIds: () => joplin.workspace.selectedNoteIds(),
+      selectedFolderId: () => selectedFolderId(joplin.workspace),
+    },
   );
   await panel.initialize((request) => controller.handle(request));
   await registerToggleSidebarShortcut(
@@ -124,11 +141,23 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     joplin.views.menuItems,
     panel,
   );
+  await registerSelectionLineRangeScript(joplin.contentScripts);
+  const editorSelection = new MarkdownSelectionLineRangeQuery(commands);
   await registerSelectionToChatShortcut(
     joplin.commands,
     joplin.views.menuItems,
     panel,
     activeSource,
+    editorSelection,
+    controller,
+  );
+  await registerNewChatWithSelectionShortcut(
+    joplin.commands,
+    joplin.views.menuItems,
+    panel,
+    activeSource,
+    editorSelection,
+    controller,
   );
   controller.workspaceChanged(await activeNoteSummary(activeSource));
   await joplin.workspace.onNoteSelectionChange(() => {
@@ -198,6 +227,15 @@ function requireFsExtra(joplin: Joplin): FsExtraBundle {
 
 function optionalAi(joplin: Joplin): unknown {
   return (joplin as unknown as { readonly ai?: unknown }).ai;
+}
+
+async function selectedFolderId(workspace: {
+  selectedFolder(): Promise<unknown>;
+}): Promise<string | null> {
+  const folder = await workspace.selectedFolder();
+  if (typeof folder !== "object" || folder === null) return null;
+  const id = (folder as { readonly id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id : null;
 }
 
 function structuredWarning(error: unknown): void {

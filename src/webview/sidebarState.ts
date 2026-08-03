@@ -32,6 +32,11 @@ export type AgentPlanItemView = Extract<
   { type: "run.plan" }
 >["payload"]["items"][number];
 
+export type MentionHit = Extract<
+  PluginEvent,
+  { type: "context.search.results" }
+>["payload"]["hits"][number];
+
 export interface SidebarState {
   readonly snapshot: SidebarSnapshot;
   readonly activeNote: ActiveNoteSummary;
@@ -48,6 +53,8 @@ export interface SidebarState {
   readonly submissionSequence: number;
   readonly focusSequence: number;
   readonly queuedMessage: string | null;
+  readonly mentionHits: readonly MentionHit[];
+  readonly mentionRequestId: string | null;
 }
 
 export type SidebarAction =
@@ -62,7 +69,8 @@ export type SidebarAction =
   | { readonly type: "focus" }
   | { readonly type: "queue"; readonly text: string }
   | { readonly type: "clear-queue" }
-  | { readonly type: "post-failed"; readonly message: string };
+  | { readonly type: "post-failed"; readonly message: string }
+  | { readonly type: "mention-query"; readonly requestId: string | null };
 
 export const EMPTY_SNAPSHOT: SidebarSnapshot = {
   chats: [],
@@ -91,6 +99,8 @@ export const INITIAL_SIDEBAR_STATE: SidebarState = {
   submissionSequence: 0,
   focusSequence: 0,
   queuedMessage: null,
+  mentionHits: [],
+  mentionRequestId: null,
 };
 
 /**
@@ -108,11 +118,20 @@ export function sidebarReducer(
     return { ...state, phase: "Cancellation requested" };
   if (action.type === "focus")
     return { ...state, focusSequence: state.focusSequence + 1 };
-  if (action.type === "queue")
-    return { ...state, queuedMessage: action.text };
-  if (action.type === "clear-queue")
-    return { ...state, queuedMessage: null };
+  if (action.type === "queue") return { ...state, queuedMessage: action.text };
+  if (action.type === "clear-queue") return { ...state, queuedMessage: null };
+  if (action.type === "mention-query") return setMentionQuery(state, action);
   return failPost(state, action.message);
+}
+
+function setMentionQuery(
+  state: SidebarState,
+  action: Extract<SidebarAction, { type: "mention-query" }>,
+): SidebarState {
+  if (action.requestId === null) {
+    return { ...state, mentionRequestId: null, mentionHits: [] };
+  }
+  return { ...state, mentionRequestId: action.requestId };
 }
 
 function reducePluginEvent(
@@ -122,7 +141,11 @@ function reducePluginEvent(
   if (event.type === "state.snapshot") return receiveSnapshot(state, event);
   if (event.type === "workspace.changed")
     return { ...state, activeNote: event.payload.activeNote };
-  if (event.type === "composer.prefill")
+  if (
+    event.type === "composer.prefill" ||
+    event.type === "composer.selectionRef" ||
+    event.type === "context.dropped"
+  )
     return { ...state, focusSequence: state.focusSequence + 1 };
   if (event.type === "run.started") return startRun(state, event.runId);
   if (event.type === "assistant.delta")
@@ -136,9 +159,18 @@ function reducePluginEvent(
       progress: event.payload.label,
       phase: event.payload.label,
     };
-  if (event.type === "run.plan")
-    return { ...state, plan: event.payload.items };
+  if (event.type === "run.plan") return { ...state, plan: event.payload.items };
+  if (event.type === "context.search.results")
+    return receiveMentionResults(state, event);
   return reduceToolOrTerminalEvent(state, event);
+}
+
+function receiveMentionResults(
+  state: SidebarState,
+  event: Extract<PluginEvent, { type: "context.search.results" }>,
+): SidebarState {
+  if (event.payload.requestId !== state.mentionRequestId) return state;
+  return { ...state, mentionHits: event.payload.hits };
 }
 
 function reduceToolOrTerminalEvent(
@@ -150,10 +182,13 @@ function reduceToolOrTerminalEvent(
         | "state.snapshot"
         | "workspace.changed"
         | "composer.prefill"
+        | "composer.selectionRef"
+        | "context.dropped"
         | "run.started"
         | "assistant.delta"
         | "run.progress"
-        | "run.plan";
+        | "run.plan"
+        | "context.search.results";
     }
   >,
 ): SidebarState {

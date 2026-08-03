@@ -754,6 +754,234 @@ describe("ChatController", () => {
     await run;
   });
 
+  test("attaches selected notes when context.attachDropped falls back to selection", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      null,
+      {
+        selectedNoteIds: async () => ["note-drop-1", "note-drop-2"],
+        selectedFolderId: async () => "nb-drop-1",
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-notes",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "auto" },
+    });
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.attachedNoteIds).toEqual([
+      "note-drop-1",
+      "note-drop-2",
+    ]);
+    expect(saved?.context.attachedNotebookIds ?? []).toEqual([]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [
+              { kind: "note", id: "note-drop-1", title: "note-drop-1" },
+              { kind: "note", id: "note-drop-2", title: "note-drop-2" },
+            ],
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("attaches selected notebook when context.attachDropped has no selected notes", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop notebook");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      null,
+      {
+        selectedNoteIds: async () => [],
+        selectedFolderId: async () => "nb-drop-9",
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-notebook",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "auto" },
+    });
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.attachedNoteIds).toEqual([]);
+    expect(saved?.context.attachedNotebookIds).toEqual(["nb-drop-9"]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [
+              {
+                kind: "notebook",
+                id: "nb-drop-9",
+                title: "nb-drop-9",
+              },
+            ],
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("resolves explicit drop ids and emits context.dropped with titles", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop ids");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const mentionSearch = {
+      searchNotes: async () => [],
+      listNotebooks: async () => [],
+      listNotebookNotes: async () => [],
+      readNote: async (noteId: string) => ({
+        id: noteId,
+        title: "Project brief",
+        body: "",
+        parentId: "nb-1",
+        updatedTime: 1,
+      }),
+    };
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      mentionSearch,
+      {
+        selectedNoteIds: async () => [],
+        selectedFolderId: async () => null,
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-explicit",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "note", ids: ["note-abc"] },
+    });
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [{ kind: "note", id: "note-abc", title: "Project brief" }],
+          },
+        }),
+      ]),
+    );
+  });
+
   test("opens safe external links via openItem and rejects unsafe urls", async () => {
     const files = new MemoryJsonFilePort();
     const chats = new ChatStore("/plugin", files);
@@ -815,6 +1043,289 @@ describe("ChatController", () => {
       }),
     ).rejects.toThrow("expected an absolute http(s) URL");
     expect(commands.calls).toHaveLength(1);
+  });
+
+  test("attachSelectionRef uses explicit editor lines when body search would fail", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("ExplicitLines");
+    const panel = new RecordingPanel();
+    const commands = new EmptyCommands();
+    const changes = new InMemoryChangeSetStore();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-explicit-lines",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    await controller.attachSelectionRef({
+      noteId: "note-1",
+      title: "Guide",
+      body: "saved body without live edits",
+      selection: "live editor only text",
+      startLine: 7,
+      endLine: 25,
+    });
+
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.selectionRefs).toEqual([
+      { noteId: "note-1", startLine: 7, endLine: 25 },
+    ]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "composer.selectionRef",
+          payload: { title: "Guide", startLine: 7, endLine: 25 },
+        }),
+      ]),
+    );
+  });
+
+  test("attachSelectionRef stores line range and posts composer.selectionRef", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Selection");
+    const panel = new RecordingPanel();
+    const commands = new EmptyCommands();
+    const changes = new InMemoryChangeSetStore();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-selection-chat",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    await controller.attachSelectionRef({
+      noteId: "note-1",
+      title: "Guide",
+      body: "a\nb\nc",
+      selection: "b\nc",
+    });
+
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.attachedNoteIds).toEqual(["note-1"]);
+    expect(saved?.context.selectionRefs).toEqual([
+      { noteId: "note-1", startLine: 2, endLine: 3 },
+    ]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "composer.selectionRef",
+          chatId: chat.id,
+          payload: { title: "Guide", startLine: 2, endLine: 3 },
+        }),
+      ]),
+    );
+  });
+
+  test("attachSelectionRef falls back to the whole note range instead of a bare mention", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    const chat = await chats.create("Unlocatable");
+    const panel = new RecordingPanel();
+    const commands = new EmptyCommands();
+    const changes = new InMemoryChangeSetStore();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-unlocatable-chat",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+    await controller.attachSelectionRef({
+      noteId: "note-1",
+      title: "Guide",
+      body: "a\nb\nc\nd",
+      selection: "rendered text that is not in the markdown source",
+    });
+
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.selectionRefs).toEqual([
+      { noteId: "note-1", startLine: 1, endLine: 4 },
+    ]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "composer.selectionRef",
+          payload: { title: "Guide", startLine: 1, endLine: 4 },
+        }),
+      ]),
+    );
+    expect(panel.events.some((event) => event.type === "context.dropped")).toBe(
+      false,
+    );
+  });
+
+  test("startNewChatWithSelection creates a chat and attaches the ref", async () => {
+    const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+    await chats.create("Seed");
+    const panel = new RecordingPanel();
+    const commands = new EmptyCommands();
+    const changes = new InMemoryChangeSetStore();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+
+    await controller.startNewChatWithSelection({
+      noteId: "note-9",
+      title: "Spec",
+      body: "one\ntwo\nthree",
+      selection: "two",
+    });
+
+    const summaries = await chats.list();
+    expect(summaries.length).toBe(2);
+    const chatsWithRefs = await Promise.all(
+      summaries.map(async (summary) => chats.get(summary.id)),
+    );
+    const created = chatsWithRefs.find(
+      (entry) => (entry?.context.selectionRefs?.length ?? 0) > 0,
+    );
+    expect(created?.context.selectionRefs).toEqual([
+      { noteId: "note-9", startLine: 2, endLine: 2 },
+    ]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "composer.selectionRef",
+          payload: { title: "Spec", startLine: 2, endLine: 2 },
+        }),
+      ]),
+    );
   });
 });
 

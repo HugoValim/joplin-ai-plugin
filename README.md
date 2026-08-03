@@ -43,9 +43,15 @@ Version: `0.7.0`
   Joplin theme variables, keyboard controls, exact endpoint/model status,
   collapsed context and citations, inline run progress, Stop, and confirmed
   overflow actions.
-- `Ctrl+Alt+B` toggles the AI sidebar. `Ctrl+L` opens it, appends up to 20,000
-  selected editor characters to the unsent composer, and focuses the prompt
-  without sending.
+- `Ctrl+Alt+B` toggles the AI sidebar. `Ctrl+L` opens it and appends a compact
+  `@Title:L#-L#` selection ref to the current chat composer (not the full text).
+  `Ctrl+Shift+L` starts a new chat with the same ref behavior.
+- Joplin reserves both keys by default: `Ctrl+L` runs **Toggle editor layout**
+  and `Ctrl+Shift+L` runs **Focus note list**. Core wins the accelerator, so
+  `Ctrl+L` only reaches this plugin in the Rich Text editor (where the layout
+  toggle has no panes to cycle). To use these shortcuts in the Markdown editor,
+  rebind or clear those two commands in **Tools > Options > Keyboard
+  Shortcuts**.
 - Explicit response actions insert at the editor cursor, replace the current
   selection, append with an optimistic note-version check, or create a note in
   the active notebook.
@@ -60,7 +66,8 @@ Version: `0.7.0`
   HTTP do not.
 - Retrieved notes/files are labelled untrusted data. Fixed system instructions
   forbid treating their contents as commands.
-- Text copied with `Ctrl+L` remains a local draft until the user sends it.
+- Selection refs from `Ctrl+L` / `Ctrl+Shift+L` stay local until the user
+  sends; only the referenced note lines enter provider context on submit.
 - Bypass permissions is off for new and legacy chats. Enabling it warns that non-delete
   proposals in that chat apply without review; deletion proposals still open
   review. Optimistic-concurrency checks isolate conflicts.

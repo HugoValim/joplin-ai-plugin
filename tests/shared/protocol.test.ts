@@ -52,6 +52,7 @@ describe("panel protocol", () => {
       },
     ],
     ["folder.select", {}],
+    ["context.search", { requestId: "req-1", query: "gui", limit: 10 }],
     [
       "changes.apply",
       {
@@ -68,6 +69,7 @@ describe("panel protocol", () => {
     ["run.undo", { targetRunId: "run-old" }],
     ["note.open", { noteId: "note-1" }],
     ["link.open", { url: "https://example.test/doc" }],
+    ["context.attachDropped", { kind: "auto" }],
     ["secrets.mark", { notebookId: "nb-1" }],
     ["secrets.unmark", { notebookId: "nb-1" }],
   ])("accepts %s requests", (type, payload) => {
@@ -161,6 +163,16 @@ describe("plugin protocol", () => {
       },
     ],
     ["composer.prefill", { text: "selected note text" }],
+    [
+      "composer.selectionRef",
+      { title: "Project brief", startLine: 2, endLine: 5 },
+    ],
+    [
+      "context.dropped",
+      {
+        hits: [{ kind: "note", id: "note-1", title: "Project brief" }],
+      },
+    ],
     ["run.started", { startedAt: 1 }],
     ["assistant.delta", { delta: "Hello" }],
     ["tool.started", { toolCallId: "tool-1", name: "read_note" }],
@@ -189,6 +201,8 @@ describe("plugin protocol", () => {
       "state.snapshot",
       "workspace.changed",
       "composer.prefill",
+      "composer.selectionRef",
+      "context.dropped",
     ].includes(type);
     const event = {
       version: PROTOCOL_VERSION,

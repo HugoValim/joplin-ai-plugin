@@ -18,10 +18,13 @@ function composer(
     onQueue: jest.fn(),
     disabled: false,
     history: [],
+    mentionHits: [],
     onDraftChange: jest.fn(),
     onSubmit: jest.fn(),
     onCancel: jest.fn(),
     onUndo: jest.fn(),
+    onMentionQueryChange: jest.fn(),
+    onMentionSelect: jest.fn(),
     ...overrides,
   };
 }
@@ -119,12 +122,50 @@ describe("Composer", () => {
   });
 });
 
+describe("Composer mentions", () => {
+  test("typing @ requests mention hits and selecting one attaches it", () => {
+    const onMentionQueryChange = jest.fn();
+    const onMentionSelect = jest.fn();
+    const hit = { kind: "note" as const, id: "note-1", title: "My Note" };
+    const props = composer({
+      draft: "",
+      mentionHits: [hit],
+      onMentionQueryChange,
+      onMentionSelect,
+    });
+    render(<Composer {...props} />);
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+
+    fireEvent.change(input, { target: { value: "@" } });
+    expect(onMentionQueryChange).toHaveBeenCalledWith("");
+
+    fireEvent.click(screen.getByRole("button", { name: /My Note/ }));
+    expect(onMentionSelect).toHaveBeenCalledWith(hit);
+  });
+});
+
+describe("Composer drop highlight", () => {
+  test("applies drop-active class from the dropActive prop", () => {
+    const { container } = render(
+      <Composer {...composer({ dropActive: true })} />,
+    );
+    const form = container.querySelector("form.composer");
+    expect(form?.className).toContain("composer-drop-active");
+  });
+});
+
 describe("Composer token usage display", () => {
   test("shows k-formatted usage with context window when available", () => {
     render(
       <Composer
         {...composer({
-          lastUsage: { promptTokens: 12000, outputTokens: 1600, totalTokens: 13600 },
+          lastUsage: {
+            promptTokens: 12000,
+            outputTokens: 1600,
+            totalTokens: 13600,
+          },
           contextWindowMax: 128000,
         })}
       />,
