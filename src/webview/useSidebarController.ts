@@ -11,7 +11,7 @@ import {
   type PanelRequest,
   type PluginEvent,
 } from "../shared/protocol";
-import { appendMentionLabels } from "./mentionQuery";
+import { appendMentionLabels, appendSelectionRefLabel } from "./mentionQuery";
 import { parseWebviewPluginEvent } from "./pluginEventTransport";
 import {
   INITIAL_SIDEBAR_STATE,
@@ -174,6 +174,16 @@ function receivePanelEvent(
     if (event.type === "composer.prefill") {
       setDraft((current) =>
         appendComposerSelection(current, event.payload.text),
+      );
+    }
+    if (event.type === "composer.selectionRef") {
+      setDraft((current) =>
+        appendSelectionRefLabel(
+          current,
+          event.payload.title,
+          event.payload.startLine,
+          event.payload.endLine,
+        ),
       );
     }
     if (event.type === "context.dropped") {
@@ -448,6 +458,7 @@ function updateContext(
     payload: {
       ...context,
       attachedNotebookIds: context.attachedNotebookIds ?? [],
+      selectionRefs: context.selectionRefs ?? [],
       ...next,
     },
   });

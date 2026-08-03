@@ -111,9 +111,15 @@ describe("ContextBuilder", () => {
     expect(policy).toContain(
       "Use propose-write tools for note body edits, creation, and reorganization",
     );
-    expect(policy).toContain("Never ask the user to supply opaque note or notebook ID lists");
-    expect(policy).toContain("Notebooks marked secret by the user are excluded");
-    expect(policy).toContain("ChangeReview until the user applies or discards it");
+    expect(policy).toContain(
+      "Never ask the user to supply opaque note or notebook ID lists",
+    );
+    expect(policy).toContain(
+      "Notebooks marked secret by the user are excluded",
+    );
+    expect(policy).toContain(
+      "ChangeReview until the user applies or discards it",
+    );
     expect(policy).toContain("apply, do it, go ahead, or proceed");
     expect(policy).toContain("Do not stop at a chat-only text plan");
     expect(policy).toContain("set_agent_plan");
@@ -172,7 +178,11 @@ describe("ContextBuilder transcript inclusion", () => {
       systemPrompt: "Be concise.",
       modelName: "glm-5.2:cloud",
       userText: "Refactor per the spec",
-      settings: { activeNote: false, vault: false, attachedNoteIds: ["attached-1"] },
+      settings: {
+        activeNote: false,
+        vault: false,
+        attachedNoteIds: ["attached-1"],
+      },
       hasFileWorkspace: false,
       secretNotebookIds: new Set(),
     });
@@ -186,9 +196,45 @@ describe("ContextBuilder transcript inclusion", () => {
       content: "Refactor per the spec",
     });
     expect(
-      context.messages.some((m) =>
-        m.content?.includes("ATTACHED NOTE"),
-      ),
+      context.messages.some((m) => m.content?.includes("ATTACHED NOTE")),
     ).toBe(true);
+  });
+
+  test("selection refs inject only the referenced lines, not the full attached body", async () => {
+    const note: NoteRecord = {
+      id: "note-sel",
+      parentId: "folder-1",
+      title: "Guide",
+      body: "alpha\nbeta\ngamma\ndelta",
+      updatedTime: 1,
+    };
+    const builder = new ContextBuilder(
+      new FakeActiveNoteContextSource(),
+      new FakeNoteRetrievalPort(),
+      async (noteId) => (noteId === "note-sel" ? note : null),
+    );
+
+    const context = await builder.build({
+      systemPrompt: "Be concise.",
+      modelName: "glm-5.2:cloud",
+      userText: "Explain the selection",
+      settings: {
+        activeNote: false,
+        vault: false,
+        attachedNoteIds: ["note-sel"],
+        selectionRefs: [{ noteId: "note-sel", startLine: 2, endLine: 3 }],
+      },
+      hasFileWorkspace: false,
+      secretNotebookIds: new Set(),
+    });
+
+    const contextMessage = context.messages.find((message) =>
+      message.content?.includes("SELECTION REF"),
+    );
+    expect(contextMessage?.content).toContain("beta\ngamma");
+    expect(contextMessage?.content).toContain("lines=2-3");
+    expect(contextMessage?.content).not.toContain("ATTACHED NOTE");
+    expect(contextMessage?.content).not.toContain("delta");
+    expect(context.readableNoteIds.has("note-sel")).toBe(true);
   });
 });

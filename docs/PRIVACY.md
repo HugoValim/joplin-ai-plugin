@@ -5,7 +5,8 @@
 For each submitted turn, the plugin sends:
 
 - the user message and retained chat transcript;
-- editor text explicitly copied into that message with `Ctrl+L`;
+- line-range selection refs attached with `Ctrl+L` / `Ctrl+Shift+L` (referenced
+  note lines only, not a full paste into the composer);
 - fixed safety and note-writing rules;
 - the configured system prompt;
 - current note body and editor selection only when **Active note** is enabled;
@@ -23,9 +24,10 @@ when those toggles are enabled.
 The selected folder's absolute root is displayed in the sidebar and persisted
 locally, but model file tools receive root-relative paths.
 
-`Ctrl+L` copies at most 20,000 selected editor characters into the local,
-unsent composer. It does not call the configured endpoint until the user
-submits the draft.
+`Ctrl+L` / `Ctrl+Shift+L` attach a compact `@Title:L#-L#` composer token and
+persist a note line-range ref. Referenced lines are loaded into provider context
+on submit (capped at 20,000 characters per ref). They do not call the endpoint
+until the user submits the draft.
 
 ## Data never sent to the sidebar or chat files
 

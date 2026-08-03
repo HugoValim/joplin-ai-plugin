@@ -5,6 +5,9 @@ import {
   parsePluginEvent,
   type PluginEvent,
 } from "../shared/protocol";
+import type { EditorSelectionLineRange } from "../shared/editorSelectionRange";
+import type { SelectionRefInput } from "../shared/selectionRef";
+import type { EditorSelectionQuery } from "./editorSelectionRange";
 
 interface ShortcutCommand {
   readonly name: string;
@@ -34,12 +37,20 @@ interface SelectionPanel {
   post(event: PluginEvent): void;
 }
 
-interface SelectedTextSource {
+export interface SelectionShortcutNote {
+  readonly id: string;
+  readonly title: string;
+  readonly body: string;
+}
+
+export interface SelectionShortcutSource {
+  activeNote(): Promise<SelectionShortcutNote | null>;
   selectedText(): Promise<string>;
 }
 
-interface NewChatWithSelectionLifecycle {
-  startNewChatWithSelection(text: string): Promise<void>;
+interface SelectionChatLifecycle {
+  attachSelectionRef(input: SelectionRefInput): Promise<void>;
+  startNewChatWithSelection(input: SelectionRefInput | null): Promise<void>;
 }
 
 /**
@@ -67,61 +78,71 @@ export async function registerToggleSidebarShortcut(
 }
 
 /**
- * Registers the shortcut that appends editor selection to the chat composer.
+ * Registers Ctrl+L to attach a line-range ref for the editor selection.
  *
- * @example await registerSelectionToChatShortcut(commands, menuItems, panel, source)
+ * @example await registerSelectionToChatShortcut(commands, menuItems, panel, source, editorSelection, lifecycle)
  */
 export async function registerSelectionToChatShortcut(
   commands: ShortcutCommandRegistry,
   menuItems: ShortcutMenuRegistry,
   panel: SelectionPanel,
-  source: SelectedTextSource,
+  source: SelectionShortcutSource,
+  editorSelection: EditorSelectionQuery,
+  lifecycle: Pick<SelectionChatLifecycle, "attachSelectionRef">,
 ): Promise<void> {
-  const command = selectionShortcutCommand(panel, source);
-  await commands.register(command);
+  const commandName = "joplinAiAgent.addSelectionToChat";
+  await commands.register({
+    name: commandName,
+    label: "Add selection to AI chat",
+    execute: async () => {
+      const input = await resolveSelectionRefInput(source, editorSelection);
+      await panel.show();
+      if (!input) return;
+      if (input.kind === "text") {
+        panel.post(selectionPrefillEvent(input.text));
+        return;
+      }
+      await lifecycle.attachSelectionRef(input.ref);
+    },
+  });
   await menuItems.create(
     "joplinAiAgent.addSelectionToChatMenuItem",
-    command.name,
+    commandName,
     MenuItemLocation.Tools,
     { accelerator: "Ctrl+L" },
   );
 }
 
-function selectionShortcutCommand(
-  panel: SelectionPanel,
-  source: SelectedTextSource,
-): ShortcutCommand {
-  return {
-    name: "joplinAiAgent.addSelectionToChat",
-    label: "Add selection to AI chat",
-    execute: async () => {
-      const text = await source.selectedText();
-      await panel.show();
-      if (text) panel.post(selectionPrefillEvent(text));
-    },
-  };
-}
-
 /**
- * Registers Ctrl+Shift+L to open a new AI chat and paste the editor selection.
+ * Registers Ctrl+Shift+L to open a new AI chat with a selection line-range ref.
  *
- * @example await registerNewChatWithSelectionShortcut(commands, menuItems, panel, source, lifecycle)
+ * @example await registerNewChatWithSelectionShortcut(commands, menuItems, panel, source, editorSelection, lifecycle)
  */
 export async function registerNewChatWithSelectionShortcut(
   commands: ShortcutCommandRegistry,
   menuItems: ShortcutMenuRegistry,
   panel: SelectionPanel,
-  source: SelectedTextSource,
-  lifecycle: NewChatWithSelectionLifecycle,
+  source: SelectionShortcutSource,
+  editorSelection: EditorSelectionQuery,
+  lifecycle: SelectionChatLifecycle,
 ): Promise<void> {
   const commandName = "joplinAiAgent.newChatWithSelection";
   await commands.register({
     name: commandName,
     label: "New AI chat with selection",
     execute: async () => {
-      const text = await source.selectedText();
+      const input = await resolveSelectionRefInput(source, editorSelection);
       await panel.show();
-      await lifecycle.startNewChatWithSelection(text);
+      if (!input) {
+        await lifecycle.startNewChatWithSelection(null);
+        return;
+      }
+      if (input.kind === "text") {
+        await lifecycle.startNewChatWithSelection(null);
+        panel.post(selectionPrefillEvent(input.text));
+        return;
+      }
+      await lifecycle.startNewChatWithSelection(input.ref);
     },
   });
   await menuItems.create(
@@ -130,6 +151,39 @@ export async function registerNewChatWithSelectionShortcut(
     MenuItemLocation.Tools,
     { accelerator: "Ctrl+Shift+L" },
   );
+}
+
+type ResolvedSelection =
+  | { readonly kind: "ref"; readonly ref: SelectionRefInput }
+  | { readonly kind: "text"; readonly text: string }
+  | null;
+
+async function resolveSelectionRefInput(
+  source: SelectionShortcutSource,
+  editorSelection: EditorSelectionQuery,
+): Promise<ResolvedSelection> {
+  const editorRange = await editorSelection.lineRange();
+  const selection = editorRange?.selection ?? (await source.selectedText());
+  if (!selection.trim()) return null;
+  const note = await source.activeNote();
+  if (!note) return { kind: "text", text: selection };
+  return {
+    kind: "ref",
+    ref: {
+      noteId: note.id,
+      title: note.title,
+      body: note.body,
+      selection,
+      ...lineNumbers(editorRange),
+    },
+  };
+}
+
+function lineNumbers(
+  range: EditorSelectionLineRange | null,
+): Pick<SelectionRefInput, "startLine" | "endLine"> {
+  if (!range) return {};
+  return { startLine: range.startLine, endLine: range.endLine };
 }
 
 function selectionPrefillEvent(text: string): PluginEvent {

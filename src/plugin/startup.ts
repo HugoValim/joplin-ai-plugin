@@ -42,6 +42,10 @@ import {
   registerToggleSidebarShortcut,
 } from "./shortcutCommands";
 import {
+  MarkdownSelectionLineRangeQuery,
+  registerSelectionLineRangeScript,
+} from "./editorSelectionRange";
+import {
   JoplinActiveNoteContextSource,
   PerChatWorkspaceResolver,
 } from "./workspaceAdapters";
@@ -137,17 +141,22 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     joplin.views.menuItems,
     panel,
   );
+  await registerSelectionLineRangeScript(joplin.contentScripts);
+  const editorSelection = new MarkdownSelectionLineRangeQuery(commands);
   await registerSelectionToChatShortcut(
     joplin.commands,
     joplin.views.menuItems,
     panel,
     activeSource,
+    editorSelection,
+    controller,
   );
   await registerNewChatWithSelectionShortcut(
     joplin.commands,
     joplin.views.menuItems,
     panel,
     activeSource,
+    editorSelection,
     controller,
   );
   controller.workspaceChanged(await activeNoteSummary(activeSource));

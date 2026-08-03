@@ -164,6 +164,10 @@ describe("plugin protocol", () => {
     ],
     ["composer.prefill", { text: "selected note text" }],
     [
+      "composer.selectionRef",
+      { title: "Project brief", startLine: 2, endLine: 5 },
+    ],
+    [
       "context.dropped",
       {
         hits: [{ kind: "note", id: "note-1", title: "Project brief" }],
@@ -197,6 +201,7 @@ describe("plugin protocol", () => {
       "state.snapshot",
       "workspace.changed",
       "composer.prefill",
+      "composer.selectionRef",
       "context.dropped",
     ].includes(type);
     const event = {

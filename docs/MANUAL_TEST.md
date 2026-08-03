@@ -51,17 +51,27 @@ notes or folders.
 
 ## Keyboard shortcuts
 
+Prerequisite: in **Tools > Options > Keyboard Shortcuts**, clear or rebind
+Joplin's **Toggle editor layout** (`Ctrl+L`) and **Focus note list**
+(`Ctrl+Shift+L`). Core owns both accelerators, and in the Markdown editor it
+wins them before the plugin sees the keystroke.
+
 - [ ] `Ctrl+Alt+B` hides the AI sidebar; pressing it again restores the sidebar.
-- [ ] With an existing draft, select note text and press `Ctrl+L`: the sidebar
-      opens, the selection is appended after one blank line, and the composer
-      receives focus.
+- [ ] With an existing draft, select note text and press `Ctrl+L` (Markdown or
+      Rich Text): the sidebar opens, a compact `@Title:L#-L#` token is appended,
+      the note is attached with a line-range ref (no full selection paste), and
+      the composer receives focus.
+- [ ] `Ctrl+L` appends exactly one token per press (no duplicate `@Title`).
+- [ ] In the Markdown editor the token line numbers match the highlighted lines
+      (select lines 7–25 and check for `@Title:L7-L25`).
 - [ ] `Ctrl+L` does not submit the draft or call the provider.
 - [ ] With no editor selection, `Ctrl+L` opens the sidebar without changing the
       draft.
 - [ ] With a selection, press `Ctrl+Shift+L`: a **new** chat is created, the
-      sidebar opens, and the selection is pasted into that chat's composer.
+      sidebar opens, and `@Title:L#-L#` is inserted into that chat's composer.
 - [ ] With no selection, `Ctrl+Shift+L` still opens a new empty chat.
-- [ ] Existing `Ctrl+L` behavior is unchanged after adding `Ctrl+Shift+L`.
+- [ ] Sending a chat with a selection ref includes only those note lines in
+      provider context, not the raw selection pasted into the transcript.
 
 ## Bypass permissions
 

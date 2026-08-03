@@ -1,11 +1,16 @@
 import type { ProviderMessage } from "../providers/types";
 import type { NoteRecord, NoteSnippet } from "../notes/retriever";
+import {
+  extractBodyLines,
+  type NoteSelectionRef,
+} from "../shared/selectionRef";
 
 export interface ContextSettings {
   readonly activeNote: boolean;
   readonly vault: boolean;
   readonly attachedNoteIds: readonly string[];
   readonly attachedNotebookIds?: readonly string[];
+  readonly selectionRefs?: readonly NoteSelectionRef[];
 }
 
 export interface ActiveNoteContextSource {
@@ -93,11 +98,17 @@ export class ContextBuilder {
     const citations: ContextCitation[] = [];
     const attachedIds = await this.resolveAttachedNoteIds(input);
     const readableNoteIds = new Set<string>(attachedIds);
+    const selectionNoteIds = new Set(
+      (input.settings.selectionRefs ?? []).map((ref) => ref.noteId),
+    );
+    for (const noteId of selectionNoteIds) readableNoteIds.add(noteId);
     const active = await this.addActiveContext(input, contextBlocks, citations);
     if (active) readableNoteIds.add(active.id);
+    await this.addSelectionRefContext(input, contextBlocks, citations);
     await this.addAttachedContext(
       attachedIds,
       active?.id ?? null,
+      selectionNoteIds,
       contextBlocks,
       citations,
     );
@@ -142,15 +153,38 @@ export class ContextBuilder {
     return [...new Set(ids)].slice(0, 50);
   }
 
+  private async addSelectionRefContext(
+    input: ContextBuildInput,
+    blocks: string[],
+    citations: ContextCitation[],
+  ): Promise<void> {
+    for (const ref of input.settings.selectionRefs ?? []) {
+      const note = await this.loadAttachedNote(ref.noteId);
+      if (!note) continue;
+      const excerpt = extractBodyLines(note.body, ref).slice(0, 20_000);
+      if (!excerpt) continue;
+      blocks.push(formatSelectionRef(note, ref, excerpt));
+      citations.push({
+        kind: "note",
+        id: note.id,
+        label: note.title,
+        lineStart: ref.startLine,
+        lineEnd: ref.endLine,
+      });
+    }
+  }
+
   private async addAttachedContext(
     attachedNoteIds: readonly string[],
     activeNoteId: string | null,
+    selectionNoteIds: ReadonlySet<string>,
     blocks: string[],
     citations: ContextCitation[],
   ): Promise<void> {
     let remaining = 100_000;
     for (const noteId of attachedNoteIds) {
-      if (noteId === activeNoteId || remaining <= 0) continue;
+      if (noteId === activeNoteId || selectionNoteIds.has(noteId)) continue;
+      if (remaining <= 0) continue;
       const note = await this.loadAttachedNote(noteId);
       if (!note) continue;
       const bounded = { ...note, body: note.body.slice(0, remaining) };
@@ -234,6 +268,18 @@ function formatSnippet(snippet: NoteSnippet): string {
     `Heading: ${snippet.heading}`,
     snippet.text,
     "--- END UNTRUSTED VAULT SNIPPET ---",
+  ].join("\n");
+}
+
+function formatSelectionRef(
+  note: NoteRecord,
+  ref: NoteSelectionRef,
+  excerpt: string,
+): string {
+  return [
+    `--- BEGIN UNTRUSTED SELECTION REF id=${note.id} title=${JSON.stringify(note.title)} lines=${ref.startLine}-${ref.endLine} ---`,
+    excerpt,
+    "--- END UNTRUSTED SELECTION REF ---",
   ].join("\n");
 }
 

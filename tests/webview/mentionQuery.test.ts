@@ -1,6 +1,7 @@
 import {
   activeMentionQuery,
   appendMentionLabels,
+  appendSelectionRefLabel,
   applyMentionLabel,
 } from "../../src/webview/mentionQuery";
 
@@ -40,5 +41,14 @@ describe("appendMentionLabels", () => {
       "Hi @Guide @Spec ",
     );
     expect(appendMentionLabels("Hi ", ["Guide"])).toBe("Hi @Guide ");
+  });
+});
+
+describe("appendSelectionRefLabel", () => {
+  test("appends @Title:L# tokens for single and multi-line ranges", () => {
+    expect(appendSelectionRefLabel("", "Guide", 3, 3)).toBe("@Guide:L3 ");
+    expect(appendSelectionRefLabel("Hi", "Guide", 2, 5)).toBe(
+      "Hi @Guide:L2-L5 ",
+    );
   });
 });

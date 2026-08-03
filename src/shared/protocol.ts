@@ -6,6 +6,14 @@ export const PROTOCOL_VERSION = 2 as const;
 
 const IdentifierSchema = Type.String({ minLength: 1, maxLength: 128 });
 const EmptyPayloadSchema = Type.Object({}, { additionalProperties: false });
+const SelectionRefSchema = Type.Object(
+  {
+    noteId: IdentifierSchema,
+    startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+    endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  },
+  { additionalProperties: false },
+);
 const EnvelopeProperties = {
   version: Type.Literal(PROTOCOL_VERSION),
   messageId: IdentifierSchema,
@@ -133,6 +141,9 @@ const ContextUpdateSchema = Type.Object(
             maxItems: 20,
             uniqueItems: true,
           }),
+        ),
+        selectionRefs: Type.Optional(
+          Type.Array(SelectionRefSchema, { maxItems: 20 }),
         ),
       },
       { additionalProperties: false },
@@ -438,6 +449,9 @@ const ContextSettingsSchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    selectionRefs: Type.Optional(
+      Type.Array(SelectionRefSchema, { maxItems: 20 }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -606,6 +620,22 @@ const ComposerPrefillSchema = Type.Object(
     type: Type.Literal("composer.prefill"),
     payload: Type.Object(
       { text: Type.String({ minLength: 1, maxLength: 20_000 }) },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ComposerSelectionRefSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("composer.selectionRef"),
+    payload: Type.Object(
+      {
+        title: Type.String({ minLength: 1, maxLength: 500 }),
+        startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+        endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+      },
       { additionalProperties: false },
     ),
   },
@@ -792,6 +822,7 @@ const PluginEventSchema = Type.Union([
   StateSnapshotSchema,
   WorkspaceChangedSchema,
   ComposerPrefillSchema,
+  ComposerSelectionRefSchema,
   ContextSearchResultsSchema,
   ContextDroppedSchema,
   RunStartedSchema,

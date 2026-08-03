@@ -61,6 +61,19 @@ const ContextSchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    selectionRefs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            noteId: IdentifierSchema,
+            startLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+            endLine: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 20 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -182,6 +195,7 @@ export class ChatStore {
         interactionMode: "agent",
         attachedNoteIds: [],
         attachedNotebookIds: [],
+        selectionRefs: [],
       },
       externalRoot: null,
       references: [],
@@ -363,6 +377,7 @@ function normalizeStoredChat(chat: StoredChatShape): PersistedChat {
       autoApply: chat.context.autoApply ?? false,
       interactionMode: chat.context.interactionMode ?? "agent",
       attachedNotebookIds: chat.context.attachedNotebookIds ?? [],
+      selectionRefs: chat.context.selectionRefs ?? [],
     },
     parkedAppliedChangeSet: chat.parkedAppliedChangeSet ?? null,
   };

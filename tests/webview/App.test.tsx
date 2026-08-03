@@ -177,6 +177,34 @@ describe("App shell", () => {
     ).toBe(false);
   });
 
+  test("appends selection refs as compact @Title:L# tokens without submitting", async () => {
+    const { api } = await renderReadyApp();
+    const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Message",
+    });
+    fireEvent.change(composer, { target: { value: "Existing prompt" } });
+    screen.getByRole("button", { name: "New" }).focus();
+
+    await act(async () =>
+      api.emit({
+        version: PROTOCOL_VERSION,
+        messageId: "selection-ref-1",
+        chatId: "bootstrap",
+        type: "composer.selectionRef",
+        payload: { title: "Guide", startLine: 2, endLine: 5 },
+      }),
+    );
+
+    expect(composer.value).toBe("Existing prompt @Guide:L2-L5 ");
+    expect(document.activeElement).toBe(composer);
+    expect(
+      api.requests.some(
+        (request) =>
+          (request as { readonly type?: unknown }).type === "chat.submit",
+      ),
+    ).toBe(false);
+  });
+
   test("shows trusted model and active-note title without transcript live region", async () => {
     const { api } = await renderReadyApp();
     await act(async () =>
@@ -209,9 +237,7 @@ describe("App shell", () => {
 
     const listbox = screen.getByRole("listbox", { name: "Available models" });
     expect(listbox).toBeTruthy();
-    expect(
-      screen.getByRole("option", { name: "kimi-k3:cloud" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: "kimi-k3:cloud" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("option", { name: "kimi-k3:cloud" }));
 

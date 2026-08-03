@@ -64,3 +64,19 @@ export function appendMentionLabels(
   }
   return result;
 }
+
+/**
+ * Appends a `@Title:L12-L40` selection-ref token to composer text.
+ *
+ * @example appendSelectionRefLabel("Hi", "Guide", 2, 4) // "Hi @Guide:L2-L4 "
+ */
+export function appendSelectionRefLabel(
+  text: string,
+  title: string,
+  startLine: number,
+  endLine: number,
+): string {
+  const range =
+    startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
+  return appendMentionLabels(text, [`${title}:${range}`]);
+}
