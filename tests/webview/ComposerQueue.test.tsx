@@ -26,7 +26,6 @@ function composerProps(
     onUndo: jest.fn(),
     onMentionQueryChange: jest.fn(),
     onMentionSelect: jest.fn(),
-    onReferenceDrop: jest.fn(),
     ...overrides,
   };
 }

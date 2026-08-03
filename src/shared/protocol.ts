@@ -157,6 +157,27 @@ const ContextSearchSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ContextAttachDroppedSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.attachDropped"),
+    payload: Type.Object(
+      {
+        kind: Type.Union([
+          Type.Literal("note"),
+          Type.Literal("notebook"),
+          Type.Literal("auto"),
+        ]),
+        ids: Type.Optional(
+          Type.Array(IdentifierSchema, { maxItems: 50, uniqueItems: true }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const FolderSelectSchema = Type.Object(
   {
     ...EnvelopeProperties,
@@ -357,6 +378,7 @@ const PanelRequestSchema = Type.Union([
   RunCancelSchema,
   ContextUpdateSchema,
   ContextSearchSchema,
+  ContextAttachDroppedSchema,
   FolderSelectSchema,
   ChangesApplySchema,
   ChangesDiscardSchema,
@@ -613,6 +635,20 @@ const ContextSearchResultsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const ContextDroppedSchema = Type.Object(
+  {
+    ...EnvelopeProperties,
+    type: Type.Literal("context.dropped"),
+    payload: Type.Object(
+      {
+        hits: Type.Array(MentionHitSchema, { maxItems: 50 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const RunStartedSchema = Type.Object(
   {
     ...RunEnvelopeProperties,
@@ -757,6 +793,7 @@ const PluginEventSchema = Type.Union([
   WorkspaceChangedSchema,
   ComposerPrefillSchema,
   ContextSearchResultsSchema,
+  ContextDroppedSchema,
   RunStartedSchema,
   AssistantDeltaSchema,
   ToolStartedSchema,

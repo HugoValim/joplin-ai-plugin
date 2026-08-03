@@ -1,5 +1,6 @@
 import {
   activeMentionQuery,
+  appendMentionLabels,
   applyMentionLabel,
 } from "../../src/webview/mentionQuery";
 
@@ -29,5 +30,15 @@ describe("applyMentionLabel", () => {
     const range = activeMentionQuery("see @gui", 8);
     if (!range) throw new Error("expected range");
     expect(applyMentionLabel("see @gui", range, "Guide")).toBe("see @Guide ");
+  });
+});
+
+describe("appendMentionLabels", () => {
+  test("appends @Title tokens with spacing", () => {
+    expect(appendMentionLabels("", ["Guide"])).toBe("@Guide ");
+    expect(appendMentionLabels("Hi", ["Guide", "Spec"])).toBe(
+      "Hi @Guide @Spec ",
+    );
+    expect(appendMentionLabels("Hi ", ["Guide"])).toBe("Hi @Guide ");
   });
 });

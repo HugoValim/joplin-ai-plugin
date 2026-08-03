@@ -8,6 +8,13 @@ import {
   type MentionQueryRange,
 } from "./mentionQuery";
 
+export {
+  canAcceptNoteDrop,
+  dropKindFromDataTransfer,
+  mentionHitFromDataTransfer,
+  parseNoteDropPayload,
+} from "./noteDrop";
+
 interface ComposerProps {
   readonly draft: string;
   readonly busy: boolean;
@@ -21,13 +28,13 @@ interface ComposerProps {
   readonly onQueue: (text: string) => void;
   readonly history: readonly string[];
   readonly mentionHits: readonly MentionHitView[];
+  readonly dropActive?: boolean;
   readonly onDraftChange: (value: string) => void;
   readonly onSubmit: () => void;
   readonly onCancel: () => void;
   readonly onUndo: () => void;
   readonly onMentionQueryChange: (query: string | null) => void;
   readonly onMentionSelect: (hit: MentionHitView) => void;
-  readonly onReferenceDrop: (hit: MentionHitView) => void;
 }
 
 interface HistoryBrowse {
@@ -36,7 +43,7 @@ interface HistoryBrowse {
 }
 
 /**
- * Renders prompt input with queueing, @ mentions, and note drop targets.
+ * Renders prompt input with queueing, @ mentions, and drop highlight.
  *
  * @example <Composer draft={draft} history={userTexts} onSubmit={submit} {...runState} />
  */
@@ -47,8 +54,8 @@ export function Composer(props: ComposerProps): JSX.Element {
     null,
   );
   const [activeIndex, setActiveIndex] = useState(0);
-  const [dropActive, setDropActive] = useState(false);
   const pickerOpen = mentionRange !== null;
+  const dropActive = Boolean(props.dropActive);
 
   useEffect(() => {
     textarea.current?.focus();
@@ -78,19 +85,6 @@ export function Composer(props: ComposerProps): JSX.Element {
           return;
         }
         if (!props.disabled) props.onSubmit();
-      }}
-      onDragOver={(event) => {
-        if (!canAcceptNoteDrop(event.dataTransfer)) return;
-        event.preventDefault();
-        setDropActive(true);
-      }}
-      onDragLeave={() => setDropActive(false)}
-      onDrop={(event) => {
-        setDropActive(false);
-        const hit = mentionHitFromDataTransfer(event.dataTransfer);
-        if (!hit) return;
-        event.preventDefault();
-        props.onReferenceDrop(hit);
       }}
     >
       <div className="composer-status" id="composer-status">
@@ -342,35 +336,3 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
     textarea.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
-function canAcceptNoteDrop(data: DataTransfer | null): boolean {
-  return Boolean(mentionHitFromDataTransfer(data));
-}
-
-/**
- * Parses Joplin note/notebook drag payloads into a mention hit.
- *
- * @example mentionHitFromDataTransfer(event.dataTransfer)
- */
-export function mentionHitFromDataTransfer(
-  data: DataTransfer | null,
-): MentionHitView | null {
-  if (!data) return null;
-  const folderRaw = data.getData("text/x-jop-folder-ids");
-  const noteRaw =
-    data.getData("text/x-jop-note-ids") ||
-    data.getData("application/x-jop-note-ids");
-  const raw = folderRaw || noteRaw || data.getData("text/plain");
-  if (!raw.trim()) return null;
-  const kind: MentionHitView["kind"] = folderRaw ? "notebook" : "note";
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed) && typeof parsed[0] === "string") {
-      return { kind, id: parsed[0], title: parsed[0] };
-    }
-  } catch {
-    // plain id
-  }
-  const id = raw.split(/[\s,;]/)[0]?.trim();
-  if (!id) return null;
-  return { kind, id, title: id };
-}

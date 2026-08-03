@@ -754,6 +754,236 @@ describe("ChatController", () => {
     await run;
   });
 
+  test("attaches selected notes when context.attachDropped falls back to selection", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      null,
+      {
+        selectedNoteIds: async () => ["note-drop-1", "note-drop-2"],
+        selectedFolderId: async () => "nb-drop-1",
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-notes",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "auto" },
+    });
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.attachedNoteIds).toEqual([
+      "note-drop-1",
+      "note-drop-2",
+    ]);
+    expect(saved?.context.attachedNotebookIds ?? []).toEqual([]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [
+              { kind: "note", id: "note-drop-1", title: "note-drop-1" },
+              { kind: "note", id: "note-drop-2", title: "note-drop-2" },
+            ],
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("attaches selected notebook when context.attachDropped has no selected notes", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop notebook");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      null,
+      {
+        selectedNoteIds: async () => [],
+        selectedFolderId: async () => "nb-drop-9",
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-notebook",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "auto" },
+    });
+    const saved = await chats.get(chat.id);
+    expect(saved?.context.attachedNoteIds).toEqual([]);
+    expect(saved?.context.attachedNotebookIds).toEqual(["nb-drop-9"]);
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [
+              {
+                kind: "notebook",
+                id: "nb-drop-9",
+                title: "nb-drop-9",
+              },
+            ],
+          },
+        }),
+      ]),
+    );
+  });
+
+  test("resolves explicit drop ids and emits context.dropped with titles", async () => {
+    const files = new MemoryJsonFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Drop ids");
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const commands = new EmptyCommands();
+    const panel = new RecordingPanel();
+    const mentionSearch = {
+      searchNotes: async () => [],
+      listNotebooks: async () => [],
+      listNotebookNotes: async () => [],
+      readNote: async (noteId: string) => ({
+        id: noteId,
+        title: "Project brief",
+        body: "",
+        parentId: "nb-1",
+        updatedTime: 1,
+      }),
+    };
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      new InMemoryChangeSetStore(),
+      new ChangeApplier(
+        new InMemoryChangeSetStore(),
+        new EmptyNoteRepository(),
+        workspaces,
+        new InMemoryRollbackStore(),
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+      undefined,
+      mentionSearch,
+      {
+        selectedNoteIds: async () => [],
+        selectedFolderId: async () => null,
+      },
+    );
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "drop-explicit",
+      chatId: chat.id,
+      type: "context.attachDropped",
+      payload: { kind: "note", ids: ["note-abc"] },
+    });
+    expect(panel.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context.dropped",
+          payload: {
+            hits: [
+              { kind: "note", id: "note-abc", title: "Project brief" },
+            ],
+          },
+        }),
+      ]),
+    );
+  });
+
   test("opens safe external links via openItem and rejects unsafe urls", async () => {
     const files = new MemoryJsonFilePort();
     const chats = new ChatStore("/plugin", files);

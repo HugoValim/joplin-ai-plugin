@@ -45,6 +45,14 @@ import { NoOpReviewNotePort, type ReviewNotePort } from "./reviewNoteService";
 const AUTO_APPLY_WARNING =
   "Security warning: Bypass permissions will auto-apply every model-proposed non-delete change, then keep an inline Keep/Undo review in the sidebar. Deletions still require manual ChangeReview before apply. Conflicts are still blocked. Enable for this chat?";
 
+const MAX_ATTACHED_NOTES = 50;
+const MAX_ATTACHED_NOTEBOOKS = 20;
+
+export interface DropSelectionPort {
+  selectedNoteIds(): Promise<readonly string[]>;
+  selectedFolderId(): Promise<string | null>;
+}
+
 export class ChatController {
   private activeChatId: string | null = null;
   private endpointStatus: EndpointStatus = "unconfigured";
@@ -73,6 +81,7 @@ export class ChatController {
     createProvider: ProviderFactory,
     reviewNotes: ReviewNotePort = new NoOpReviewNotePort(),
     private readonly mentionSearch: MentionSearchPort | null = null,
+    private readonly dropSelection: DropSelectionPort | null = null,
   ) {
     this.providerConnector = new ProviderConnector(
       settings,
@@ -145,6 +154,9 @@ export class ChatController {
         return;
       case "context.search":
         await this.searchContext(request);
+        return;
+      case "context.attachDropped":
+        await this.attachDropped(request);
         return;
       case "folder.select":
         await this.selectFolder(request.chatId);
@@ -652,6 +664,109 @@ export class ChatController {
     });
   }
 
+  private async attachDropped(
+    request: Extract<PanelRequest, { type: "context.attachDropped" }>,
+  ): Promise<void> {
+    const chat = await requireChat(this.chats, request.chatId);
+    const hits = await this.resolveDroppedHits(request.payload);
+    if (hits.length === 0) {
+      await this.sendSnapshot();
+      return;
+    }
+    let attachedNoteIds = [...chat.context.attachedNoteIds];
+    let attachedNotebookIds = [...(chat.context.attachedNotebookIds ?? [])];
+    for (const hit of hits) {
+      if (hit.kind === "note") {
+        attachedNoteIds = appendUniqueId(
+          attachedNoteIds,
+          hit.id,
+          MAX_ATTACHED_NOTES,
+        );
+      } else {
+        attachedNotebookIds = appendUniqueId(
+          attachedNotebookIds,
+          hit.id,
+          MAX_ATTACHED_NOTEBOOKS,
+        );
+      }
+    }
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      context: {
+        ...chat.context,
+        attachedNoteIds,
+        attachedNotebookIds,
+      },
+    });
+    this.events.post("context.dropped", request.chatId, { hits });
+    await this.sendSnapshot();
+  }
+
+  private async resolveDroppedHits(
+    payload: Extract<PanelRequest, { type: "context.attachDropped" }>["payload"],
+  ): Promise<readonly { kind: "note" | "notebook"; id: string; title: string }[]> {
+    const kind = payload.kind;
+    const explicitIds = payload.ids ?? [];
+    if (explicitIds.length > 0) {
+      if (kind === "notebook") {
+        return this.resolveNotebookHits(explicitIds);
+      }
+      return this.resolveNoteHits(explicitIds);
+    }
+    if (!this.dropSelection) return [];
+    if (kind !== "notebook") {
+      const noteIds = await this.dropSelection.selectedNoteIds();
+      if (noteIds.length > 0) return this.resolveNoteHits(noteIds);
+    }
+    if (kind === "note") return [];
+    const folderId = await this.dropSelection.selectedFolderId();
+    return folderId ? this.resolveNotebookHits([folderId]) : [];
+  }
+
+  private async resolveNoteHits(
+    ids: readonly string[],
+  ): Promise<{ kind: "note"; id: string; title: string }[]> {
+    const hits: { kind: "note"; id: string; title: string }[] = [];
+    for (const id of ids.slice(0, MAX_ATTACHED_NOTES)) {
+      const title = await this.resolveNoteTitle(id);
+      hits.push({ kind: "note", id, title });
+    }
+    return hits;
+  }
+
+  private async resolveNotebookHits(
+    ids: readonly string[],
+  ): Promise<{ kind: "notebook"; id: string; title: string }[]> {
+    const hits: { kind: "notebook"; id: string; title: string }[] = [];
+    for (const id of ids.slice(0, MAX_ATTACHED_NOTEBOOKS)) {
+      const title = await this.resolveNotebookTitle(id);
+      hits.push({ kind: "notebook", id, title });
+    }
+    return hits;
+  }
+
+  private async resolveNoteTitle(noteId: string): Promise<string> {
+    if (!this.mentionSearch) return noteId;
+    try {
+      const note = await this.mentionSearch.readNote(noteId);
+      return note.title.trim() || "Untitled";
+    } catch {
+      return noteId;
+    }
+  }
+
+  private async resolveNotebookTitle(notebookId: string): Promise<string> {
+    if (!this.mentionSearch) return notebookId;
+    try {
+      const notebooks = await this.mentionSearch.listNotebooks();
+      const match = notebooks.find((notebook) => notebook.id === notebookId);
+      return match?.title.trim() || "Untitled notebook";
+    } catch {
+      return notebookId;
+    }
+  }
+
   private async updateContext(
     request: Extract<PanelRequest, { type: "context.update" }>,
   ): Promise<void> {
@@ -748,4 +863,13 @@ export class ChatController {
       contextWindowMax: this.contextWindowMax,
     });
   }
+}
+
+function appendUniqueId(
+  ids: readonly string[],
+  id: string,
+  max: number,
+): string[] {
+  if (!id.trim() || ids.includes(id) || ids.length >= max) return [...ids];
+  return [...ids, id];
 }

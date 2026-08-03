@@ -43,3 +43,24 @@ export function applyMentionLabel(
   const safe = label.trim() || "Untitled";
   return `${text.slice(0, range.start)}@${safe} ${text.slice(range.end)}`;
 }
+
+/**
+ * Appends Cursor-style `@Title` tokens to composer text.
+ *
+ * @example appendMentionLabels("Hi", ["Guide"]) // "Hi @Guide "
+ */
+export function appendMentionLabels(
+  text: string,
+  labels: readonly string[],
+): string {
+  let result = text;
+  for (const label of labels) {
+    const token = `@${(label.trim() || "Untitled").replace(/\s+/g, " ")} `;
+    if (!result) {
+      result = token;
+      continue;
+    }
+    result = /\s$/.test(result) ? `${result}${token}` : `${result} ${token}`;
+  }
+  return result;
+}

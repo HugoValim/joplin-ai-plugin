@@ -11,6 +11,7 @@ import {
   type PanelRequest,
   type PluginEvent,
 } from "../shared/protocol";
+import { appendMentionLabels } from "./mentionQuery";
 import { parseWebviewPluginEvent } from "./pluginEventTransport";
 import {
   INITIAL_SIDEBAR_STATE,
@@ -68,6 +69,10 @@ export interface SidebarController {
   readonly mentionHits: readonly MentionHit[];
   readonly onMentionQueryChange: (query: string | null) => void;
   readonly attachMention: (hit: MentionHit) => void;
+  readonly attachDropped: (
+    kind: "note" | "notebook" | "auto",
+    ids?: readonly string[],
+  ) => void;
 }
 
 /**
@@ -169,6 +174,14 @@ function receivePanelEvent(
     if (event.type === "composer.prefill") {
       setDraft((current) =>
         appendComposerSelection(current, event.payload.text),
+      );
+    }
+    if (event.type === "context.dropped") {
+      setDraft((current) =>
+        appendMentionLabels(
+          current,
+          event.payload.hits.map((hit) => hit.title),
+        ),
       );
     }
     if (isTerminalEvent(event)) submissionLock.current = false;
@@ -351,6 +364,7 @@ function createActions(
     mentionHits: input.state.mentionHits,
     onMentionQueryChange: (query) => requestMentionSearch(input, query),
     attachMention: (hit) => attachMention(input, hit),
+    attachDropped: (kind, ids) => attachDropped(input, kind, ids),
   };
 }
 
@@ -461,6 +475,19 @@ function attachMention(input: ActionInput, hit: MentionHit): void {
       hit.id,
       MAX_ATTACHED_NOTEBOOKS,
     ),
+  });
+}
+
+function attachDropped(
+  input: ActionInput,
+  kind: "note" | "notebook" | "auto",
+  ids?: readonly string[],
+): void {
+  if (!input.activeChat) return;
+  input.send({
+    ...input.envelope(),
+    type: "context.attachDropped",
+    payload: ids && ids.length > 0 ? { kind, ids: [...ids] } : { kind },
   });
 }
 

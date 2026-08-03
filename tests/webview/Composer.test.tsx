@@ -1,10 +1,7 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import {
-  Composer,
-  mentionHitFromDataTransfer,
-} from "../../src/webview/Composer";
+import { Composer } from "../../src/webview/Composer";
 
 function composer(
   overrides: Partial<React.ComponentProps<typeof Composer>> = {},
@@ -28,7 +25,6 @@ function composer(
     onUndo: jest.fn(),
     onMentionQueryChange: jest.fn(),
     onMentionSelect: jest.fn(),
-    onReferenceDrop: jest.fn(),
     ...overrides,
   };
 }
@@ -150,37 +146,13 @@ describe("Composer mentions", () => {
   });
 });
 
-function fakeDataTransfer(values: Record<string, string>): DataTransfer {
-  return {
-    getData: (type: string) => values[type] ?? "",
-  } as unknown as DataTransfer;
-}
-
-describe("mentionHitFromDataTransfer", () => {
-  test("parses a dragged note id into a note mention hit", () => {
-    const data = fakeDataTransfer({
-      "text/x-jop-note-ids": JSON.stringify(["note-123"]),
-    });
-    expect(mentionHitFromDataTransfer(data)).toEqual({
-      kind: "note",
-      id: "note-123",
-      title: "note-123",
-    });
-  });
-
-  test("parses a dragged notebook id into a notebook mention hit", () => {
-    const data = fakeDataTransfer({
-      "text/x-jop-folder-ids": JSON.stringify(["notebook-9"]),
-    });
-    expect(mentionHitFromDataTransfer(data)).toEqual({
-      kind: "notebook",
-      id: "notebook-9",
-      title: "notebook-9",
-    });
-  });
-
-  test("returns null when there is no recognizable payload", () => {
-    expect(mentionHitFromDataTransfer(fakeDataTransfer({}))).toBeNull();
+describe("Composer drop highlight", () => {
+  test("applies drop-active class from the dropActive prop", () => {
+    const { container } = render(
+      <Composer {...composer({ dropActive: true })} />,
+    );
+    const form = container.querySelector("form.composer");
+    expect(form?.className).toContain("composer-drop-active");
   });
 });
 

@@ -126,6 +126,10 @@ export async function startPlugin(joplin: Joplin): Promise<void> {
     (config) => new OpenAiCompatibleProvider(config),
     new ReviewNoteService(notes, secretNotebooks, commands),
     notes,
+    {
+      selectedNoteIds: () => joplin.workspace.selectedNoteIds(),
+      selectedFolderId: () => selectedFolderId(joplin.workspace),
+    },
   );
   await panel.initialize((request) => controller.handle(request));
   await registerToggleSidebarShortcut(
@@ -214,6 +218,15 @@ function requireFsExtra(joplin: Joplin): FsExtraBundle {
 
 function optionalAi(joplin: Joplin): unknown {
   return (joplin as unknown as { readonly ai?: unknown }).ai;
+}
+
+async function selectedFolderId(workspace: {
+  selectedFolder(): Promise<unknown>;
+}): Promise<string | null> {
+  const folder = await workspace.selectedFolder();
+  if (typeof folder !== "object" || folder === null) return null;
+  const id = (folder as { readonly id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id : null;
 }
 
 function structuredWarning(error: unknown): void {
