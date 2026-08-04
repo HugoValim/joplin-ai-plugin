@@ -194,6 +194,8 @@ export class ApprovalWorkflow {
       deleteContinuation: (changeSetId): void =>
         this.continuationRuns.delete(changeSetId),
       discardCompleted: (input): void => this.postDiscardCompleted(input),
+      // Wired to panel publish in the parking-wiring slice.
+      reviewRestored: (): void => {},
     };
   }
 

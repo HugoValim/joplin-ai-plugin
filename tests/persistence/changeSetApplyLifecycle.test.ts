@@ -303,6 +303,8 @@ class RecordingApplyHandoffPort {
   public discardCompleted(input: ChangeSetDiscardInput): void {
     this.discardedChangeSetIds.push(input.changeSetId);
   }
+
+  public reviewRestored(): void {}
 }
 
 class RecordingReviewNotePort implements ReviewNotePort {
