@@ -1,18 +1,18 @@
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import type { PanelRequest } from "../shared/protocol";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
+  ChangeReviewTransportAdapter,
+  type ChangeReviewTransportPorts,
+} from "./changeReviewTransport";
+import type { ChangeReviewTransport } from "./ChangeReview";
 import {
-  PROTOCOL_VERSION,
-  type PanelRequest,
-  type PluginEvent,
-} from "../shared/protocol";
-import { appendMentionLabels, appendSelectionRefLabel } from "./mentionQuery";
-import { parseWebviewPluginEvent } from "./pluginEventTransport";
+  hasProposedPending,
+  postPanelRequest,
+  requestEnvelope,
+  type SidebarStateDispatch,
+  usePanelEvents,
+  useQueuedFollowUp,
+} from "./sidebarPanelTransport";
 import {
   INITIAL_SIDEBAR_STATE,
   sidebarReducer,
@@ -29,7 +29,7 @@ type AssistantAction = Extract<
 export interface SidebarController {
   readonly state: SidebarState;
   readonly draft: string;
-  readonly acceptedIds: ReadonlySet<string>;
+  readonly changeReviewTransport: ChangeReviewTransport;
   readonly setDraft: (value: string) => void;
   readonly submit: () => void;
   readonly queueMessage: (text: string) => void;
@@ -49,17 +49,6 @@ export interface SidebarController {
     messageId: string,
     action: AssistantAction,
   ) => void;
-  readonly toggleChange: (changeId: string) => void;
-  readonly selectAllChanges: () => void;
-  readonly selectNoChanges: () => void;
-  readonly applyChanges: () => void;
-  readonly discardChanges: () => void;
-  readonly denyChanges: () => void;
-  readonly keepChange: (changeId: string) => void;
-  readonly keepAllChanges: () => void;
-  readonly undoChange: (changeId: string) => void;
-  readonly undoAllChanges: () => void;
-  readonly openReview: () => void;
   readonly undo: () => void;
   readonly retry: () => void;
   readonly regenerate: (messageId: string) => void;
@@ -84,9 +73,6 @@ export function useSidebarController(): SidebarController {
   const [state, dispatch] = useReducer(sidebarReducer, INITIAL_SIDEBAR_STATE);
   const [draft, setDraft] = useState("");
   const submissionLock = useRef(false);
-  const [acceptedIds, setAcceptedIds] = useAcceptedChanges(
-    state.snapshot.activeChat?.pendingChangeSet ?? null,
-  );
   usePanelEvents(dispatch, submissionLock, setDraft);
   const actions = useSidebarActions(
     state,
@@ -94,141 +80,19 @@ export function useSidebarController(): SidebarController {
     setDraft,
     dispatch,
     submissionLock,
-    acceptedIds,
-    setAcceptedIds,
   );
   useQueuedFollowUp(
     state,
     dispatch,
-    draft,
     setDraft,
     submissionLock,
     state.snapshot.activeChat?.id ?? null,
     actions.submit,
   );
-  return { state, draft, acceptedIds, setDraft, ...actions };
+  return { state, draft, setDraft, ...actions };
 }
 
-function useQueuedFollowUp(
-  state: SidebarState,
-  dispatch: StateDispatch,
-  draft: string,
-  setDraft: React.Dispatch<React.SetStateAction<string>>,
-  submissionLock: React.MutableRefObject<boolean>,
-  activeChatId: string | null,
-  submit: () => void,
-): void {
-  const queuedRef = useRef<string | null>(null);
-  queuedRef.current = state.queuedMessage;
-
-  useEffect(() => {
-    if (state.busy || state.queuedMessage || !activeChatId) return;
-    // Nothing queued — nothing to fire.
-    if (!queuedRef.current) return;
-  }, [state.busy, state.queuedMessage, activeChatId]);
-
-  // When a run finishes (busy false) and there is a queued message with no
-  // proposed changes, load it into the draft and submit.
-  useEffect(() => {
-    if (state.busy || !state.queuedMessage) return;
-    if (hasProposedPending(state.snapshot.activeChat?.pendingChangeSet)) return;
-    if (submissionLock.current) return;
-    const text = state.queuedMessage;
-    dispatch({ type: "clear-queue" });
-    setDraft(text);
-    // Submit on the next tick so the draft is set before submit reads it.
-    // useSubmitAction reads draft from its closure, so we use a microtask.
-    void Promise.resolve().then(() => submit());
-  }, [
-    state.busy,
-    state.queuedMessage,
-    state.snapshot.activeChat?.pendingChangeSet,
-    dispatch,
-    setDraft,
-    submissionLock,
-    submit,
-  ]);
-}
-
-function usePanelEvents(
-  dispatch: StateDispatch,
-  submissionLock: React.MutableRefObject<boolean>,
-  setDraft: React.Dispatch<React.SetStateAction<string>>,
-): void {
-  useEffect(() => {
-    webviewApi.onMessage((input) =>
-      receivePanelEvent(input, dispatch, submissionLock, setDraft),
-    );
-    postRequest(readyRequest(), dispatch, submissionLock);
-  }, [dispatch, setDraft, submissionLock]);
-}
-
-function receivePanelEvent(
-  input: unknown,
-  dispatch: StateDispatch,
-  submissionLock: React.MutableRefObject<boolean>,
-  setDraft: React.Dispatch<React.SetStateAction<string>>,
-): void {
-  try {
-    const event = parseWebviewPluginEvent(input);
-    if (event.type === "composer.prefill") {
-      setDraft((current) =>
-        appendComposerSelection(current, event.payload.text),
-      );
-    }
-    if (event.type === "composer.selectionRef") {
-      setDraft((current) =>
-        appendSelectionRefLabel(
-          current,
-          event.payload.title,
-          event.payload.startLine,
-          event.payload.endLine,
-        ),
-      );
-    }
-    if (event.type === "context.dropped") {
-      setDraft((current) =>
-        appendMentionLabels(
-          current,
-          event.payload.hits.map((hit) => hit.title),
-        ),
-      );
-    }
-    if (isTerminalEvent(event)) submissionLock.current = false;
-    dispatch({ type: "plugin", event });
-  } catch (error: unknown) {
-    submissionLock.current = false;
-    dispatch({ type: "post-failed", message: errorMessage(error) });
-  }
-}
-
-function appendComposerSelection(current: string, selection: string): string {
-  return current ? `${current}\n\n${selection}` : selection;
-}
-
-function useAcceptedChanges(
-  pending: ActiveChat["pendingChangeSet"] | null,
-): [
-  ReadonlySet<string>,
-  React.Dispatch<React.SetStateAction<ReadonlySet<string>>>,
-] {
-  const [acceptedIds, setAcceptedIds] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
-  useEffect(() => {
-    const proposed =
-      pending?.changes
-        .filter((change) => change.status === "proposed")
-        .map((change) => change.id) ?? [];
-    setAcceptedIds(new Set(proposed));
-  }, [pending?.changeSetId]);
-  return [acceptedIds, setAcceptedIds];
-}
-
-type StateDispatch = React.Dispatch<Parameters<typeof sidebarReducer>[1]>;
-type AcceptedDispatch = React.Dispatch<
-  React.SetStateAction<ReadonlySet<string>>
->;
+type StateDispatch = SidebarStateDispatch;
 
 function useSidebarActions(
   state: SidebarState,
@@ -236,9 +100,7 @@ function useSidebarActions(
   setDraft: React.Dispatch<React.SetStateAction<string>>,
   dispatch: StateDispatch,
   submissionLock: React.MutableRefObject<boolean>,
-  acceptedIds: ReadonlySet<string>,
-  setAcceptedIds: AcceptedDispatch,
-): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
+): Omit<SidebarController, "state" | "draft" | "setDraft"> {
   const activeChat = state.snapshot.activeChat;
   const pending = activeChat?.pendingChangeSet ?? null;
   const envelope = useCallback(
@@ -246,7 +108,8 @@ function useSidebarActions(
     [activeChat?.id],
   );
   const send = useCallback(
-    (request: PanelRequest) => postRequest(request, dispatch, submissionLock),
+    (request: PanelRequest) =>
+      postPanelRequest(request, dispatch, submissionLock),
     [dispatch, submissionLock],
   );
   const submit = useSubmitAction(
@@ -265,26 +128,13 @@ function useSidebarActions(
         state,
         activeChat,
         pending,
-        acceptedIds,
-        setAcceptedIds,
         setDraft,
         dispatch,
         envelope,
         send,
         submit,
       }),
-    [
-      acceptedIds,
-      activeChat,
-      dispatch,
-      envelope,
-      pending,
-      send,
-      setAcceptedIds,
-      setDraft,
-      state,
-      submit,
-    ],
+    [activeChat, dispatch, envelope, pending, send, setDraft, state, submit],
   );
 }
 
@@ -292,8 +142,6 @@ interface ActionInput {
   readonly state: SidebarState;
   readonly activeChat: ActiveChat | null;
   readonly pending: ActiveChat["pendingChangeSet"] | null;
-  readonly acceptedIds: ReadonlySet<string>;
-  readonly setAcceptedIds: AcceptedDispatch;
   readonly setDraft: React.Dispatch<React.SetStateAction<string>>;
   readonly dispatch: StateDispatch;
   readonly envelope: (
@@ -305,8 +153,11 @@ interface ActionInput {
 
 function createActions(
   input: ActionInput,
-): Omit<SidebarController, "state" | "draft" | "acceptedIds" | "setDraft"> {
+): Omit<SidebarController, "state" | "draft" | "setDraft"> {
   return {
+    changeReviewTransport: new ChangeReviewTransportAdapter(
+      reviewTransportPorts(input),
+    ),
     submit: input.submit,
     queueMessage: (text) => queueMessage(input, text),
     cancel: () => cancelRun(input),
@@ -347,21 +198,6 @@ function createActions(
       }),
     runAssistantAction: (messageId, action) =>
       runAssistantAction(input, messageId, action),
-    toggleChange: (changeId) => toggleChange(input, changeId),
-    selectAllChanges: () => selectAllChanges(input),
-    selectNoChanges: () => input.setAcceptedIds(new Set()),
-    applyChanges: () => applyChanges(input),
-    discardChanges: () => discardChanges(input),
-    denyChanges: () => denyChanges(input),
-    keepChange: (changeId) => keepChanges(input, [changeId]),
-    keepAllChanges: () =>
-      keepChanges(
-        input,
-        input.pending?.changes.map((change) => change.id) ?? [],
-      ),
-    undoChange: (changeId) => undoSelectedChanges(input, [changeId]),
-    undoAllChanges: () => denyChanges(input),
-    openReview: () => openReview(input),
     undo: () => undoRun(input),
     retry: () => retryRun(input),
     regenerate: (messageId) => regenerateMessage(input, messageId),
@@ -375,6 +211,15 @@ function createActions(
     onMentionQueryChange: (query) => requestMentionSearch(input, query),
     attachMention: (hit) => attachMention(input, hit),
     attachDropped: (kind, ids) => attachDropped(input, kind, ids),
+  };
+}
+
+function reviewTransportPorts(input: ActionInput): ChangeReviewTransportPorts {
+  return {
+    envelope: () => input.envelope(),
+    begin: (runId, phase) =>
+      input.dispatch({ type: "begin", runId, phase, submission: false }),
+    post: input.send,
   };
 }
 
@@ -561,132 +406,6 @@ function runAssistantAction(
   });
 }
 
-function toggleChange(input: ActionInput, changeId: string): void {
-  input.setAcceptedIds((current) => {
-    const next = new Set(current);
-    if (next.has(changeId)) next.delete(changeId);
-    else next.add(changeId);
-    return next;
-  });
-}
-
-function selectAllChanges(input: ActionInput): void {
-  const proposed =
-    input.pending?.changes
-      .filter((change) => change.status === "proposed")
-      .map((change) => change.id) ?? [];
-  input.setAcceptedIds(new Set(proposed));
-}
-
-function applyChanges(input: ActionInput): void {
-  if (!input.pending) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.dispatch({
-    type: "begin",
-    runId,
-    phase: "Applying changes",
-    submission: false,
-  });
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "changes.apply",
-    payload: {
-      changeSetId: input.pending.changeSetId,
-      acceptedIds: [...input.acceptedIds],
-      applyToken: input.pending.applyToken,
-    },
-  });
-}
-
-function discardChanges(input: ActionInput): void {
-  if (!input.pending) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.dispatch({
-    type: "begin",
-    runId,
-    phase: "Discarding changes",
-    submission: false,
-  });
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "changes.discard",
-    payload: { changeSetId: input.pending.changeSetId },
-  });
-}
-
-function denyChanges(input: ActionInput): void {
-  if (!input.pending) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.dispatch({
-    type: "begin",
-    runId,
-    phase: "Denying and restoring changes",
-    submission: false,
-  });
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "changes.deny",
-    payload: { changeSetId: input.pending.changeSetId },
-  });
-}
-
-function keepChanges(input: ActionInput, changeIds: readonly string[]): void {
-  if (!input.pending || changeIds.length === 0) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.dispatch({
-    type: "begin",
-    runId,
-    phase: "Keeping changes",
-    submission: false,
-  });
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "changes.keep",
-    payload: {
-      changeSetId: input.pending.changeSetId,
-      changeIds: [...changeIds],
-    },
-  });
-}
-
-function undoSelectedChanges(
-  input: ActionInput,
-  changeIds: readonly string[],
-): void {
-  if (!input.pending || changeIds.length === 0) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.dispatch({
-    type: "begin",
-    runId,
-    phase: "Undoing changes",
-    submission: false,
-  });
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "changes.undo",
-    payload: {
-      changeSetId: input.pending.changeSetId,
-      changeIds: [...changeIds],
-    },
-  });
-}
-
-function openReview(input: ActionInput): void {
-  if (!input.pending) return;
-  const runId = input.pending.runId ?? input.pending.changeSetId;
-  input.send({
-    ...input.envelope(),
-    runId,
-    type: "review.open",
-    payload: { changeSetId: input.pending.changeSetId },
-  });
-}
-
 function undoRun(input: ActionInput): void {
   if (!input.state.lastRunId) return;
   const runId = identifier();
@@ -759,49 +478,6 @@ function selectModel(input: ActionInput, model: string): void {
     type: "model.select",
     payload: { model },
   });
-}
-
-function requestEnvelope(
-  chatId: string,
-): Pick<PanelRequest, "version" | "messageId" | "chatId"> {
-  return { version: PROTOCOL_VERSION, messageId: identifier(), chatId };
-}
-
-function readyRequest(): Extract<PanelRequest, { type: "panel.ready" }> {
-  return {
-    ...requestEnvelope("bootstrap"),
-    type: "panel.ready",
-    payload: {},
-  };
-}
-
-function postRequest(
-  request: PanelRequest,
-  dispatch: StateDispatch,
-  submissionLock: React.MutableRefObject<boolean>,
-): void {
-  void webviewApi.postMessage(request).catch((error: unknown) => {
-    submissionLock.current = false;
-    dispatch({ type: "post-failed", message: errorMessage(error) });
-  });
-}
-
-function isTerminalEvent(event: PluginEvent): boolean {
-  return ["changes.proposed", "run.failed", "run.completed"].includes(
-    event.type,
-  );
-}
-
-function hasProposedPending(
-  pending: ActiveChat["pendingChangeSet"] | null | undefined,
-): boolean {
-  return Boolean(
-    pending?.changes.some((change) => change.status === "proposed"),
-  );
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function identifier(): string {

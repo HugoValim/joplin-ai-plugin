@@ -131,20 +131,9 @@ export function App(): JSX.Element {
         {activeChat && pendingChanges ? (
           <ChangeReview
             changeSet={pendingChanges}
-            acceptedIds={controller.acceptedIds}
             disabled={state.busy}
             phase={state.phase}
-            onToggle={controller.toggleChange}
-            onSelectAll={controller.selectAllChanges}
-            onSelectNone={controller.selectNoChanges}
-            onApply={controller.applyChanges}
-            onDiscard={controller.discardChanges}
-            onDeny={controller.denyChanges}
-            onOpenReview={controller.openReview}
-            onKeep={controller.keepChange}
-            onKeepAll={controller.keepAllChanges}
-            onUndoChange={controller.undoChange}
-            onUndoAll={controller.undoAllChanges}
+            transport={controller.changeReviewTransport}
           />
         ) : null}
       </div>

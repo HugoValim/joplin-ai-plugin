@@ -114,13 +114,13 @@ export interface NoteOrganizationRepository {
   updateNotebookMetadata(
     input: UpdateNotebookMetadataInput,
   ): Promise<NotebookMetadataRecord>;
-  trashNote(input: TrashNoteInput): Promise<void>;
-  trashNotebook(input: TrashNotebookInput): Promise<void>;
+  trashNote(input: TrashNoteInput): Promise<TrashedNoteRecord>;
+  trashNotebook(input: TrashNotebookInput): Promise<TrashedNotebookRecord>;
   listTrash(limit: number): Promise<TrashListing>;
   readTrashedNote(noteId: string): Promise<TrashedNoteRecord>;
   readTrashedNotebook(notebookId: string): Promise<TrashedNotebookRecord>;
-  restoreNote(input: RestoreNoteInput): Promise<void>;
-  restoreNotebook(input: RestoreNotebookInput): Promise<void>;
+  restoreNote(input: RestoreNoteInput): Promise<NoteMetadataRecord>;
+  restoreNotebook(input: RestoreNotebookInput): Promise<NotebookMetadataRecord>;
 }
 
 export interface NoteSnippet {
@@ -195,7 +195,8 @@ export class NoteRetriever {
     try {
       const snippets = await this.semanticSearch.search(query, 20);
       return snippets.filter(
-        (snippet) => !isSecretParent(secretNotebookIds, snippet.parentNotebookId),
+        (snippet) =>
+          !isSecretParent(secretNotebookIds, snippet.parentNotebookId),
       );
     } catch {
       return [];

@@ -15,7 +15,7 @@ export const AI_REVIEWS_NOTEBOOK_TITLE = "AI Reviews";
 
 export interface ReviewNoteRepositoryPort extends NoteRepository {
   createNotebook(input: CreateNotebookInput): Promise<NotebookMetadataRecord>;
-  trashNote(input: TrashNoteInput): Promise<void>;
+  trashNote(input: TrashNoteInput): Promise<unknown>;
 }
 
 export interface ReviewNotePort {
@@ -154,10 +154,7 @@ export class NoOpReviewNotePort implements ReviewNotePort {
     return Promise.resolve(changeSet.reviewNoteId ?? "review-note-noop");
   }
 
-  public ensureOpen(
-    changeSet: ChangeSet,
-    _chatTitle: string,
-  ): Promise<string> {
+  public ensureOpen(changeSet: ChangeSet, _chatTitle: string): Promise<string> {
     return Promise.resolve(changeSet.reviewNoteId ?? "review-note-noop");
   }
 

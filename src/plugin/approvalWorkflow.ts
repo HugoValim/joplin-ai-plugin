@@ -1,51 +1,61 @@
-import { randomUUID } from "crypto";
-import {
-  AgentRunner,
-  type AgentContinuation,
-  type AgentObserver,
-} from "../agent/agentRunner";
+import type { AgentContinuation } from "../agent/agentRunner";
 import type { ChangeApplier, ApplyResult } from "../agent/changeApplier";
 import type { ContextCitation } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
-import { ChangeSetLifecycle } from "../persistence/changeSetLifecycle";
-import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
-import type { AiProvider } from "../providers/types";
-import { DomainError, safeValue } from "../shared/errors";
-import { PROTOCOL_VERSION, type PanelRequest } from "../shared/protocol";
-import type { ToolExecutionResult, ToolRegistry } from "../tools/toolRegistry";
 import {
-  AgentContinuationStore,
-  type PendingAgentContinuation,
-} from "./agentContinuationStore";
-import { persistRunOutcome, requireChat } from "./chatLifecycle";
+  ChangeSetLifecycle,
+  type ChangeSetTransitionPort,
+  type ChangeSetApplyInput,
+  type ChangeSetDiscardInput,
+  type ChangeSetResolutionEvent,
+  type ChangeSetResolutionTransitionPort,
+} from "../persistence/changeSetLifecycle";
+import type { ChatStore } from "../persistence/chatStore";
+import type { PanelRequest } from "../shared/protocol";
+import type { ToolRegistry } from "../tools/toolRegistry";
+import {
+  ApprovalContinuation,
+  type ContinuationProviderPort,
+} from "./approvalContinuation";
 import { toChangeSetView } from "./chatView";
-import { DeltaBatcher } from "./deltaBatcher";
+import {
+  automaticApplyRequest,
+  toChangeSetApplyInput,
+} from "./changeSetApprovalRequest";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import type { ReviewNotePort } from "./reviewNoteService";
-import { summarizeToolResult } from "./toolActivity";
-
-interface ContinuationProviderPort {
-  connectWithConfirmation(): Promise<{ readonly provider: AiProvider }>;
-}
+import { ModelRunLifecycle } from "./modelRunLifecycle";
 
 export class ApprovalWorkflow {
-  private readonly continuations = new AgentContinuationStore();
+  private readonly continuationRuns: ApprovalContinuation;
   private readonly changeSetLifecycle: ChangeSetLifecycle;
 
   public constructor(
-    private readonly chats: ChatStore,
-    private readonly changes: ChangeSetStore,
+    chats: ChatStore,
+    changes: ChangeSetStore,
     private readonly applier: ChangeApplier,
-    private readonly tools: ToolRegistry,
-    private readonly providers: ContinuationProviderPort,
+    tools: ToolRegistry,
+    providers: ContinuationProviderPort,
     private readonly events: PluginEventSender,
-    private readonly activeRuns: RunCancellationRegistry,
-    private readonly reviewNotes: ReviewNotePort,
+    activeRuns: RunCancellationRegistry,
+    reviewNotes: ReviewNotePort,
     changeSetLifecycle?: ChangeSetLifecycle,
+    modelRuns?: ModelRunLifecycle,
   ) {
     this.changeSetLifecycle =
       changeSetLifecycle ?? new ChangeSetLifecycle(changes, chats, reviewNotes);
+    const continuationModelRuns =
+      modelRuns ??
+      new ModelRunLifecycle(chats, tools, changes, events, activeRuns);
+    this.continuationRuns = new ApprovalContinuation(
+      chats,
+      providers,
+      events,
+      continuationModelRuns,
+      async (changeSet, autoApply): Promise<void> =>
+        this.resolveProposedChanges(changeSet, autoApply),
+    );
   }
 
   public remember(
@@ -58,21 +68,21 @@ export class ApprovalWorkflow {
     secretNotebookIds: ReadonlySet<string>,
     citations: readonly ContextCitation[],
   ): void {
-    if (!changeSet || !continuation) return;
-    this.continuations.save(changeSet.id, {
+    this.continuationRuns.remember(
+      changeSet,
+      continuation,
       chatId,
       hasFileWorkspace,
       vault,
       readableNoteIds,
       secretNotebookIds,
-      continuation,
       citations,
-    });
+    );
   }
 
-  public abandonChat(chatId: string): void {
-    void this.disposePendingReviewNote(chatId);
-    this.continuations.deleteChat(chatId);
+  public async abandonChat(chatId: string): Promise<void> {
+    await this.changeSetLifecycle.abandon(chatId);
+    this.continuationRuns.deleteChat(chatId);
   }
 
   /**
@@ -95,7 +105,7 @@ export class ApprovalWorkflow {
    * @example workflow.applyTokenForChangeSet("changes-1")
    */
   public applyTokenForChangeSet(changeSetId: string): string {
-    return this.changeSetLifecycle.ensureApplyToken(changeSetId);
+    return this.changeSetLifecycle.applyTokenIfPending(changeSetId) ?? "";
   }
 
   /**
@@ -107,7 +117,10 @@ export class ApprovalWorkflow {
     changeSet: ChangeSet,
     autoApply: boolean,
   ): Promise<void> {
-    await this.parkAppliedReview(changeSet.chatId);
+    await this.changeSetLifecycle.parkAppliedReview(
+      changeSet.chatId,
+      this.applier,
+    );
     const activation = await this.changeSetLifecycle.activateReview(
       changeSet,
       autoApply,
@@ -155,64 +168,59 @@ export class ApprovalWorkflow {
     request: Extract<PanelRequest, { type: "changes.apply" }>,
     automatic: boolean,
   ): Promise<void> {
-    if (
-      !this.changeSetLifecycle.verifyApplyToken(
-        request.payload.changeSetId,
-        request.payload.applyToken,
-      )
-    ) {
-      throw new DomainError(
-        "SECURITY",
-        `Invalid apply token for change set ${request.payload.changeSetId}; expected a plugin-issued token`,
-      );
-    }
-    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-    const result = await this.applier.apply(
-      request.payload.changeSetId,
-      request.payload.acceptedIds,
-      { chatId: request.chatId, runId: request.runId },
+    await this.changeSetLifecycle.apply(
+      toChangeSetApplyInput(request, automatic),
+      this.applier,
+      this.changeSetTransition(),
     );
-    await this.retainAppliedReview(request.chatId, request.runId, result);
-    const pending = this.continuations.take(request.payload.changeSetId);
-    if (pending) {
-      await this.continueAfterApproval(request, pending, result, automatic);
-      return;
-    }
-    this.postApplyCompleted(request, result);
   }
 
   public async discard(
     request: Extract<PanelRequest, { type: "changes.discard" }>,
   ): Promise<void> {
-    this.changes.discard(request.payload.changeSetId, {
-      chatId: request.chatId,
-      runId: request.runId,
-    });
-    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-    this.continuations.delete(request.payload.changeSetId);
-    await this.clearPending(request.chatId, request.runId, "completed");
+    await this.changeSetLifecycle.discard(
+      {
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+      },
+      this.changeSetTransition(),
+    );
+  }
+
+  private changeSetTransition(): ChangeSetTransitionPort {
+    return {
+      continueAfterApply: async (input, result): Promise<boolean> =>
+        this.continuationRuns.continueAfterApply(input, result),
+      applyCompleted: (input, result): void =>
+        this.postApplyCompleted(input, result),
+      deleteContinuation: (changeSetId): void =>
+        this.continuationRuns.delete(changeSetId),
+      discardCompleted: (input): void => this.postDiscardCompleted(input),
+      reviewRestored: (changeSet): void => this.postRestoredReview(changeSet),
+    };
+  }
+
+  private postDiscardCompleted(input: ChangeSetDiscardInput): void {
     this.events.post(
       "run.completed",
-      request.chatId,
+      input.chatId,
       { summary: "Changes discarded" },
-      request.runId,
+      input.runId,
     );
   }
 
   public async undo(
     request: Extract<PanelRequest, { type: "run.undo" }>,
   ): Promise<void> {
-    const result = await this.applier.undo(
-      request.payload.targetRunId,
-      request.chatId,
-    );
-    this.events.post(
-      "run.completed",
-      request.chatId,
+    await this.changeSetLifecycle.rollback(
       {
-        summary: `Restored ${result.restored}; conflicts ${result.conflicts.length}`,
+        chatId: request.chatId,
+        runId: request.runId,
+        targetRunId: request.payload.targetRunId,
       },
-      request.runId,
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -226,43 +234,14 @@ export class ApprovalWorkflow {
   public async deny(
     request: Extract<PanelRequest, { type: "changes.deny" }>,
   ): Promise<void> {
-    const changeSet = this.changes.get(request.payload.changeSetId);
-    if (!changeSet) {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `Change set ${safeValue(request.payload.changeSetId)} not found; expected an applied or pending change set`,
-      );
-    }
-    if (changeSet.status === "proposed") {
-      this.changes.discard(request.payload.changeSetId, {
+    await this.changeSetLifecycle.deny(
+      {
         chatId: request.chatId,
         runId: request.runId,
-      });
-      this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-      this.continuations.delete(request.payload.changeSetId);
-      await this.clearPending(request.chatId, request.runId, "denied");
-      this.events.post(
-        "run.completed",
-        request.chatId,
-        { summary: "Changes denied before apply" },
-        request.runId,
-      );
-      return;
-    }
-    const result = await this.applier.undo(changeSet.runId, request.chatId);
-    this.changes.removeChanges(
-      changeSet.id,
-      changeSet.changes.map((change) => change.id),
-      { chatId: request.chatId, runId: request.runId },
-    );
-    await this.clearPending(request.chatId, request.runId, "denied");
-    this.events.post(
-      "run.completed",
-      request.chatId,
-      {
-        summary: `Denied and restored ${result.restored}; conflicts ${result.conflicts.length}`,
+        changeSetId: request.payload.changeSetId,
       },
-      request.runId,
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -274,27 +253,14 @@ export class ApprovalWorkflow {
   public async keep(
     request: Extract<PanelRequest, { type: "changes.keep" }>,
   ): Promise<void> {
-    const remaining = this.changes.removeChanges(
-      request.payload.changeSetId,
-      request.payload.changeIds,
-      { chatId: request.chatId, runId: request.runId },
-    );
-    if (!remaining) {
-      await this.clearPending(request.chatId, request.runId, "applied");
-      this.events.post(
-        "run.completed",
-        request.chatId,
-        { summary: "Kept applied changes" },
-        request.runId,
-      );
-      return;
-    }
-    await this.savePending(request.chatId, remaining);
-    this.events.post(
-      "changes.proposed",
-      request.chatId,
-      toChangeSetView(remaining, ""),
-      request.runId,
+    await this.changeSetLifecycle.keep(
+      {
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+        changeIds: request.payload.changeIds,
+      },
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -306,438 +272,72 @@ export class ApprovalWorkflow {
   public async undoChanges(
     request: Extract<PanelRequest, { type: "changes.undo" }>,
   ): Promise<void> {
-    const changeSet = this.changes.getScoped(request.payload.changeSetId, {
-      chatId: request.chatId,
-      runId: request.runId,
-    });
-    if (changeSet.status !== "applied" && changeSet.status !== "partial") {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `Change set ${safeValue(changeSet.id)} has status ${changeSet.status}; expected applied or partial status`,
-      );
-    }
-    const result = await this.applier.undo(
-      changeSet.runId,
-      request.chatId,
-      request.payload.changeIds,
-    );
-    const remaining = this.changes.removeChanges(
-      changeSet.id,
-      request.payload.changeIds,
-      { chatId: request.chatId, runId: request.runId },
-    );
-    if (!remaining) {
-      await this.clearPending(request.chatId, request.runId, "applied");
-      this.events.post(
-        "run.completed",
-        request.chatId,
-        {
-          summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
-        },
-        request.runId,
-      );
-      return;
-    }
-    await this.savePending(request.chatId, remaining);
-    this.events.post(
-      "run.completed",
-      request.chatId,
+    await this.changeSetLifecycle.undoSelected(
       {
-        summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
-        ...(result.restored > 0 || remaining.changes.some(isUndoableApplied)
-          ? { undoRunId: changeSet.runId }
-          : {}),
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+        changeIds: request.payload.changeIds,
       },
-      request.runId,
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
   }
 
-  private async continueAfterApproval(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
-    pending: PendingAgentContinuation,
-    applied: ApplyResult,
-    automatic: boolean,
-  ): Promise<void> {
-    const runId = randomUUID();
-    const controller = new AbortController();
-    this.activeRuns.replace(request.chatId, runId, controller);
-    this.events.post(
-      "run.started",
-      request.chatId,
-      { startedAt: Date.now() },
-      runId,
-    );
-    const deltas = this.createDeltaBatcher(request.chatId, runId);
-    try {
-      await this.executeContinuation(
-        pending,
-        applied,
-        request.runId,
-        runId,
-        automatic,
-        controller.signal,
-        deltas,
-      );
-    } catch (error: unknown) {
-      this.postContinuationFailure(request, runId, applied, error);
-    } finally {
-      deltas.dispose();
-      this.activeRuns.clearIfCurrent(request.chatId, controller);
-    }
-  }
-
-  private async executeContinuation(
-    pending: PendingAgentContinuation,
-    applied: ApplyResult,
-    appliedRunId: string,
-    runId: string,
-    automatic: boolean,
-    signal: AbortSignal,
-    deltas: DeltaBatcher,
-  ): Promise<void> {
-    const { provider } = await this.providers.connectWithConfirmation();
-    const runner = new AgentRunner(
-      provider,
-      this.tools,
-      this.changes,
-      this.observer(pending.chatId, runId, deltas),
-    );
-    const outcome = await runner.resume(
-      {
-        chatId: pending.chatId,
-        runId,
-        messages: [],
-        hasFileWorkspace: pending.hasFileWorkspace,
-        vault: pending.vault,
-        readOnly: false,
-        readableNoteIds: pending.readableNoteIds,
-        secretNotebookIds: pending.secretNotebookIds,
-      },
-      pending.continuation,
-      approvalSummary(applied, automatic),
-      signal,
-    );
-    deltas.flush();
-    const chat = await requireChat(this.chats, pending.chatId);
-    await persistRunOutcome(
-      this.chats,
-      chat,
-      runId,
-      outcome,
-      pending.citations,
-    );
-    this.remember(
-      outcome.changeSet,
-      outcome.continuation,
-      pending.chatId,
-      pending.hasFileWorkspace,
-      pending.vault,
-      pending.readableNoteIds,
-      pending.secretNotebookIds,
-      pending.citations,
-    );
-    await this.postContinuationOutcome(
-      pending.chatId,
-      runId,
-      outcome.changeSet,
-      applied.undoAvailable ? appliedRunId : null,
-      chat.context.autoApply,
-    );
-  }
-
-  private observer(
-    chatId: string,
-    runId: string,
-    deltas: DeltaBatcher,
-  ): AgentObserver {
+  private changeSetResolutionTransition(): ChangeSetResolutionTransitionPort {
     return {
-      onTextDelta: (delta): void => deltas.push(delta),
-      onToolStarted: (call): void =>
-        this.events.post(
-          "tool.started",
-          chatId,
-          { toolCallId: call.id, name: call.name },
-          runId,
-        ),
-      onToolCompleted: (result): void =>
-        this.postToolCompleted(chatId, runId, result),
-      onPlanUpdated: (plan): void =>
-        this.events.post(
-          "run.plan",
-          chatId,
-          {
-            items: plan.items.map((item) => ({
-              id: item.id,
-              content: item.content,
-              status: item.status,
-            })),
-          },
-          runId,
-        ),
-      onStep: (current, total, label): void =>
-        this.events.post(
-          "run.progress",
-          chatId,
-          {
-            current,
-            total,
-            label: label ?? `Model step ${current} of ${total}`,
-          },
-          runId,
-        ),
+      publish: (input, event): void => this.publishResolution(input, event),
+      deleteContinuation: (changeSetId): void =>
+        this.continuationRuns.delete(changeSetId),
     };
   }
 
-  private postToolCompleted(
-    chatId: string,
-    runId: string,
-    result: ToolExecutionResult,
+  private publishResolution(
+    input: { readonly chatId: string; readonly runId: string },
+    event: ChangeSetResolutionEvent,
   ): void {
-    this.events.post(
-      "tool.completed",
-      chatId,
-      {
-        toolCallId: result.toolCallId,
-        name: result.name,
-        ok: true,
-        summary: summarizeToolResult(result),
-      },
-      runId,
-    );
-  }
-
-  private createDeltaBatcher(chatId: string, runId: string): DeltaBatcher {
-    return new DeltaBatcher((delta) =>
-      this.events.post("assistant.delta", chatId, { delta }, runId),
-    );
-  }
-
-  private async postContinuationOutcome(
-    chatId: string,
-    runId: string,
-    changeSet: ChangeSet | null,
-    undoRunId: string | null,
-    autoApply: boolean,
-  ): Promise<void> {
-    if (changeSet) {
-      await this.resolveProposedChanges(changeSet, autoApply);
+    if (event.mode === "review" && !event.summary) {
+      this.postRestoredReview(event.changeSet);
       return;
     }
     this.events.post(
       "run.completed",
-      chatId,
+      input.chatId,
       {
-        summary: "Changes applied; continuation completed",
-        ...(undoRunId ? { undoRunId } : {}),
+        summary: event.summary,
+        ...(event.undoRunId ? { undoRunId: event.undoRunId } : {}),
       },
-      runId,
+      input.runId,
     );
+    if (event.mode === "review" && event.restored) {
+      this.postRestoredReview(event.changeSet);
+    }
   }
 
   private postApplyCompleted(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
+    input: ChangeSetApplyInput,
     result: ApplyResult,
   ): void {
     const counts = applyCounts(result);
     this.events.post(
       "run.completed",
-      request.chatId,
+      input.chatId,
       {
         summary: `Applied ${counts.applied}; conflicts ${counts.conflicts}`,
-        ...(result.undoAvailable ? { undoRunId: request.runId } : {}),
+        ...(result.undoAvailable ? { undoRunId: input.runId } : {}),
       },
-      request.runId,
+      input.runId,
     );
   }
 
-  private postContinuationFailure(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
-    runId: string,
-    applied: ApplyResult,
-    error: unknown,
-  ): void {
-    const domain =
-      error instanceof DomainError
-        ? error
-        : new DomainError("INTERNAL", "Unexpected continuation failure");
+  private postRestoredReview(changeSet: ChangeSet): void {
     this.events.post(
-      "run.failed",
-      request.chatId,
-      { code: domain.code, message: domain.message },
-      runId,
-    );
-    if (!applied.undoAvailable) return;
-    this.events.post(
-      "run.completed",
-      request.chatId,
-      {
-        summary: "Changes applied; model continuation failed",
-        undoRunId: request.runId,
-      },
-      runId,
+      "changes.proposed",
+      changeSet.chatId,
+      toChangeSetView(changeSet, ""),
+      changeSet.runId,
     );
   }
-
-  private async clearPending(
-    chatId: string,
-    runId: string,
-    status: PersistedRunSummary["status"],
-  ): Promise<void> {
-    const chat = await requireChat(this.chats, chatId);
-    await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat.parkedAppliedChangeSet?.reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId ? { ...summary, status } : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: null,
-    });
-  }
-
-  private async retainAppliedReview(
-    chatId: string,
-    runId: string,
-    result: ApplyResult,
-  ): Promise<void> {
-    const changeSet = this.changes.get(result.changeSetId);
-    if (!changeSet) {
-      await this.clearPending(chatId, runId, "applied");
-      return;
-    }
-    const chat = await requireChat(this.chats, chatId);
-    const parked = chat.parkedAppliedChangeSet;
-    const retained = parked
-      ? await this.mergeParkedIntoApplied(chatId, changeSet, parked)
-      : changeSet;
-    const reviewNoteId = await this.reviewNotes.openForChangeSet(
-      retained,
-      chat.title,
-    );
-    const reviewed = this.changes.attachReviewNote(retained.id, reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId
-        ? { ...summary, status: "applied" as const }
-        : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: reviewed,
-      parkedAppliedChangeSet: null,
-    });
-  }
-
-  private async mergeParkedIntoApplied(
-    chatId: string,
-    applied: ChangeSet,
-    parked: ChangeSet,
-  ): Promise<ChangeSet> {
-    await this.applier.mergeRollbacks(applied.runId, chatId, parked.runId);
-    const merged = this.changes.absorbAppliedChanges(
-      applied.id,
-      parked.changes,
-      { chatId, runId: applied.runId },
-    );
-    if (parked.id !== applied.id) this.changes.drop(parked.id);
-    return merged;
-  }
-
-  private async parkAppliedReview(chatId: string): Promise<void> {
-    const chat = await this.chats.get(chatId);
-    if (!chat?.pendingChangeSet) return;
-    const pending = chat.pendingChangeSet;
-    if (pending.status !== "applied" && pending.status !== "partial") return;
-    await this.disposeReviewNote(pending.reviewNoteId);
-    const parkedWithoutNote = stripReviewNote(pending);
-    const existing = chat.parkedAppliedChangeSet;
-    if (!existing) {
-      await this.chats.save({
-        ...chat,
-        updatedAt: Date.now(),
-        pendingChangeSet: null,
-        parkedAppliedChangeSet: parkedWithoutNote,
-      });
-      return;
-    }
-    const merged = await this.mergeParkedIntoApplied(
-      chatId,
-      parkedWithoutNote,
-      existing,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: stripReviewNote(merged),
-    });
-  }
-
-  private async savePending(
-    chatId: string,
-    changeSet: ChangeSet,
-  ): Promise<void> {
-    const chat = await requireChat(this.chats, chatId);
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      pendingChangeSet: changeSet,
-    });
-  }
-
-  private async disposePendingReviewNote(chatId: string): Promise<void> {
-    const chat = await this.chats.get(chatId);
-    await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat?.parkedAppliedChangeSet?.reviewNoteId);
-  }
-
-  private async disposeReviewNote(
-    reviewNoteId: string | undefined,
-  ): Promise<void> {
-    if (!reviewNoteId) return;
-    await this.reviewNotes.dispose(reviewNoteId);
-  }
-}
-
-function stripReviewNote(changeSet: ChangeSet): ChangeSet {
-  if (!changeSet.reviewNoteId) return changeSet;
-  return {
-    id: changeSet.id,
-    chatId: changeSet.chatId,
-    runId: changeSet.runId,
-    createdAt: changeSet.createdAt,
-    status: changeSet.status,
-    changes: changeSet.changes,
-  };
-}
-
-function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
-  if (change.status !== "applied") return false;
-  if (change.kind === "file") return true;
-  return change.operation === "update";
-}
-
-function automaticApplyRequest(
-  changeSet: ChangeSet,
-  acceptedChangeIds: string[],
-  applyToken: string,
-): Extract<PanelRequest, { type: "changes.apply" }> {
-  return {
-    version: PROTOCOL_VERSION,
-    messageId: randomUUID(),
-    chatId: changeSet.chatId,
-    runId: changeSet.runId,
-    type: "changes.apply",
-    payload: {
-      changeSetId: changeSet.id,
-      acceptedIds: acceptedChangeIds,
-      applyToken,
-    },
-  };
 }
 
 function applyCounts(result: ApplyResult): {
@@ -750,20 +350,4 @@ function applyCounts(result: ApplyResult): {
     conflicts: result.changes.filter((change) => change.status === "conflict")
       .length,
   };
-}
-
-function approvalSummary(result: ApplyResult, automatic: boolean): string {
-  const details = result.changes.map((change) => ({
-    target: change.targetLabel,
-    status: change.status,
-    ...(change.message ? { message: change.message } : {}),
-  }));
-  const policy = automatic
-    ? "The chat's automatic application was enabled by the user."
-    : "The user reviewed the proposed write batch.";
-  return [
-    policy,
-    "Treat these execution results as authoritative and continue the task:",
-    JSON.stringify(details),
-  ].join("\n");
 }
