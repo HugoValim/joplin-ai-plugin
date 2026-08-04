@@ -10,20 +10,10 @@ import type {
 } from "../providers/types";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
 import { DomainError } from "../shared/errors";
-import { StuckLoopDetector } from "./stuckLoopDetector";
 import { executeAgentToolBatch } from "./agentToolBatch";
 import {
-  bootstrapPlanFromInventory,
-  planBootstrappedNudge,
-} from "./inventoryPlanBootstrap";
-import {
-  activateProposeOnlyIfNeeded,
-  isPlanRequiredBailout,
-  MAX_TEXT_ONLY_BAILOUTS,
-  needsAgentPlanAfterDiscovery,
-  PLAN_REQUIRED_BOOTSTRAP_AFTER,
-  planRequiredNudge,
-  textOnlyBailoutMessage,
+  AgentLoopPolicyState,
+  type AgentLoopCompleteTransition,
   withBailoutExhaustedNotice,
   withMissingProposalNotice,
   withStuckLoopNotice,
@@ -149,138 +139,80 @@ export class AgentRunner {
     abortSignal: AbortSignal,
   ): Promise<AgentRunOutcome> {
     const context = this.buildToolContext(request, planState);
+    const loopPolicy = new AgentLoopPolicyState(
+      request.readOnly,
+      this.tools,
+      context,
+    );
     let toolCallCount = initialToolCallCount;
     let assistantText = "";
-    let readCallsSincePropose = 0;
-    let proposeOnly = false;
-    let blockDiscovery = false;
-    let textOnlyBailouts = 0;
     let usage: TokenUsage | null = null;
     const toolNames: string[] = [];
-    const loopDetector = new StuckLoopDetector();
 
     for (let step = firstStep; step <= MAX_MODEL_STEPS; step += 1) {
       assertNotAborted(abortSignal);
       this.observer.onStep?.(step, MAX_MODEL_STEPS);
-      proposeOnly = activateProposeOnlyIfNeeded(
-        proposeOnly,
-        readCallsSincePropose,
-        request.readOnly,
-        this.tools,
-        context,
-        messages,
-      );
+      const modelPolicy = loopPolicy.prepareModelStep(messages);
       const modelStep = await this.runModelStep(
         messages,
         context,
         abortSignal,
-        proposeOnly,
-        request.readOnly,
-        blockDiscovery,
+        modelPolicy.proposeOnly,
+        modelPolicy.readOnly,
+        modelPolicy.blockDiscovery,
       );
       usage = mergeUsage(usage, modelStep.usage);
       assistantText += modelStep.text;
       messages.push(toAssistantMessage(modelStep));
-      if (
-        context.agentPlan.plan &&
-        modelStep.toolCalls.length &&
-        loopDetector.addStep(modelStep.text)
-      ) {
-        this.observer.onStep?.(step, MAX_MODEL_STEPS);
+      if (modelStep.toolCalls.length) {
+        const transition = loopPolicy.recordToolStep(modelStep.text);
+        if (transition.action === "complete") {
+          this.observer.onStep?.(step, MAX_MODEL_STEPS);
+          return completedOutcome(
+            messages,
+            policyCompletionText(assistantText, transition),
+            usage,
+            toolNames,
+          );
+        }
+      }
+      if (!modelStep.toolCalls.length) {
+        const transition = loopPolicy.recordTextOnlyStep(
+          messages,
+          toolNames,
+          step >= MAX_MODEL_STEPS,
+        );
+        if (transition.action === "continue") {
+          if (transition.planUpdated) {
+            this.observer.onPlanUpdated?.(transition.planUpdated);
+          }
+          continue;
+        }
+        if (transition.reason === "stuck") {
+          this.observer.onStep?.(step, MAX_MODEL_STEPS);
+        }
         return completedOutcome(
           messages,
-          withStuckLoopNotice(assistantText),
+          policyCompletionText(assistantText, transition),
           usage,
           toolNames,
         );
       }
-      if (!modelStep.toolCalls.length) {
-        const bailout = textOnlyBailoutMessage(
-          proposeOnly,
-          request.readOnly,
-          this.tools,
-          context,
-          toolNames,
-        );
-        if (bailout) {
-          // Post-inventory: stop further listing and give a fresh bailout budget.
-          if (
-            !blockDiscovery &&
-            !request.readOnly &&
-            isPlanRequiredBailout(bailout)
-          ) {
-            blockDiscovery = true;
-            textOnlyBailouts = 0;
-            messages.push(bailout);
-            continue;
-          }
-          textOnlyBailouts += 1;
-          if (
-            isPlanRequiredBailout(bailout) &&
-            textOnlyBailouts >= PLAN_REQUIRED_BOOTSTRAP_AFTER &&
-            !context.agentPlan.plan
-          ) {
-            const bootstrapped = tryBootstrapInventoryPlan(
-              messages,
-              context,
-              this.observer,
-            );
-            if (bootstrapped) {
-              blockDiscovery = true;
-              textOnlyBailouts = 0;
-              continue;
-            }
-          }
-          if (context.agentPlan.plan && loopDetector.addTextOnlyStep()) {
-            this.observer.onStep?.(step, MAX_MODEL_STEPS);
-            return completedOutcome(
-              messages,
-              withStuckLoopNotice(assistantText),
-              usage,
-              toolNames,
-            );
-          }
-          // Keep nudging PLAN REQUIRED; only exhaust propose/plan-in-progress loops.
-          if (
-            textOnlyBailouts >= MAX_TEXT_ONLY_BAILOUTS &&
-            !isPlanRequiredBailout(bailout)
-          ) {
-            return completedOutcome(
-              messages,
-              withBailoutExhaustedNotice(assistantText),
-              usage,
-              toolNames,
-            );
-          }
-          if (step >= MAX_MODEL_STEPS) {
-            return completedOutcome(
-              messages,
-              withMissingProposalNotice(assistantText),
-              usage,
-              toolNames,
-            );
-          }
-          messages.push(bailout);
-          continue;
-        }
-        return completedOutcome(messages, assistantText, usage, toolNames);
-      }
-      textOnlyBailouts = 0;
       toolCallCount += modelStep.toolCalls.length;
       const batch = await executeAgentToolBatch({
         calls: modelStep.toolCalls,
         messages,
         context,
         abortSignal,
-        proposeOnly,
+        proposeOnly: modelPolicy.proposeOnly,
         readOnly: request.readOnly,
-        blockDiscovery,
+        blockDiscovery: modelPolicy.blockDiscovery,
         toolNames,
         tools: this.tools,
         observer: this.observer,
       });
-      if (batch.discoveryCapped) blockDiscovery = true;
-      if (batch.proposed) {
+      const transition = loopPolicy.recordToolBatch(batch, messages, toolNames);
+      if (transition.action === "awaiting-approval") {
         return {
           status: "awaiting-approval",
           messages,
@@ -295,16 +227,6 @@ export class AgentRunner {
           usage,
           toolNames,
         };
-      }
-      readCallsSincePropose += batch.contentReadCount;
-      // After large inventory, block more listing and require a plan next.
-      if (
-        !blockDiscovery &&
-        !request.readOnly &&
-        needsAgentPlanAfterDiscovery(toolNames, context, this.tools)
-      ) {
-        blockDiscovery = true;
-        messages.push(planRequiredNudge());
       }
     }
     throw new DomainError(
@@ -369,17 +291,18 @@ export class AgentRunner {
   }
 }
 
-function tryBootstrapInventoryPlan(
-  messages: ProviderMessage[],
-  context: ToolExecutionContext,
-  observer: AgentObserver,
-): boolean {
-  const plan = bootstrapPlanFromInventory(messages);
-  if (!plan) return false;
-  context.agentPlan.plan = plan;
-  observer.onPlanUpdated?.(plan);
-  messages.push(planBootstrappedNudge(plan.items.length));
-  return true;
+function policyCompletionText(
+  assistantText: string,
+  transition: AgentLoopCompleteTransition,
+): string {
+  if (transition.reason === "stuck") return withStuckLoopNotice(assistantText);
+  if (transition.reason === "bailout-exhausted") {
+    return withBailoutExhaustedNotice(assistantText);
+  }
+  if (transition.reason === "missing-proposal") {
+    return withMissingProposalNotice(assistantText);
+  }
+  return assistantText;
 }
 
 function toAssistantMessage(step: ModelStep): ProviderMessage {
