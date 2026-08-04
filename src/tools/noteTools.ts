@@ -94,7 +94,10 @@ class SearchNotesTool extends NoteTool<SearchNotesInput, SearchNotesOutput> {
     input: SearchNotesInput,
     context: ToolExecutionContext,
   ): Promise<SearchNotesOutput> {
-    const hits = await this.repository.searchNotes(input.query, input.limit ?? 10);
+    const hits = await this.repository.searchNotes(
+      input.query,
+      input.limit ?? 10,
+    );
     const enriched = await Promise.all(
       hits.map(async (hit) => {
         const note = await this.repository.readNote(hit.id);
