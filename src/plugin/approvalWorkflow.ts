@@ -1,44 +1,42 @@
-import { randomUUID } from "crypto";
-import type {
-  AgentContinuation,
-  AgentRunRequest,
-  AgentRunOutcome,
-} from "../agent/agentRunner";
+import type { AgentContinuation } from "../agent/agentRunner";
 import type { ChangeApplier, ApplyResult } from "../agent/changeApplier";
 import type { ContextCitation } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
-import { ChangeSetLifecycle } from "../persistence/changeSetLifecycle";
-import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
-import type { AiProvider } from "../providers/types";
+import {
+  ChangeSetLifecycle,
+  type ChangeSetTransitionPort,
+  type ChangeSetApplyInput,
+  type ChangeSetDiscardInput,
+} from "../persistence/changeSetLifecycle";
+import type { ChatStore } from "../persistence/chatStore";
 import { DomainError, safeValue } from "../shared/errors";
-import { PROTOCOL_VERSION, type PanelRequest } from "../shared/protocol";
+import type { PanelRequest } from "../shared/protocol";
 import type { ToolRegistry } from "../tools/toolRegistry";
 import {
-  AgentContinuationStore,
-  type PendingAgentContinuation,
-} from "./agentContinuationStore";
+  ApprovalContinuation,
+  type ContinuationProviderPort,
+} from "./approvalContinuation";
 import { requireChat } from "./chatLifecycle";
 import { toChangeSetView } from "./chatView";
+import {
+  automaticApplyRequest,
+  toChangeSetApplyInput,
+} from "./changeSetApprovalRequest";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import type { ReviewNotePort } from "./reviewNoteService";
 import { ModelRunLifecycle } from "./modelRunLifecycle";
 
-interface ContinuationProviderPort {
-  connectWithConfirmation(): Promise<{ readonly provider: AiProvider }>;
-}
-
 export class ApprovalWorkflow {
-  private readonly continuations = new AgentContinuationStore();
+  private readonly continuationRuns: ApprovalContinuation;
   private readonly changeSetLifecycle: ChangeSetLifecycle;
-  private readonly modelRuns: ModelRunLifecycle;
 
   public constructor(
     private readonly chats: ChatStore,
     private readonly changes: ChangeSetStore,
     private readonly applier: ChangeApplier,
     tools: ToolRegistry,
-    private readonly providers: ContinuationProviderPort,
+    providers: ContinuationProviderPort,
     private readonly events: PluginEventSender,
     activeRuns: RunCancellationRegistry,
     private readonly reviewNotes: ReviewNotePort,
@@ -47,9 +45,17 @@ export class ApprovalWorkflow {
   ) {
     this.changeSetLifecycle =
       changeSetLifecycle ?? new ChangeSetLifecycle(changes, chats, reviewNotes);
-    this.modelRuns =
+    const continuationModelRuns =
       modelRuns ??
       new ModelRunLifecycle(chats, tools, changes, events, activeRuns);
+    this.continuationRuns = new ApprovalContinuation(
+      chats,
+      providers,
+      events,
+      continuationModelRuns,
+      async (changeSet, autoApply): Promise<void> =>
+        this.resolveProposedChanges(changeSet, autoApply),
+    );
   }
 
   public remember(
@@ -62,21 +68,21 @@ export class ApprovalWorkflow {
     secretNotebookIds: ReadonlySet<string>,
     citations: readonly ContextCitation[],
   ): void {
-    if (!changeSet || !continuation) return;
-    this.continuations.save(changeSet.id, {
+    this.continuationRuns.remember(
+      changeSet,
+      continuation,
       chatId,
       hasFileWorkspace,
       vault,
       readableNoteIds,
       secretNotebookIds,
-      continuation,
       citations,
-    });
+    );
   }
 
   public abandonChat(chatId: string): void {
     void this.disposePendingReviewNote(chatId);
-    this.continuations.deleteChat(chatId);
+    this.continuationRuns.deleteChat(chatId);
   }
 
   /**
@@ -159,47 +165,44 @@ export class ApprovalWorkflow {
     request: Extract<PanelRequest, { type: "changes.apply" }>,
     automatic: boolean,
   ): Promise<void> {
-    if (
-      !this.changeSetLifecycle.verifyApplyToken(
-        request.payload.changeSetId,
-        request.payload.applyToken,
-      )
-    ) {
-      throw new DomainError(
-        "SECURITY",
-        `Invalid apply token for change set ${request.payload.changeSetId}; expected a plugin-issued token`,
-      );
-    }
-    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-    const result = await this.applier.apply(
-      request.payload.changeSetId,
-      request.payload.acceptedIds,
-      { chatId: request.chatId, runId: request.runId },
+    await this.changeSetLifecycle.apply(
+      toChangeSetApplyInput(request, automatic),
+      this.applier,
+      this.changeSetTransition(),
     );
-    await this.retainAppliedReview(request.chatId, request.runId, result);
-    const pending = this.continuations.take(request.payload.changeSetId);
-    if (pending) {
-      await this.continueAfterApproval(request, pending, result, automatic);
-      return;
-    }
-    this.postApplyCompleted(request, result);
   }
 
   public async discard(
     request: Extract<PanelRequest, { type: "changes.discard" }>,
   ): Promise<void> {
-    this.changes.discard(request.payload.changeSetId, {
-      chatId: request.chatId,
-      runId: request.runId,
-    });
-    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-    this.continuations.delete(request.payload.changeSetId);
-    await this.clearPending(request.chatId, request.runId, "completed");
+    await this.changeSetLifecycle.discard(
+      {
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+      },
+      this.changeSetTransition(),
+    );
+  }
+
+  private changeSetTransition(): ChangeSetTransitionPort {
+    return {
+      continueAfterApply: async (input, result): Promise<boolean> =>
+        this.continuationRuns.continueAfterApply(input, result),
+      applyCompleted: (input, result): void =>
+        this.postApplyCompleted(input, result),
+      deleteContinuation: (changeSetId): void =>
+        this.continuationRuns.delete(changeSetId),
+      discardCompleted: (input): void => this.postDiscardCompleted(input),
+    };
+  }
+
+  private postDiscardCompleted(input: ChangeSetDiscardInput): void {
     this.events.post(
       "run.completed",
-      request.chatId,
+      input.chatId,
       { summary: "Changes discarded" },
-      request.runId,
+      input.runId,
     );
   }
 
@@ -243,8 +246,12 @@ export class ApprovalWorkflow {
         runId: request.runId,
       });
       this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-      this.continuations.delete(request.payload.changeSetId);
-      await this.clearPending(request.chatId, request.runId, "denied");
+      this.continuationRuns.delete(request.payload.changeSetId);
+      await this.changeSetLifecycle.clearPending(
+        request.chatId,
+        request.runId,
+        "denied",
+      );
       this.events.post(
         "run.completed",
         request.chatId,
@@ -259,7 +266,11 @@ export class ApprovalWorkflow {
       changeSet.changes.map((change) => change.id),
       { chatId: request.chatId, runId: request.runId },
     );
-    await this.clearPending(request.chatId, request.runId, "denied");
+    await this.changeSetLifecycle.clearPending(
+      request.chatId,
+      request.runId,
+      "denied",
+    );
     this.events.post(
       "run.completed",
       request.chatId,
@@ -284,7 +295,11 @@ export class ApprovalWorkflow {
       { chatId: request.chatId, runId: request.runId },
     );
     if (!remaining) {
-      await this.clearPending(request.chatId, request.runId, "applied");
+      await this.changeSetLifecycle.clearPending(
+        request.chatId,
+        request.runId,
+        "applied",
+      );
       this.events.post(
         "run.completed",
         request.chatId,
@@ -331,7 +346,11 @@ export class ApprovalWorkflow {
       { chatId: request.chatId, runId: request.runId },
     );
     if (!remaining) {
-      await this.clearPending(request.chatId, request.runId, "applied");
+      await this.changeSetLifecycle.clearPending(
+        request.chatId,
+        request.runId,
+        "applied",
+      );
       this.events.post(
         "run.completed",
         request.chatId,
@@ -356,187 +375,20 @@ export class ApprovalWorkflow {
     );
   }
 
-  private async continueAfterApproval(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
-    pending: PendingAgentContinuation,
-    applied: ApplyResult,
-    automatic: boolean,
-  ): Promise<void> {
-    const runId = randomUUID();
-    await this.modelRuns.resume({
-      chatId: request.chatId,
-      runId,
-      continuation: pending.continuation,
-      approvalSummary: approvalSummary(applied, automatic),
-      citations: pending.citations,
-      prepare: async () => {
-        const { provider } = await this.providers.connectWithConfirmation();
-        return { provider, request: continuationRunRequest(pending) };
-      },
-      onOutcome: async (outcome) => {
-        await this.handleContinuationOutcome(
-          pending,
-          outcome,
-          request.runId,
-          runId,
-          applied.undoAvailable,
-        );
-      },
-      onFailure: () => {
-        this.postContinuationCompensation(request, runId, applied);
-      },
-    });
-  }
-
-  private async handleContinuationOutcome(
-    pending: PendingAgentContinuation,
-    outcome: AgentRunOutcome,
-    appliedRunId: string,
-    runId: string,
-    undoAvailable: boolean,
-  ): Promise<void> {
-    const chat = await requireChat(this.chats, pending.chatId);
-    this.remember(
-      outcome.changeSet,
-      outcome.continuation,
-      pending.chatId,
-      pending.hasFileWorkspace,
-      pending.vault,
-      pending.readableNoteIds,
-      pending.secretNotebookIds,
-      pending.citations,
-    );
-    await this.postContinuationOutcome(
-      pending.chatId,
-      runId,
-      outcome.changeSet,
-      undoAvailable ? appliedRunId : null,
-      chat.context.autoApply,
-    );
-  }
-
-  private async postContinuationOutcome(
-    chatId: string,
-    runId: string,
-    changeSet: ChangeSet | null,
-    undoRunId: string | null,
-    autoApply: boolean,
-  ): Promise<void> {
-    if (changeSet) {
-      await this.resolveProposedChanges(changeSet, autoApply);
-      return;
-    }
-    this.events.post(
-      "run.completed",
-      chatId,
-      {
-        summary: "Changes applied; continuation completed",
-        ...(undoRunId ? { undoRunId } : {}),
-      },
-      runId,
-    );
-  }
-
   private postApplyCompleted(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
+    input: ChangeSetApplyInput,
     result: ApplyResult,
   ): void {
     const counts = applyCounts(result);
     this.events.post(
       "run.completed",
-      request.chatId,
+      input.chatId,
       {
         summary: `Applied ${counts.applied}; conflicts ${counts.conflicts}`,
-        ...(result.undoAvailable ? { undoRunId: request.runId } : {}),
+        ...(result.undoAvailable ? { undoRunId: input.runId } : {}),
       },
-      request.runId,
+      input.runId,
     );
-  }
-
-  private postContinuationCompensation(
-    request: Extract<PanelRequest, { type: "changes.apply" }>,
-    runId: string,
-    applied: ApplyResult,
-  ): void {
-    if (!applied.undoAvailable) return;
-    this.events.post(
-      "run.completed",
-      request.chatId,
-      {
-        summary: "Changes applied; model continuation failed",
-        undoRunId: request.runId,
-      },
-      runId,
-    );
-  }
-
-  private async clearPending(
-    chatId: string,
-    runId: string,
-    status: PersistedRunSummary["status"],
-  ): Promise<void> {
-    const chat = await requireChat(this.chats, chatId);
-    await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat.parkedAppliedChangeSet?.reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId ? { ...summary, status } : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: null,
-    });
-  }
-
-  private async retainAppliedReview(
-    chatId: string,
-    runId: string,
-    result: ApplyResult,
-  ): Promise<void> {
-    const changeSet = this.changes.get(result.changeSetId);
-    if (!changeSet) {
-      await this.clearPending(chatId, runId, "applied");
-      return;
-    }
-    const chat = await requireChat(this.chats, chatId);
-    const parked = chat.parkedAppliedChangeSet;
-    const retained = parked
-      ? await this.mergeParkedIntoApplied(chatId, changeSet, parked)
-      : changeSet;
-    const reviewNoteId = await this.reviewNotes.openForChangeSet(
-      retained,
-      chat.title,
-    );
-    const reviewed = this.changes.attachReviewNote(retained.id, reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId
-        ? { ...summary, status: "applied" as const }
-        : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: reviewed,
-      parkedAppliedChangeSet: null,
-    });
-  }
-
-  private async mergeParkedIntoApplied(
-    chatId: string,
-    applied: ChangeSet,
-    parked: ChangeSet,
-  ): Promise<ChangeSet> {
-    await this.applier.mergeRollbacks(applied.runId, chatId, parked.runId);
-    const merged = this.changes.absorbAppliedChanges(
-      applied.id,
-      parked.changes,
-      { chatId, runId: applied.runId },
-    );
-    if (parked.id !== applied.id) this.changes.drop(parked.id);
-    return merged;
   }
 
   private async parkAppliedReview(chatId: string): Promise<void> {
@@ -556,10 +408,11 @@ export class ApprovalWorkflow {
       });
       return;
     }
-    const merged = await this.mergeParkedIntoApplied(
+    const merged = await this.changeSetLifecycle.mergeAppliedReviews(
       chatId,
       parkedWithoutNote,
       existing,
+      this.applier,
     );
     await this.chats.save({
       ...chat,
@@ -595,19 +448,6 @@ export class ApprovalWorkflow {
   }
 }
 
-function continuationRunRequest(
-  pending: PendingAgentContinuation,
-): Omit<AgentRunRequest, "chatId" | "runId"> {
-  return {
-    messages: [],
-    hasFileWorkspace: pending.hasFileWorkspace,
-    vault: pending.vault,
-    readOnly: false,
-    readableNoteIds: pending.readableNoteIds,
-    secretNotebookIds: pending.secretNotebookIds,
-  };
-}
-
 function stripReviewNote(changeSet: ChangeSet): ChangeSet {
   if (!changeSet.reviewNoteId) return changeSet;
   return {
@@ -626,25 +466,6 @@ function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
   return change.operation === "update";
 }
 
-function automaticApplyRequest(
-  changeSet: ChangeSet,
-  acceptedChangeIds: string[],
-  applyToken: string,
-): Extract<PanelRequest, { type: "changes.apply" }> {
-  return {
-    version: PROTOCOL_VERSION,
-    messageId: randomUUID(),
-    chatId: changeSet.chatId,
-    runId: changeSet.runId,
-    type: "changes.apply",
-    payload: {
-      changeSetId: changeSet.id,
-      acceptedIds: acceptedChangeIds,
-      applyToken,
-    },
-  };
-}
-
 function applyCounts(result: ApplyResult): {
   readonly applied: number;
   readonly conflicts: number;
@@ -655,20 +476,4 @@ function applyCounts(result: ApplyResult): {
     conflicts: result.changes.filter((change) => change.status === "conflict")
       .length,
   };
-}
-
-function approvalSummary(result: ApplyResult, automatic: boolean): string {
-  const details = result.changes.map((change) => ({
-    target: change.targetLabel,
-    status: change.status,
-    ...(change.message ? { message: change.message } : {}),
-  }));
-  const policy = automatic
-    ? "The chat's automatic application was enabled by the user."
-    : "The user reviewed the proposed write batch.";
-  return [
-    policy,
-    "Treat these execution results as authoritative and continue the task:",
-    JSON.stringify(details),
-  ].join("\n");
 }
