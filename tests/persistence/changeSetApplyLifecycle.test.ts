@@ -257,8 +257,14 @@ class RecordingChangeSetApplicationPort {
     });
   }
 
-  public mergeRollbacks(): Promise<void> {
-    return Promise.resolve();
+  public mergeRollbacks(): Promise<{
+    commit(): Promise<void>;
+    rollback(): Promise<void>;
+  }> {
+    return Promise.resolve({
+      commit: (): Promise<void> => Promise.resolve(),
+      rollback: (): Promise<void> => Promise.resolve(),
+    });
   }
 }
 

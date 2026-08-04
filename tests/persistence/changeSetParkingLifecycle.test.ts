@@ -420,11 +420,14 @@ class RecordingApplicationPort {
     runId: string,
     chatId: string,
     sourceRunId: string,
-  ): Promise<void> {
+  ): Promise<{ commit(): Promise<void>; rollback(): Promise<void> }> {
     this.merges.push({ runId, chatId, sourceRunId });
     if (this.failMergesWith)
       return Promise.reject(new Error(this.failMergesWith));
-    return Promise.resolve();
+    return Promise.resolve({
+      commit: (): Promise<void> => Promise.resolve(),
+      rollback: (): Promise<void> => Promise.resolve(),
+    });
   }
 }
 

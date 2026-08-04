@@ -231,31 +231,52 @@ describe("JoplinNoteRepository", () => {
 
   test("moves a versioned note to Joplin Trash without permanent deletion", async () => {
     const dataPort = new FakeJoplinDataPort();
+    let readCount = 0;
+    dataPort.getHandler = async () => {
+      readCount += 1;
+      return {
+        id: "note-1",
+        parent_id: "folder-1",
+        title: "Concurrent note",
+        body: "Changed elsewhere",
+        updated_time: readCount === 1 ? 20 : 21,
+        order: 7,
+        ...(readCount === 1 ? {} : { deleted_time: 99 }),
+      };
+    };
     const repository = new JoplinNoteRepository(dataPort);
 
-    await repository.trashNote({
+    const trashed = await repository.trashNote({
       noteId: "note-1",
       expectedUpdatedTime: 20,
     });
 
     expect(dataPort.deleteCalls).toEqual([{ path: ["notes", "note-1"] }]);
+    expect(trashed.updatedTime).toBe(21);
   });
 
   test("moves a versioned notebook to Joplin Trash without permanent deletion", async () => {
-    const dataPort = new FakeJoplinDataPort({
-      id: "folder-1",
-      parent_id: "",
-      title: "Archive",
-      updated_time: 40,
-    });
+    const dataPort = new FakeJoplinDataPort();
+    let readCount = 0;
+    dataPort.getHandler = async () => {
+      readCount += 1;
+      return {
+        id: "folder-1",
+        parent_id: "",
+        title: "Archive",
+        updated_time: readCount === 1 ? 40 : 41,
+        ...(readCount === 1 ? {} : { deleted_time: 99 }),
+      };
+    };
     const repository = new JoplinNoteRepository(dataPort);
 
-    await repository.trashNotebook({
+    const trashed = await repository.trashNotebook({
       notebookId: "folder-1",
       expectedUpdatedTime: 40,
     });
 
     expect(dataPort.deleteCalls).toEqual([{ path: ["folders", "folder-1"] }]);
+    expect(trashed.updatedTime).toBe(41);
   });
 
   test("restores a trashed note by clearing deleted_time", async () => {
@@ -290,17 +311,22 @@ describe("JoplinNoteRepository", () => {
   });
 
   test("restores a trashed note into a chosen notebook when parent is also trashed", async () => {
-    const dataPort = new FakeJoplinDataPort({
-      id: "note-1",
-      parent_id: "folder-gone",
-      title: "Draft",
-      updated_time: 20,
-      order: 7,
-      deleted_time: 99,
-    });
+    const dataPort = new FakeJoplinDataPort();
+    let readCount = 0;
+    dataPort.getHandler = async () => {
+      readCount += 1;
+      return {
+        id: "note-1",
+        parent_id: readCount === 1 ? "folder-gone" : "folder-2",
+        title: "Draft",
+        updated_time: readCount === 1 ? 20 : 21,
+        order: 7,
+        ...(readCount === 1 ? { deleted_time: 99 } : {}),
+      };
+    };
     const repository = new JoplinNoteRepository(dataPort);
 
-    await repository.restoreNote({
+    const restored = await repository.restoreNote({
       noteId: "note-1",
       expectedUpdatedTime: 20,
       parentId: "folder-2",
@@ -312,18 +338,25 @@ describe("JoplinNoteRepository", () => {
         body: { deleted_time: 0, parent_id: "folder-2" },
       },
     ]);
+    expect(restored.updatedTime).toBe(21);
   });
 
   test("restores a trashed notebook and clears deleted_time", async () => {
     const dataPort = new FakeJoplinDataPort();
+    let notebookReadCount = 0;
     dataPort.getHandler = async (path) => {
-      if (path[0] === "folders" && path[1] === "folder-1" && path.length === 2) {
+      if (
+        path[0] === "folders" &&
+        path[1] === "folder-1" &&
+        path.length === 2
+      ) {
+        notebookReadCount += 1;
         return {
           id: "folder-1",
           parent_id: "",
           title: "Archive",
-          updated_time: 40,
-          deleted_time: 99,
+          updated_time: notebookReadCount === 1 ? 40 : 41,
+          ...(notebookReadCount === 1 ? { deleted_time: 99 } : {}),
         };
       }
       if (path[0] === "folders" && path.length === 1) {
@@ -336,7 +369,7 @@ describe("JoplinNoteRepository", () => {
     };
     const repository = new JoplinNoteRepository(dataPort);
 
-    await repository.restoreNotebook({
+    const restored = await repository.restoreNotebook({
       notebookId: "folder-1",
       expectedUpdatedTime: 40,
     });
@@ -347,6 +380,7 @@ describe("JoplinNoteRepository", () => {
         body: { deleted_time: 0 },
       },
     ]);
+    expect(restored.updatedTime).toBe(41);
   });
 
   test("lists soft-deleted notes and notebooks from Trash", async () => {
@@ -416,8 +450,7 @@ describe("JoplinNoteRepository", () => {
     });
     expect(
       dataPort.getCalls.some(
-        (call) =>
-          call.path[0] === "notes" && call.query?.include_deleted === 1,
+        (call) => call.path[0] === "notes" && call.query?.include_deleted === 1,
       ),
     ).toBe(true);
     expect(

@@ -2,12 +2,17 @@ import { DomainError, safeValue } from "../shared/errors";
 import type { ChangeSet, ChangeSetStore } from "./changeSetStore";
 import type { ChatStore, PersistedChat } from "./chatStore";
 
+export interface ChangeSetRollbackMergeReceipt {
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
+
 export interface ChangeSetRollbackMergePort {
   mergeRollbacks(
     runId: string,
     chatId: string,
     sourceRunId: string,
-  ): Promise<void>;
+  ): Promise<ChangeSetRollbackMergeReceipt>;
 }
 
 export interface ChangeSetParkingReviewNotePort {

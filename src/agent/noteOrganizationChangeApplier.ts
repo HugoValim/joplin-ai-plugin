@@ -205,7 +205,7 @@ async function preflightNotebookChange(
 export async function applyOrganizationChange(
   item: ReadyOrganizationChange,
   repository: NoteOrganizationRepository,
-): Promise<void> {
+): Promise<OrganizationRollbackItem> {
   if (isNotebookReadyChange(item))
     return applyNotebookOrganizationChange(item, repository);
   return applyNoteOrganizationChange(item, repository);
@@ -233,82 +233,127 @@ function isNotebookReadyChange(
 async function applyNotebookOrganizationChange(
   item: NotebookReadyChange,
   repository: NoteOrganizationRepository,
-): Promise<void> {
+): Promise<OrganizationRollbackItem> {
   if (item.kind === "notebook-create")
     return applyNotebookCreate(item, repository);
   if (item.kind === "notebook-rename")
     return applyNotebookRename(item, repository);
   if (item.kind === "notebook-move") return applyNotebookMove(item, repository);
   if (item.kind === "notebook-restore") {
-    await repository.restoreNotebook({
+    const applied = await repository.restoreNotebook({
       notebookId: item.change.notebookId,
       expectedUpdatedTime: item.change.expectedUpdatedTime,
       ...(item.change.parentId !== undefined
         ? { parentId: item.change.parentId }
         : {}),
     });
-    return;
+    return {
+      kind: "notebook-restore",
+      changeId: item.change.id,
+      original: item.original,
+      expectedAppliedUpdatedTime: applied.updatedTime,
+    };
   }
-  await repository.trashNotebook({
+  const applied = await repository.trashNotebook({
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
   });
+  return {
+    kind: "notebook-trash",
+    changeId: item.change.id,
+    original: item.original,
+    expectedAppliedUpdatedTime: applied.updatedTime,
+  };
 }
 
 async function applyNotebookCreate(
   item: Extract<ReadyOrganizationChange, { kind: "notebook-create" }>,
   repository: NoteOrganizationRepository,
-): Promise<void> {
-  await repository.createNotebook({
+): Promise<OrganizationRollbackItem> {
+  const created = await repository.createNotebook({
     parentId: item.change.parentId,
     title: item.change.title,
   });
+  return {
+    kind: "notebook-create",
+    changeId: item.change.id,
+    notebookId: created.id,
+    expectedAppliedUpdatedTime: created.updatedTime,
+  };
 }
 
 async function applyNotebookRename(
   item: Extract<ReadyOrganizationChange, { kind: "notebook-rename" }>,
   repository: NoteOrganizationRepository,
-): Promise<void> {
-  await repository.updateNotebookMetadata({
+): Promise<OrganizationRollbackItem> {
+  const applied = await repository.updateNotebookMetadata({
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
     title: item.change.title,
   });
+  return {
+    kind: "notebook-metadata",
+    changeId: item.change.id,
+    original: item.original,
+    expectedAppliedUpdatedTime: applied.updatedTime,
+  };
 }
 
 async function applyNotebookMove(
   item: Extract<ReadyOrganizationChange, { kind: "notebook-move" }>,
   repository: NoteOrganizationRepository,
-): Promise<void> {
-  await repository.updateNotebookMetadata({
+): Promise<OrganizationRollbackItem> {
+  const applied = await repository.updateNotebookMetadata({
     notebookId: item.change.notebookId,
     expectedUpdatedTime: item.change.expectedUpdatedTime,
     parentId: item.change.parentId,
   });
+  return {
+    kind: "notebook-metadata",
+    changeId: item.change.id,
+    original: item.original,
+    expectedAppliedUpdatedTime: applied.updatedTime,
+  };
 }
 
 async function applyNoteOrganizationChange(
   item: NoteReadyChange,
   repository: NoteOrganizationRepository,
-): Promise<void> {
+): Promise<OrganizationRollbackItem> {
   if (item.kind === "note-delete") {
-    await repository.trashNote({
+    const applied = await repository.trashNote({
       noteId: item.change.noteId,
       expectedUpdatedTime: item.change.expectedUpdatedTime,
     });
-    return;
+    return {
+      kind: "note-trash",
+      changeId: item.change.id,
+      original: item.original,
+      expectedAppliedUpdatedTime: applied.updatedTime,
+    };
   }
   if (item.kind === "note-restore") {
-    await repository.restoreNote({
+    const applied = await repository.restoreNote({
       noteId: item.change.noteId,
       expectedUpdatedTime: item.change.expectedUpdatedTime,
       ...(item.change.parentId !== undefined
         ? { parentId: item.change.parentId }
         : {}),
     });
-    return;
+    return {
+      kind: "note-restore",
+      changeId: item.change.id,
+      original: item.original,
+      expectedAppliedUpdatedTime: applied.updatedTime,
+    };
   }
-  await repository.updateNoteMetadata(noteMetadataUpdate(item));
+  const applied = await repository.updateNoteMetadata(noteMetadataUpdate(item));
+  return {
+    kind: "note-metadata",
+    changeId: item.change.id,
+    original: item.original,
+    expectedAppliedUpdatedTime: applied.updatedTime,
+  };
 }
 
 function noteMetadataUpdate(
