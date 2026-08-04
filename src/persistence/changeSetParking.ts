@@ -61,11 +61,12 @@ export class ChangeSetParking {
     application: ChangeSetRollbackMergePort,
   ): Promise<ChangeSet> {
     const merge = this.requireMergeable(chatId, applied, parked);
-    await application.mergeRollbacks(
+    const receipt = await application.mergeRollbacks(
       merge.applied.runId,
       chatId,
       merge.parked.runId,
     );
+    await receipt.commit();
     return this.changes.absorbAppliedChanges(
       merge.applied.id,
       merge.parked.changes,
