@@ -184,6 +184,18 @@ describe("ChangeReview", () => {
     });
   });
 
+  test("falls back to the Change Set id when a run id is absent", () => {
+    const transport: ChangeReviewTransport = { send: jest.fn() };
+    renderProposed({
+      changeSet: { ...CHANGE_SET, runId: undefined },
+      transport,
+    });
+
+    expect(transport.send).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "changes-1" }),
+    );
+  });
+
   test("resets selection and auto-opens when the pending Change Set changes", () => {
     const transport: ChangeReviewTransport = { send: jest.fn() };
     const rendered = renderProposed({ transport });
