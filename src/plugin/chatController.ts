@@ -144,13 +144,13 @@ export class ChatController {
         return;
       case "chat.clear":
         this.activeRuns.cancelChat(request.chatId, "Chat cleared");
-        this.approvals.abandonChat(request.chatId);
+        await this.approvals.abandonChat(request.chatId);
         await this.chats.clear(request.chatId);
         await this.sendSnapshot();
         return;
       case "chat.delete":
         this.activeRuns.cancelChat(request.chatId, "Chat deleted");
-        this.approvals.abandonChat(request.chatId);
+        await this.approvals.abandonChat(request.chatId);
         await this.selectChat(
           await deleteChatAndChooseNext(
             this.chats,

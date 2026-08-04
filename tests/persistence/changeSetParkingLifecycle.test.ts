@@ -247,6 +247,34 @@ describe("ChangeSetLifecycle cumulative parking", () => {
     expect(harness.changes.get(newer.id)?.changes).toHaveLength(1);
     expect(harness.reviewNotes.disposed).toEqual(["review-run-older"]);
   });
+
+  test("disposes a replaced proposal Review Note exactly once after apply", async () => {
+    const harness = await parkingHarness();
+    const proposed = await addProposedReview(
+      harness,
+      "run-replacement",
+      "Replacement",
+    );
+    const token = harness.lifecycle.ensureApplyToken(proposed.id);
+    harness.reviewNotes.replacementNoteId = "review-applied";
+
+    await harness.lifecycle.apply(
+      {
+        chatId: harness.chat.id,
+        runId: proposed.runId,
+        changeSetId: proposed.id,
+        acceptedChangeIds: proposed.changes.map((change) => change.id),
+        applyToken: token,
+        automatic: false,
+      },
+      harness.application,
+      new RecordingTransitionPort(),
+    );
+
+    const saved = await harness.chats.get(harness.chat.id);
+    expect(saved?.pendingChangeSet?.reviewNoteId).toBe("review-applied");
+    expect(harness.reviewNotes.disposed).toEqual(["review-run-replacement"]);
+  });
 });
 
 interface ParkingHarness {

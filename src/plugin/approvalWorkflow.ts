@@ -32,14 +32,14 @@ export class ApprovalWorkflow {
   private readonly changeSetLifecycle: ChangeSetLifecycle;
 
   public constructor(
-    private readonly chats: ChatStore,
-    private readonly changes: ChangeSetStore,
+    chats: ChatStore,
+    changes: ChangeSetStore,
     private readonly applier: ChangeApplier,
     tools: ToolRegistry,
     providers: ContinuationProviderPort,
     private readonly events: PluginEventSender,
     activeRuns: RunCancellationRegistry,
-    private readonly reviewNotes: ReviewNotePort,
+    reviewNotes: ReviewNotePort,
     changeSetLifecycle?: ChangeSetLifecycle,
     modelRuns?: ModelRunLifecycle,
   ) {
@@ -80,8 +80,8 @@ export class ApprovalWorkflow {
     );
   }
 
-  public abandonChat(chatId: string): void {
-    void this.disposePendingReviewNote(chatId);
+  public async abandonChat(chatId: string): Promise<void> {
+    await this.changeSetLifecycle.abandon(chatId);
     this.continuationRuns.deleteChat(chatId);
   }
 
@@ -117,7 +117,10 @@ export class ApprovalWorkflow {
     changeSet: ChangeSet,
     autoApply: boolean,
   ): Promise<void> {
-    await this.parkAppliedReview(changeSet.chatId);
+    await this.changeSetLifecycle.parkAppliedReview(
+      changeSet.chatId,
+      this.applier,
+    );
     const activation = await this.changeSetLifecycle.activateReview(
       changeSet,
       autoApply,
@@ -194,8 +197,7 @@ export class ApprovalWorkflow {
       deleteContinuation: (changeSetId): void =>
         this.continuationRuns.delete(changeSetId),
       discardCompleted: (input): void => this.postDiscardCompleted(input),
-      // Wired to panel publish in the parking-wiring slice.
-      reviewRestored: (): void => {},
+      reviewRestored: (changeSet): void => this.postRestoredReview(changeSet),
     };
   }
 
@@ -295,12 +297,7 @@ export class ApprovalWorkflow {
     event: ChangeSetResolutionEvent,
   ): void {
     if (event.mode === "review" && !event.summary) {
-      this.events.post(
-        "changes.proposed",
-        input.chatId,
-        toChangeSetView(event.changeSet, ""),
-        input.runId,
-      );
+      this.postRestoredReview(event.changeSet);
       return;
     }
     this.events.post(
@@ -312,6 +309,9 @@ export class ApprovalWorkflow {
       },
       input.runId,
     );
+    if (event.mode === "review" && event.restored) {
+      this.postRestoredReview(event.changeSet);
+    }
   }
 
   private postApplyCompleted(
@@ -330,61 +330,14 @@ export class ApprovalWorkflow {
     );
   }
 
-  private async parkAppliedReview(chatId: string): Promise<void> {
-    const chat = await this.chats.get(chatId);
-    if (!chat?.pendingChangeSet) return;
-    const pending = chat.pendingChangeSet;
-    if (pending.status !== "applied" && pending.status !== "partial") return;
-    await this.disposeReviewNote(pending.reviewNoteId);
-    const parkedWithoutNote = stripReviewNote(pending);
-    const existing = chat.parkedAppliedChangeSet;
-    if (!existing) {
-      await this.chats.save({
-        ...chat,
-        updatedAt: Date.now(),
-        pendingChangeSet: null,
-        parkedAppliedChangeSet: parkedWithoutNote,
-      });
-      return;
-    }
-    const merged = await this.changeSetLifecycle.mergeAppliedReviews(
-      chatId,
-      parkedWithoutNote,
-      existing,
-      this.applier,
+  private postRestoredReview(changeSet: ChangeSet): void {
+    this.events.post(
+      "changes.proposed",
+      changeSet.chatId,
+      toChangeSetView(changeSet, ""),
+      changeSet.runId,
     );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: stripReviewNote(merged),
-    });
   }
-
-  private async disposePendingReviewNote(chatId: string): Promise<void> {
-    const chat = await this.chats.get(chatId);
-    await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat?.parkedAppliedChangeSet?.reviewNoteId);
-  }
-
-  private async disposeReviewNote(
-    reviewNoteId: string | undefined,
-  ): Promise<void> {
-    if (!reviewNoteId) return;
-    await this.reviewNotes.dispose(reviewNoteId);
-  }
-}
-
-function stripReviewNote(changeSet: ChangeSet): ChangeSet {
-  if (!changeSet.reviewNoteId) return changeSet;
-  return {
-    id: changeSet.id,
-    chatId: changeSet.chatId,
-    runId: changeSet.runId,
-    createdAt: changeSet.createdAt,
-    status: changeSet.status,
-    changes: changeSet.changes,
-  };
 }
 
 function applyCounts(result: ApplyResult): {
