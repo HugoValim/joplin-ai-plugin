@@ -97,6 +97,7 @@ class ListNotebookNotesTool extends OrganizationTool<
   public readonly description =
     "List notes in one notebook with versions and manual sort order.";
   public readonly risk = "read" as const;
+  public override readonly classification = "discovery" as const;
   public readonly inputSchema = Type.Object(
     {
       notebook_id: OrganizationIdentifierSchema,

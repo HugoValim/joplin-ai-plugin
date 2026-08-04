@@ -1,59 +1,214 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeSetView } from "../shared/protocol";
 import { countDiffStats } from "./diffStats";
 
 type ChangeView = ChangeSetView["changes"][number];
 
+export type ChangeReviewIntent =
+  | ReviewApplyIntent
+  | ReviewKeepIntent
+  | ReviewUndoIntent
+  | ReviewDiscardIntent
+  | ReviewDenyIntent
+  | ReviewOpenIntent;
+
+interface ReviewApplyIntent extends ReviewIntentContext {
+  readonly type: "apply";
+  readonly phase: "Applying changes";
+  readonly acceptedIds: readonly string[];
+  readonly applyToken: string;
+}
+
+interface ReviewKeepIntent extends ReviewIntentContext {
+  readonly type: "keep";
+  readonly phase: "Keeping changes";
+  readonly changeIds: readonly string[];
+}
+
+interface ReviewUndoIntent extends ReviewIntentContext {
+  readonly type: "undo";
+  readonly phase: "Undoing changes";
+  readonly changeIds: readonly string[];
+}
+
+interface ReviewDiscardIntent extends ReviewIntentContext {
+  readonly type: "discard";
+  readonly phase: "Discarding changes";
+}
+
+interface ReviewDenyIntent extends ReviewIntentContext {
+  readonly type: "deny";
+  readonly phase: "Denying and restoring changes";
+}
+
+interface ReviewIntentContext {
+  readonly changeSetId: string;
+  readonly runId: string;
+}
+
+interface ReviewOpenIntent extends ReviewIntentContext {
+  readonly type: "open";
+}
+
+export interface ChangeReviewTransport {
+  readonly send: (intent: ChangeReviewIntent) => void;
+}
+
 interface ChangeReviewProps {
   readonly changeSet: ChangeSetView;
-  readonly acceptedIds: ReadonlySet<string>;
   readonly disabled: boolean;
   readonly phase: string;
-  readonly onToggle: (changeId: string) => void;
-  readonly onSelectAll: () => void;
-  readonly onSelectNone: () => void;
-  readonly onApply: () => void;
-  readonly onDiscard: () => void;
-  readonly onDeny: () => void;
-  readonly onOpenReview: () => void;
-  readonly onKeep: (changeId: string) => void;
-  readonly onKeepAll: () => void;
-  readonly onUndoChange: (changeId: string) => void;
-  readonly onUndoAll: () => void;
+  readonly transport: ChangeReviewTransport;
 }
 
 /**
  * Compact sidebar review strip; full diffs live in the Joplin Review Note.
  *
- * @example <ChangeReview changeSet={pending} acceptedIds={ids} {...actions} />
+ * @example <ChangeReview changeSet={pending} transport={transport} />
  */
 export function ChangeReview(props: ChangeReviewProps): JSX.Element {
   const postApply = isPostApplyReview(props.changeSet);
-  useAutoOpenReviewNote(props.changeSet.changeSetId, props.onOpenReview);
+  const [acceptedIds, setAcceptedIds] = useAcceptedChanges(props.changeSet);
+  const commands = reviewCommands(
+    props.changeSet,
+    acceptedIds,
+    props.transport,
+  );
+  useAutoOpenReviewNote(props.changeSet.changeSetId, commands.open);
 
   return (
     <section
       className="change-review change-review-compact"
       aria-labelledby="change-review-title"
     >
-      <ReviewHeader {...props} postApply={postApply} />
+      <ReviewHeader
+        {...props}
+        postApply={postApply}
+        onOpenReview={commands.open}
+        onSelectAll={() => setAcceptedIds(proposedIds(props.changeSet))}
+        onSelectNone={() => setAcceptedIds(new Set())}
+      />
       <div className="review-list" aria-label="Proposed changes" role="list">
         {props.changeSet.changes.map((change) => (
           <ChangeRow
             key={change.id}
             change={change}
-            accepted={props.acceptedIds.has(change.id)}
+            accepted={acceptedIds.has(change.id)}
             disabled={props.disabled}
             postApply={postApply}
-            onToggle={props.onToggle}
-            onKeep={() => props.onKeep(change.id)}
-            onUndo={() => props.onUndoChange(change.id)}
+            onToggle={(changeId) =>
+              setAcceptedIds((current) => toggleId(current, changeId))
+            }
+            onKeep={() => commands.keep([change.id])}
+            onUndo={() => commands.undo([change.id])}
           />
         ))}
       </div>
-      <ReviewFooter {...props} postApply={postApply} />
+      <ReviewFooter
+        {...props}
+        acceptedIds={acceptedIds}
+        postApply={postApply}
+        onApply={commands.apply}
+        onDiscard={commands.discard}
+        onDeny={commands.deny}
+        onKeepAll={() =>
+          commands.keep(props.changeSet.changes.map(({ id }) => id))
+        }
+        onUndoAll={commands.deny}
+      />
     </section>
   );
+}
+
+function useAcceptedChanges(
+  changeSet: ChangeSetView,
+): readonly [
+  ReadonlySet<string>,
+  React.Dispatch<React.SetStateAction<ReadonlySet<string>>>,
+] {
+  const [acceptedIds, setAcceptedIds] = useState<ReadonlySet<string>>(
+    proposedIds(changeSet),
+  );
+  useEffect(
+    () => setAcceptedIds(proposedIds(changeSet)),
+    [changeSet.changeSetId],
+  );
+  return [acceptedIds, setAcceptedIds];
+}
+
+function proposedIds(changeSet: ChangeSetView): ReadonlySet<string> {
+  return new Set(
+    changeSet.changes
+      .filter(({ status }) => status === "proposed")
+      .map(({ id }) => id),
+  );
+}
+
+function toggleId(
+  current: ReadonlySet<string>,
+  changeId: string,
+): ReadonlySet<string> {
+  const next = new Set(current);
+  if (next.has(changeId)) next.delete(changeId);
+  else next.add(changeId);
+  return next;
+}
+
+function reviewCommands(
+  changeSet: ChangeSetView,
+  acceptedIds: ReadonlySet<string>,
+  transport: ChangeReviewTransport,
+): ReviewCommands {
+  const base = {
+    changeSetId: changeSet.changeSetId,
+    runId: reviewRunId(changeSet),
+  };
+  return {
+    open: () => transport.send({ ...base, type: "open" }),
+    apply: () =>
+      transport.send({
+        ...base,
+        type: "apply",
+        phase: "Applying changes",
+        acceptedIds: [...acceptedIds],
+        applyToken: changeSet.applyToken,
+      }),
+    discard: () =>
+      transport.send({ ...base, type: "discard", phase: "Discarding changes" }),
+    deny: () =>
+      transport.send({
+        ...base,
+        type: "deny",
+        phase: "Denying and restoring changes",
+      }),
+    keep: (changeIds) =>
+      transport.send({
+        ...base,
+        type: "keep",
+        phase: "Keeping changes",
+        changeIds,
+      }),
+    undo: (changeIds) =>
+      transport.send({
+        ...base,
+        type: "undo",
+        phase: "Undoing changes",
+        changeIds,
+      }),
+  };
+}
+
+interface ReviewCommands {
+  readonly open: () => void;
+  readonly apply: () => void;
+  readonly discard: () => void;
+  readonly deny: () => void;
+  readonly keep: (changeIds: readonly string[]) => void;
+  readonly undo: (changeIds: readonly string[]) => void;
+}
+
+function reviewRunId(changeSet: ChangeSetView): string {
+  return changeSet.runId ?? changeSet.changeSetId;
 }
 
 function useAutoOpenReviewNote(
@@ -83,7 +238,12 @@ function ReviewHeader({
   onOpenReview,
   onSelectAll,
   onSelectNone,
-}: ChangeReviewProps & { readonly postApply: boolean }): JSX.Element {
+}: ChangeReviewProps & {
+  readonly postApply: boolean;
+  readonly onOpenReview: () => void;
+  readonly onSelectAll: () => void;
+  readonly onSelectNone: () => void;
+}): JSX.Element {
   return (
     <header className="review-header">
       <div>
@@ -207,7 +367,15 @@ function ReviewFooter({
   onDeny,
   onKeepAll,
   onUndoAll,
-}: ChangeReviewProps & { readonly postApply: boolean }): JSX.Element {
+}: Pick<ChangeReviewProps, "disabled"> & {
+  readonly acceptedIds: ReadonlySet<string>;
+  readonly postApply: boolean;
+  readonly onApply: () => void;
+  readonly onDiscard: () => void;
+  readonly onDeny: () => void;
+  readonly onKeepAll: () => void;
+  readonly onUndoAll: () => void;
+}): JSX.Element {
   if (postApply) {
     return (
       <footer className="review-footer">

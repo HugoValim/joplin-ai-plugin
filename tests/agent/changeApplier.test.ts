@@ -3,6 +3,8 @@ import {
   type FileWorkspaceWritePort,
   type FileWorkspaceWriteResolver,
   InMemoryRollbackStore,
+  type RollbackRecord,
+  type RollbackStore,
 } from "../../src/agent/changeApplier";
 import type {
   FileRollbackSnapshot,
@@ -49,6 +51,119 @@ class UnusedNoteRepository implements NoteRepository {
     _input: UpdateNoteBodyInput,
   ): Promise<NoteRecord> {
     throw new Error("No note changes expected");
+  }
+}
+
+class RecordingNoteRepository extends UnusedNoteRepository {
+  public readonly createdNotes: CreateNoteInput[] = [];
+
+  public override async createNote(
+    input: CreateNoteInput,
+  ): Promise<NoteRecord> {
+    this.createdNotes.push(input);
+    return {
+      id: "note-created",
+      parentId: input.parentId,
+      title: input.title,
+      body: input.body,
+      updatedTime: 2,
+    };
+  }
+}
+
+class MutableNoteRepository extends UnusedNoteRepository {
+  public note: NoteRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Guide",
+    body: "Old",
+    updatedTime: 10,
+  };
+
+  public override async readNote(): Promise<NoteRecord> {
+    return this.note;
+  }
+
+  public override async updateNoteBody(
+    input: UpdateNoteBodyInput,
+  ): Promise<NoteRecord> {
+    if (input.expectedUpdatedTime !== this.note.updatedTime)
+      throw new Error("updated_time conflict");
+    this.note = {
+      ...this.note,
+      body: input.body,
+      updatedTime: this.note.updatedTime + 1,
+    };
+    return this.note;
+  }
+}
+
+class RejectingRollbackStore implements RollbackStore {
+  public save(_record: RollbackRecord): Promise<void> {
+    return Promise.reject(new Error("Rollback storage unavailable"));
+  }
+
+  public get(_runId: string): Promise<RollbackRecord | null> {
+    return Promise.resolve(null);
+  }
+
+  public remove(_runId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public beginMerge(): Promise<void> {
+    return Promise.reject(new Error("Rollback storage unavailable"));
+  }
+
+  public pendingMerge(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
+  public commitPendingMerge(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public rollbackPendingMerge(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class RejectingFinalizeRollbackStore extends InMemoryRollbackStore {
+  private saves = 0;
+
+  public override save(record: RollbackRecord): Promise<void> {
+    this.saves += 1;
+    if (this.saves === 2) {
+      return Promise.reject(new Error("Rollback finalization unavailable"));
+    }
+    return super.save(record);
+  }
+}
+
+class RejectingMergeCommitOnce extends InMemoryRollbackStore {
+  private rejectCommit = true;
+
+  public override commitPendingMerge(
+    targetRunId: string,
+    sourceRunId: string,
+  ): Promise<void> {
+    if (this.rejectCommit) {
+      this.rejectCommit = false;
+      return Promise.reject(new Error("Merge journal removal unavailable"));
+    }
+    return super.commitPendingMerge(targetRunId, sourceRunId);
+  }
+}
+
+class RejectingMergeRollbackOnce extends InMemoryRollbackStore {
+  private rejectRollback = true;
+
+  public override rollbackPendingMerge(): Promise<void> {
+    if (this.rejectRollback) {
+      this.rejectRollback = false;
+      return Promise.reject(new Error("Merge rollback unavailable"));
+    }
+    return super.rollbackPendingMerge();
   }
 }
 
@@ -132,11 +247,17 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
       updatedTime: 41,
     };
   }
-  public async trashNote(input: TrashNoteInput): Promise<void> {
+  public async trashNote(input: TrashNoteInput): Promise<TrashedNoteRecord> {
     this.trashedNotes.push(input);
+    this.trashedNote = { ...this.trashedNote, updatedTime: 12 };
+    return this.trashedNote;
   }
-  public async trashNotebook(input: TrashNotebookInput): Promise<void> {
+  public async trashNotebook(
+    input: TrashNotebookInput,
+  ): Promise<TrashedNotebookRecord> {
     this.trashedNotebooks.push(input);
+    this.trashedNotebook = { ...this.trashedNotebook, updatedTime: 42 };
+    return this.trashedNotebook;
   }
   public async listTrash(): Promise<TrashListing> {
     return { notes: [this.trashedNote], notebooks: [this.trashedNotebook] };
@@ -147,11 +268,17 @@ class RecordingNoteOrganizationRepository implements NoteOrganizationRepository 
   public async readTrashedNotebook(): Promise<TrashedNotebookRecord> {
     return this.trashedNotebook;
   }
-  public async restoreNote(input: RestoreNoteInput): Promise<void> {
+  public async restoreNote(
+    input: RestoreNoteInput,
+  ): Promise<NoteMetadataRecord> {
     this.restoredNotes.push(input);
+    return { ...this.note, updatedTime: 13 };
   }
-  public async restoreNotebook(input: RestoreNotebookInput): Promise<void> {
+  public async restoreNotebook(
+    input: RestoreNotebookInput,
+  ): Promise<NotebookMetadataRecord> {
     this.restoredNotebooks.push(input);
+    return { ...this.notebook, updatedTime: 43 };
   }
 }
 
@@ -233,6 +360,151 @@ class FakeFileWorkspaceResolver implements FileWorkspaceWriteResolver {
 }
 
 describe("ChangeApplier", () => {
+  test("aborts before a created note write when the application journal fails", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-create-save-failure", {
+      kind: "note",
+      operation: "create",
+      parentId: "folder-1",
+      title: "Guide",
+      targetLabel: "Guide",
+      before: "Note does not exist.",
+      after: "Published",
+    });
+    const changeSet = changes.getByRun("run-create-save-failure");
+    if (!changeSet) throw new Error("Expected change set");
+    const notes = new RecordingNoteRepository();
+    const applier = new ChangeApplier(
+      changes,
+      notes,
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new RejectingRollbackStore(),
+      new RecordingNoteOrganizationRepository(),
+    );
+
+    await expect(
+      applier.apply(changeSet.id, [proposed.id], {
+        chatId: "chat-1",
+        runId: "run-create-save-failure",
+      }),
+    ).rejects.toThrow("Rollback storage unavailable");
+    expect(changes.get(changeSet.id)?.status).toBe("proposed");
+    expect(notes.createdNotes).toHaveLength(0);
+  });
+
+  test("retains a write-ahead lock when rollback finalization fails", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-finalize-failure", {
+      kind: "note",
+      operation: "create",
+      parentId: "folder-1",
+      title: "Guide",
+      targetLabel: "Guide",
+      before: "Note does not exist.",
+      after: "Published",
+    });
+    const changeSet = changes.getByRun("run-finalize-failure");
+    if (!changeSet) throw new Error("Expected change set");
+    const notes = new RecordingNoteRepository();
+    const rollbacks = new RejectingFinalizeRollbackStore();
+    const applier = new ChangeApplier(
+      changes,
+      notes,
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      rollbacks,
+      new RecordingNoteOrganizationRepository(),
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-finalize-failure",
+    });
+
+    expect(result.durabilityFailure).toContain(
+      "Rollback finalization unavailable",
+    );
+    expect(notes.createdNotes).toHaveLength(1);
+    expect(
+      await applier.retainedAppliedChangeIds("run-finalize-failure", "chat-1"),
+    ).toEqual([proposed.id]);
+  });
+
+  test("compensates an approved note update with optimistic concurrency", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-note-update", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "New",
+      expectedUpdatedTime: 10,
+    });
+    const changeSet = changes.getByRun("run-note-update");
+    if (!changeSet) throw new Error("Expected change set");
+    const notes = new MutableNoteRepository();
+    const applier = new ChangeApplier(
+      changes,
+      notes,
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+    );
+
+    await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-note-update",
+    });
+    expect(notes.note.body).toBe("New");
+    expect(
+      await applier.retainedAppliedChangeIds("run-note-update", "chat-1"),
+    ).toEqual([proposed.id]);
+
+    await applier.compensate("run-note-update", "chat-1", [proposed.id]);
+
+    expect(notes.note.body).toBe("Old");
+    expect(
+      await applier.retainedAppliedChangeIds("run-note-update", "chat-1"),
+    ).toEqual([]);
+  });
+
+  test("compensates an approved note creation through Joplin Trash", async () => {
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add("chat-1", "run-note-create", {
+      kind: "note",
+      operation: "create",
+      parentId: "folder-1",
+      title: "Guide",
+      targetLabel: "Guide",
+      before: "Note does not exist.",
+      after: "Published",
+    });
+    const changeSet = changes.getByRun("run-note-create");
+    if (!changeSet) throw new Error("Expected change set");
+    const notes = new RecordingNoteRepository();
+    const organizations = new RecordingNoteOrganizationRepository();
+    const applier = new ChangeApplier(
+      changes,
+      notes,
+      new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+      new InMemoryRollbackStore(),
+      organizations,
+    );
+
+    const result = await applier.apply(changeSet.id, [proposed.id], {
+      chatId: "chat-1",
+      runId: "run-note-create",
+    });
+    await applier.undo("run-note-create", "chat-1");
+
+    expect(result.undoAvailable).toBe(true);
+    expect(notes.createdNotes).toEqual([
+      { parentId: "folder-1", title: "Guide", body: "Published" },
+    ]);
+    expect(organizations.trashedNotes).toEqual([
+      { noteId: "note-created", expectedUpdatedTime: 2 },
+    ]);
+  });
+
   test("applies an approved note rename", async () => {
     const changes = new InMemoryChangeSetStore();
     const proposed = changes.add("chat-1", "run-rename", {
@@ -378,6 +650,14 @@ describe("ChangeApplier", () => {
     expect(organizations.trashedNotes).toEqual([
       { noteId: "note-1", expectedUpdatedTime: 10 },
     ]);
+    await applier.undo("run-delete", "chat-1");
+    expect(organizations.restoredNotes).toEqual([
+      {
+        noteId: "note-1",
+        expectedUpdatedTime: 12,
+        parentId: "folder-1",
+      },
+    ]);
   });
 
   test("applies an approved notebook creation", async () => {
@@ -408,8 +688,13 @@ describe("ChangeApplier", () => {
     });
 
     expect(result.changes[0]?.status).toBe("applied");
+    expect(result.undoAvailable).toBe(true);
     expect(organizations.createdNotebooks).toEqual([
       { parentId: "folder-1", title: "Archive" },
+    ]);
+    await applier.undo("run-notebook", "chat-1");
+    expect(organizations.trashedNotebooks).toEqual([
+      { notebookId: "folder-created", expectedUpdatedTime: 1 },
     ]);
   });
 
@@ -520,6 +805,10 @@ describe("ChangeApplier", () => {
     expect(organizations.trashedNotebooks).toEqual([
       { notebookId: "folder-1", expectedUpdatedTime: 40 },
     ]);
+    await applier.undo("run-notebook-delete", "chat-1");
+    expect(organizations.restoredNotebooks).toEqual([
+      { notebookId: "folder-1", expectedUpdatedTime: 42, parentId: "" },
+    ]);
   });
 
   test("applies an approved note restore from Joplin Trash", async () => {
@@ -554,6 +843,10 @@ describe("ChangeApplier", () => {
     expect(organizations.restoredNotes).toEqual([
       { noteId: "note-1", expectedUpdatedTime: 10, parentId: "folder-2" },
     ]);
+    await applier.undo("run-restore-note", "chat-1");
+    expect(organizations.trashedNotes).toEqual([
+      { noteId: "note-1", expectedUpdatedTime: 13 },
+    ]);
   });
 
   test("applies an approved notebook restore from Joplin Trash", async () => {
@@ -586,6 +879,10 @@ describe("ChangeApplier", () => {
     expect(result.changes[0]?.status).toBe("applied");
     expect(organizations.restoredNotebooks).toEqual([
       { notebookId: "folder-1", expectedUpdatedTime: 40 },
+    ]);
+    await applier.undo("run-restore-notebook", "chat-1");
+    expect(organizations.trashedNotebooks).toEqual([
+      { notebookId: "folder-1", expectedUpdatedTime: 43 },
     ]);
   });
 
@@ -719,10 +1016,93 @@ describe("ChangeApplier", () => {
       chatId: "chat-1",
       runId: "run-new",
     });
-    await applier.mergeRollbacks("run-new", "chat-1", "run-old");
+    const merge = await applier.mergeRollbacks("run-new", "chat-1", "run-old");
+    await merge.rollback();
+
+    expect((await rollbacks.get("run-new"))?.items).toHaveLength(1);
+    expect((await rollbacks.get("run-old"))?.items).toHaveLength(1);
+    const committed = await applier.mergeRollbacks(
+      "run-new",
+      "chat-1",
+      "run-old",
+    );
+    await committed.commit();
+    expect((await rollbacks.get("run-new"))?.items).toHaveLength(2);
+    expect((await rollbacks.get("run-old"))?.items).toHaveLength(0);
     await applier.undo("run-new", "chat-1", [older.id]);
 
     expect(workspace.files.get("a.md")?.content).toBe("A original");
     expect(workspace.files.get("b.md")?.content).toBe("B new");
   });
+
+  test("keeps merged ownership after chat save when journal commit fails", async () => {
+    const rollbacks = new RejectingMergeCommitOnce();
+    await rollbacks.save(rollbackRecord("run-target", "change-target"));
+    await rollbacks.save(rollbackRecord("run-source", "change-source"));
+    const applier = mergeOnlyApplier(rollbacks);
+    const receipt = await applier.mergeRollbacks(
+      "run-target",
+      "chat-1",
+      "run-source",
+    );
+
+    await expect(receipt.commit()).rejects.toThrow(
+      "Merge journal removal unavailable",
+    );
+    await expect(rollbacks.get("run-target")).rejects.toThrow(
+      "is pending; expected lifecycle recovery",
+    );
+    await applier.resolvePendingRollbackMerge("chat-1", null);
+
+    expect((await rollbacks.get("run-target"))?.items).toHaveLength(2);
+    expect((await rollbacks.get("run-source"))?.items).toHaveLength(0);
+  });
+
+  test("restores pre-merge ownership after chat save and rollback fail", async () => {
+    const rollbacks = new RejectingMergeRollbackOnce();
+    const target = rollbackRecord("run-target", "change-target");
+    const source = rollbackRecord("run-source", "change-source");
+    await rollbacks.save(target);
+    await rollbacks.save(source);
+    const applier = mergeOnlyApplier(rollbacks);
+    const receipt = await applier.mergeRollbacks(
+      target.runId,
+      target.chatId,
+      source.runId,
+    );
+
+    await expect(receipt.rollback()).rejects.toThrow(
+      "Merge rollback unavailable",
+    );
+    await applier.resolvePendingRollbackMerge("chat-1", source.runId);
+
+    expect(await rollbacks.get(target.runId)).toEqual(target);
+    expect(await rollbacks.get(source.runId)).toEqual(source);
+  });
 });
+
+function mergeOnlyApplier(rollbacks: RollbackStore): ChangeApplier {
+  return new ChangeApplier(
+    new InMemoryChangeSetStore(),
+    new UnusedNoteRepository(),
+    new FakeFileWorkspaceResolver(new FakeFileWorkspace()),
+    rollbacks,
+  );
+}
+
+function rollbackRecord(runId: string, changeId: string): RollbackRecord {
+  return {
+    runId,
+    chatId: "chat-1",
+    createdAt: Date.now(),
+    items: [
+      {
+        kind: "note",
+        changeId,
+        noteId: `note-${changeId}`,
+        originalBody: "Old",
+        expectedAppliedUpdatedTime: 2,
+      },
+    ],
+  };
+}

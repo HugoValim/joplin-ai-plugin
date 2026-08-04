@@ -293,15 +293,19 @@ export class JoplinNoteRepository
   }
 
   /** Soft-deletes a note into Joplin Trash after a version check. */
-  public async trashNote(input: TrashNoteInput): Promise<void> {
+  public async trashNote(input: TrashNoteInput): Promise<TrashedNoteRecord> {
     const current = await this.readNoteMetadata(input.noteId);
     await this.trash.trashNote(input, current.updatedTime);
+    return this.readTrashedNote(input.noteId);
   }
 
   /** Soft-deletes a notebook and its contents into Joplin Trash. */
-  public async trashNotebook(input: TrashNotebookInput): Promise<void> {
+  public async trashNotebook(
+    input: TrashNotebookInput,
+  ): Promise<TrashedNotebookRecord> {
     const current = await this.readNotebook(input.notebookId);
     await this.trash.trashNotebook(input, current.updatedTime);
+    return this.readTrashedNotebook(input.notebookId);
   }
 
   /** Lists soft-deleted notes and notebooks from Joplin Trash. */
@@ -322,13 +326,19 @@ export class JoplinNoteRepository
   }
 
   /** Restores a soft-deleted note from Joplin Trash. */
-  public restoreNote(input: RestoreNoteInput): Promise<void> {
-    return this.trash.restoreNote(input);
+  public async restoreNote(
+    input: RestoreNoteInput,
+  ): Promise<NoteMetadataRecord> {
+    await this.trash.restoreNote(input);
+    return this.readNoteMetadata(input.noteId);
   }
 
   /** Restores a soft-deleted notebook and its trashed contents. */
-  public restoreNotebook(input: RestoreNotebookInput): Promise<void> {
-    return this.trash.restoreNotebook(input);
+  public async restoreNotebook(
+    input: RestoreNotebookInput,
+  ): Promise<NotebookMetadataRecord> {
+    await this.trash.restoreNotebook(input);
+    return this.readNotebook(input.notebookId);
   }
 
   /**

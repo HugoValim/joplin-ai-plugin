@@ -71,11 +71,13 @@ class FakeNoteOrganizationRepository implements NoteOrganizationRepository {
     throw new Error("Proposal tools must not write");
   }
 
-  public async trashNote(_input: TrashNoteInput): Promise<void> {
+  public async trashNote(_input: TrashNoteInput): Promise<TrashedNoteRecord> {
     throw new Error("Proposal tools must not write");
   }
 
-  public async trashNotebook(_input: TrashNotebookInput): Promise<void> {
+  public async trashNotebook(
+    _input: TrashNotebookInput,
+  ): Promise<TrashedNotebookRecord> {
     throw new Error("Proposal tools must not write");
   }
 
@@ -110,11 +112,15 @@ class FakeNoteOrganizationRepository implements NoteOrganizationRepository {
     };
   }
 
-  public async restoreNote(_input: RestoreNoteInput): Promise<void> {
+  public async restoreNote(
+    _input: RestoreNoteInput,
+  ): Promise<NoteMetadataRecord> {
     throw new Error("Proposal tools must not write");
   }
 
-  public async restoreNotebook(_input: RestoreNotebookInput): Promise<void> {
+  public async restoreNotebook(
+    _input: RestoreNotebookInput,
+  ): Promise<NotebookMetadataRecord> {
     throw new Error("Proposal tools must not write");
   }
 }
@@ -222,7 +228,10 @@ describe("note organization proposal tools", () => {
           title: "Published",
         },
       },
-      toolContext({ runId: "run-rename", readableNoteIds: new Set(["note-1"]) }),
+      toolContext({
+        runId: "run-rename",
+        readableNoteIds: new Set(["note-1"]),
+      }),
     );
 
     expect(changes.getByRun("run-rename")?.changes).toEqual([
@@ -312,7 +321,10 @@ describe("note organization proposal tools", () => {
           order: 250,
         },
       },
-      toolContext({ runId: "run-reorder", readableNoteIds: new Set(["note-1"]) }),
+      toolContext({
+        runId: "run-reorder",
+        readableNoteIds: new Set(["note-1"]),
+      }),
     );
 
     expect(changes.getByRun("run-reorder")?.changes).toEqual([
@@ -340,7 +352,10 @@ describe("note organization proposal tools", () => {
         name: "delete_note",
         arguments: { note_id: "note-1", expected_updated_time: 10 },
       },
-      toolContext({ runId: "run-delete", readableNoteIds: new Set(["note-1"]) }),
+      toolContext({
+        runId: "run-delete",
+        readableNoteIds: new Set(["note-1"]),
+      }),
     );
 
     expect(changes.getByRun("run-delete")?.changes).toEqual([
@@ -495,7 +510,10 @@ describe("note organization proposal tools", () => {
             parent_id: "",
           },
         },
-        toolContext({ runId: "run-move-note-root", readableNoteIds: new Set(["note-1"]) }),
+        toolContext({
+          runId: "run-move-note-root",
+          readableNoteIds: new Set(["note-1"]),
+        }),
       ),
     ).rejects.toThrow("expected schema for tool move_note");
   });
@@ -519,7 +537,10 @@ describe("note organization proposal tools", () => {
           parent_id: "folder-2",
         },
       },
-      toolContext({ runId: "run-move-string-time", readableNoteIds: new Set(["note-1"]) }),
+      toolContext({
+        runId: "run-move-string-time",
+        readableNoteIds: new Set(["note-1"]),
+      }),
     );
 
     expect(changes.getByRun("run-move-string-time")?.changes).toEqual([
@@ -551,7 +572,10 @@ describe("note organization proposal tools", () => {
             parent_id: "folder-2",
           },
         },
-        toolContext({ runId: "run-stale-move", readableNoteIds: new Set(["note-1"]) }),
+        toolContext({
+          runId: "run-stale-move",
+          readableNoteIds: new Set(["note-1"]),
+        }),
       ),
     ).rejects.toThrow("expected updated_time 999");
   });

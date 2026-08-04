@@ -53,6 +53,7 @@ class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
   public readonly name = "echo";
   public readonly description = "Return success";
   public readonly risk = "read" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -71,7 +72,7 @@ class EchoTool implements AgentTool<Record<string, never>, { ok: boolean }> {
   }
 }
 
-/** Named like a real content-read tool so it counts toward the read budget. */
+/** Classified as a content read so it counts toward the read budget. */
 class ContentReadTool implements AgentTool<
   Record<string, never>,
   { ok: boolean }
@@ -79,6 +80,7 @@ class ContentReadTool implements AgentTool<
   public readonly name = "read_note";
   public readonly description = "Read a note body";
   public readonly risk = "read" as const;
+  public readonly classification = "content-read" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -107,6 +109,7 @@ class ListTool implements AgentTool<
   public readonly name = "list_notebooks";
   public readonly description = "List notebooks";
   public readonly risk = "read" as const;
+  public readonly classification = "discovery" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -155,6 +158,7 @@ class ListNotebookNotesTool implements AgentTool<
   public readonly name = "list_notebook_notes";
   public readonly description = "List notes in a notebook";
   public readonly risk = "read" as const;
+  public readonly classification = "discovery" as const;
   public readonly inputSchema = Type.Object(
     { notebook_id: Type.String({ minLength: 1 }) },
     { additionalProperties: false },
@@ -271,6 +275,7 @@ class ProposeTool implements AgentTool<
   public readonly name = "propose";
   public readonly description = "Collect a proposal";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -316,7 +321,11 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Loop forever" }],
-          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false,
+          vault: true,
+          readOnly: false,
+          readableNoteIds: new Set<string>(),
+          secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
@@ -388,7 +397,11 @@ describe("AgentRunner", () => {
         chatId: "chat-1",
         runId: "run-1",
         messages: [{ role: "user", content: "Improve the guide" }],
-        hasFileWorkspace: true, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+        hasFileWorkspace: true,
+        vault: true,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
       },
       new AbortController().signal,
     );
@@ -451,7 +464,11 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Do not run" }],
-          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false,
+          vault: true,
+          readOnly: false,
+          readableNoteIds: new Set<string>(),
+          secretNotebookIds: new Set<string>(),
         },
         controller.signal,
       ),
@@ -513,7 +530,7 @@ describe("AgentRunner", () => {
           messages: [{ role: "user", content: "Keep reading" }],
           hasFileWorkspace: false,
           vault: false,
-        readOnly: false,
+          readOnly: false,
           readableNoteIds: new Set<string>(),
           secretNotebookIds: new Set<string>(),
         },
@@ -726,9 +743,7 @@ describe("AgentRunner", () => {
       {
         chatId: "chat-1",
         runId: "run-force-plan",
-        messages: [
-          { role: "user", content: "Improve writing in all notes" },
-        ],
+        messages: [{ role: "user", content: "Improve writing in all notes" }],
         hasFileWorkspace: false,
         vault: false,
         readOnly: false,
@@ -1126,8 +1141,7 @@ describe("AgentRunner", () => {
     expect(result.status).toBe("awaiting-approval");
     const capped = result.messages.filter(
       (message) =>
-        message.role === "tool" &&
-        message.content.includes("per-segment cap"),
+        message.role === "tool" && message.content.includes("per-segment cap"),
     );
     expect(capped.length).toBeGreaterThanOrEqual(1);
     expect(captured[1]?.tools.map((tool) => tool.name)).not.toContain(
@@ -1155,7 +1169,11 @@ describe("AgentRunner", () => {
                 name: "set_agent_plan",
                 arguments: {
                   items: [
-                    { id: "1", content: "Improve batch 1", status: "completed" },
+                    {
+                      id: "1",
+                      content: "Improve batch 1",
+                      status: "completed",
+                    },
                     { id: "2", content: "Improve batch 2" },
                   ],
                 },
@@ -1371,6 +1389,7 @@ class StrictMoveTool implements AgentTool<
   public readonly name = "strict_move";
   public readonly description = "Require destination notebook";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       note_id: Type.String({ minLength: 1 }),

@@ -16,10 +16,34 @@ import type {
 } from "../persistence/changeSetStore";
 import { DomainError, safeValue } from "../shared/errors";
 import {
+  ChangeCompensator,
+  type RollbackApplicationJournal,
+  type RollbackItem,
+  type RollbackMergeReceipt,
+  type RollbackRecord,
+  type RollbackStore,
+  type UndoResult,
+} from "./changeCompensation";
+import {
   applyOrganizationChange,
   preflightOrganizationChange,
   type ReadyOrganizationChange,
 } from "./noteOrganizationChangeApplier";
+
+type ApplicationRollbackRecord = RollbackRecord & {
+  readonly application: RollbackApplicationJournal;
+};
+
+export {
+  type RollbackApplicationJournal,
+  type RollbackItem,
+  type RollbackMergeJournal,
+  type RollbackMergeReceipt,
+  type RollbackRecord,
+  type RollbackStore,
+  type UndoResult,
+} from "./changeCompensation";
+export { InMemoryRollbackStore } from "./inMemoryRollbackStore";
 
 export interface FileWorkspaceWritePort {
   listTextFiles(): Promise<readonly TextFileSnapshot[]>;
@@ -41,71 +65,11 @@ export interface FileWorkspaceWriteResolver {
   resolve(chatId: string): FileWorkspaceWritePort | null;
 }
 
-export type RollbackItem =
-  | {
-      readonly kind: "file";
-      readonly changeId: string;
-      readonly chatId: string;
-      readonly snapshot: FileRollbackSnapshot;
-      readonly expectedAppliedSha256: string;
-    }
-  | {
-      readonly kind: "note";
-      readonly changeId: string;
-      readonly noteId: string;
-      readonly originalBody: string;
-      readonly expectedAppliedUpdatedTime: number;
-    };
-
-export interface RollbackRecord {
-  readonly runId: string;
-  readonly chatId: string;
-  readonly createdAt: number;
-  readonly items: readonly RollbackItem[];
-}
-
-export interface RollbackStore {
-  save(record: RollbackRecord): Promise<void>;
-  get(runId: string): Promise<RollbackRecord | null>;
-}
-
-export class InMemoryRollbackStore implements RollbackStore {
-  private readonly records = new Map<string, RollbackRecord>();
-
-  public constructor(private readonly now: () => number = Date.now) {}
-
-  public save(record: RollbackRecord): Promise<void> {
-    this.records.set(record.runId, cloneRollback(record));
-    this.prune();
-    return Promise.resolve();
-  }
-
-  public async get(runId: string): Promise<RollbackRecord | null> {
-    const record = this.records.get(runId);
-    return Promise.resolve(record ? cloneRollback(record) : null);
-  }
-
-  private prune(): void {
-    const cutoff = this.now() - 7 * 24 * 60 * 60 * 1_000;
-    const retained = [...this.records.values()]
-      .filter((record) => record.createdAt >= cutoff)
-      .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, 10);
-    this.records.clear();
-    for (const record of retained) this.records.set(record.runId, record);
-  }
-}
-
 export interface ApplyResult {
   readonly changeSetId: string;
   readonly changes: readonly ProposedChange[];
   readonly undoAvailable: boolean;
-}
-
-export interface UndoResult {
-  readonly runId: string;
-  readonly restored: number;
-  readonly conflicts: readonly string[];
+  readonly durabilityFailure?: string;
 }
 
 type ReadyChange =
@@ -134,13 +98,22 @@ type ReadyChange =
   | ReadyOrganizationChange;
 
 export class ChangeApplier {
+  private readonly compensator: ChangeCompensator;
+
   public constructor(
     private readonly changes: ChangeSetStore,
     private readonly notes: NoteRepository,
     private readonly workspaces: FileWorkspaceWriteResolver,
     private readonly rollbacks: RollbackStore,
     private readonly organizations: NoteOrganizationRepository | null = null,
-  ) {}
+  ) {
+    this.compensator = new ChangeCompensator(
+      notes,
+      organizations,
+      workspaces,
+      rollbacks,
+    );
+  }
 
   /**
    * Preflights the batch, then applies accepted independent items with conflicts isolated.
@@ -155,22 +128,56 @@ export class ChangeApplier {
     const changeSet = this.requireProposedSet(changeSetId, scope);
     const accepted = validateAcceptedIds(changeSet, acceptedChangeIds);
     const preflight = await this.preflight(changeSet, accepted);
+    const journal: ApplicationRollbackRecord = {
+      runId: changeSet.runId,
+      chatId: changeSet.chatId,
+      createdAt: Date.now(),
+      items: [],
+      application: {
+        changeSetId: changeSet.id,
+        state: "applying" as const,
+        acceptedChangeIds: [...accepted],
+      },
+    };
+    await this.rollbacks.save(journal);
     const applied = await this.applyReady(preflight.ready, preflight.results);
     const orderedResults = orderByChangeSet(changeSet, applied.results);
-    if (applied.rollbacks.length) {
-      await this.rollbacks.save({
-        runId: changeSet.runId,
-        chatId: changeSet.chatId,
-        createdAt: Date.now(),
-        items: applied.rollbacks,
-      });
-    }
+    const durabilityFailure = await this.finalizeRollback(
+      journal,
+      orderedResults,
+      applied.rollbacks,
+    );
     const stored = this.changes.setResults(changeSetId, orderedResults);
     return {
       changeSetId,
       changes: stored.changes,
-      undoAvailable: applied.rollbacks.length > 0,
+      undoAvailable: applied.rollbacks.length > 0 && !durabilityFailure,
+      ...(durabilityFailure ? { durabilityFailure } : {}),
     };
+  }
+
+  private async finalizeRollback(
+    journal: ApplicationRollbackRecord,
+    results: readonly ProposedChange[],
+    items: readonly RollbackItem[],
+  ): Promise<string | undefined> {
+    try {
+      await this.rollbacks.save({
+        ...journal,
+        items,
+        application: {
+          ...journal.application,
+          state: "applied",
+          results: results.map((result) => ({
+            changeId: result.id,
+            status: result.status === "proposed" ? "conflict" : result.status,
+          })),
+        },
+      });
+      return undefined;
+    } catch (error: unknown) {
+      return errorMessage(error);
+    }
   }
 
   /**
@@ -184,38 +191,49 @@ export class ChangeApplier {
     chatId: string,
     changeIds?: readonly string[],
   ): Promise<UndoResult> {
-    const record = await this.rollbacks.get(runId);
-    if (!record) {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `No rollback for run ${safeValue(runId)}; expected a retained applied run`,
-      );
+    return this.compensator.undo(runId, chatId, changeIds);
+  }
+
+  /**
+   * Compensates post-write durability failures using retained mutation metadata.
+   *
+   * @example await applier.compensate(runId, chatId, appliedChangeIds)
+   */
+  public compensate(
+    runId: string,
+    chatId: string,
+    changeIds: readonly string[],
+  ): Promise<UndoResult> {
+    return this.compensator.undo(runId, chatId, changeIds);
+  }
+
+  /**
+   * Returns durable mutation IDs that must remain non-reapplicable on recovery.
+   *
+   * @example await applier.retainedAppliedChangeIds(runId, chatId)
+   */
+  public retainedAppliedChangeIds(
+    runId: string,
+    chatId: string,
+  ): Promise<readonly string[]> {
+    return this.compensator.retainedChangeIds(runId, chatId);
+  }
+
+  /** Resolves interrupted rollback ownership from the durable chat state. */
+  public async resolvePendingRollbackMerge(
+    chatId: string,
+    parkedRunId: string | null,
+  ): Promise<void> {
+    const pending = await this.rollbacks.pendingMerge();
+    if (!pending || pending.chatId !== chatId) return;
+    if (parkedRunId === pending.sourceRunId) {
+      await this.rollbacks.rollbackPendingMerge();
+      return;
     }
-    if (record.chatId !== chatId) {
-      throw new DomainError(
-        "SECURITY",
-        `Rollback ${safeValue(runId)} belongs to chat ${record.chatId}; expected chat ${chatId}`,
-      );
-    }
-    const selected = selectRollbackItems(record.items, changeIds);
-    let restored = 0;
-    const conflicts: string[] = [];
-    const remaining: RollbackItem[] = [];
-    for (const item of record.items) {
-      if (!selected.has(item.changeId)) {
-        remaining.push(item);
-        continue;
-      }
-      try {
-        await this.restoreItem(item);
-        restored += 1;
-      } catch (error: unknown) {
-        conflicts.push(errorMessage(error));
-        remaining.push(item);
-      }
-    }
-    await this.rollbacks.save({ ...record, items: remaining });
-    return { runId, restored, conflicts };
+    await this.rollbacks.commitPendingMerge(
+      pending.targetRunId,
+      pending.sourceRunId,
+    );
   }
 
   /**
@@ -227,40 +245,8 @@ export class ChangeApplier {
     targetRunId: string,
     chatId: string,
     sourceRunId: string,
-  ): Promise<void> {
-    if (targetRunId === sourceRunId) return;
-    const source = await this.rollbacks.get(sourceRunId);
-    if (!source) return;
-    if (source.chatId !== chatId) {
-      throw new DomainError(
-        "SECURITY",
-        `Rollback ${safeValue(sourceRunId)} belongs to chat ${source.chatId}; expected chat ${chatId}`,
-      );
-    }
-    const target = await this.rollbacks.get(targetRunId);
-    if (target && target.chatId !== chatId) {
-      throw new DomainError(
-        "SECURITY",
-        `Rollback ${safeValue(targetRunId)} belongs to chat ${target.chatId}; expected chat ${chatId}`,
-      );
-    }
-    const items = [...(target?.items ?? []), ...source.items];
-    if (items.length > 100) {
-      throw new DomainError(
-        "VALIDATION",
-        `Merged rollback would have ${items.length} items; expected at most 100`,
-      );
-    }
-    await this.rollbacks.save({
-      runId: targetRunId,
-      chatId,
-      createdAt: target?.createdAt ?? source.createdAt,
-      items,
-    });
-    await this.rollbacks.save({
-      ...source,
-      items: [],
-    });
+  ): Promise<RollbackMergeReceipt> {
+    return this.compensator.merge(targetRunId, chatId, sourceRunId);
   }
 
   private requireProposedSet(
@@ -334,7 +320,7 @@ export class ChangeApplier {
       try {
         const applied = await this.applyOne(item);
         results.push(withStatus(item.change, "applied"));
-        if (applied) rollbacks.push(applied);
+        rollbacks.push(applied);
       } catch (error: unknown) {
         results.push(withStatus(item.change, "conflict", errorMessage(error)));
       }
@@ -342,7 +328,7 @@ export class ChangeApplier {
     return { results, rollbacks };
   }
 
-  private async applyOne(item: ReadyChange): Promise<RollbackItem | null> {
+  private async applyOne(item: ReadyChange): Promise<RollbackItem> {
     if (item.kind === "file") {
       const applied = await item.workspace.writeTextFile(
         item.change.relativePath,
@@ -358,19 +344,23 @@ export class ChangeApplier {
       };
     }
     if (item.kind === "note-create") {
-      await this.notes.createNote({
+      const created = await this.notes.createNote({
         parentId: item.change.parentId,
         title: item.change.title,
         body: item.change.after,
       });
-      return null;
+      return {
+        kind: "note-create",
+        changeId: item.change.id,
+        noteId: created.id,
+        expectedAppliedUpdatedTime: created.updatedTime,
+      };
     }
     if (item.kind !== "note-update") {
-      await applyOrganizationChange(
+      return applyOrganizationChange(
         item,
         requireOrganizations(this.organizations),
       );
-      return null;
     }
     const applied = await this.notes.updateNoteBody({
       noteId: item.change.noteId,
@@ -384,22 +374,6 @@ export class ChangeApplier {
       originalBody: item.original.body,
       expectedAppliedUpdatedTime: applied.updatedTime,
     };
-  }
-
-  private async restoreItem(item: RollbackItem): Promise<void> {
-    if (item.kind === "file") {
-      const workspace = requireWorkspace(this.workspaces, item.chatId);
-      await workspace.restoreRollback(
-        item.snapshot,
-        item.expectedAppliedSha256,
-      );
-      return;
-    }
-    await this.notes.updateNoteBody({
-      noteId: item.noteId,
-      body: item.originalBody,
-      expectedUpdatedTime: item.expectedAppliedUpdatedTime,
-    });
   }
 }
 
@@ -485,36 +459,4 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message.slice(0, 1_000)
     : safeValue(error);
-}
-
-function cloneRollback(record: RollbackRecord): RollbackRecord {
-  return {
-    ...record,
-    items: record.items.map((item) =>
-      item.kind === "file"
-        ? { ...item, snapshot: { ...item.snapshot } }
-        : { ...item },
-    ),
-  };
-}
-
-function selectRollbackItems(
-  items: readonly RollbackItem[],
-  changeIds: readonly string[] | undefined,
-): ReadonlySet<string> {
-  if (!changeIds) {
-    return new Set(items.map((item) => item.changeId));
-  }
-  const known = new Set(items.map((item) => item.changeId));
-  const selected = new Set<string>();
-  for (const changeId of changeIds) {
-    if (!known.has(changeId)) {
-      throw new DomainError(
-        "VALIDATION",
-        `Unknown undo change ${safeValue(changeId)}; expected a rollback change ID`,
-      );
-    }
-    selected.add(changeId);
-  }
-  return selected;
 }
