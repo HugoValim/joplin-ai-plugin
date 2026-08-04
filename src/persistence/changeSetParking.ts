@@ -20,6 +20,24 @@ export interface ChangeSetParkingReviewNotePort {
   dispose(noteId: string): Promise<void>;
 }
 
+interface AppliedReviewMerge {
+  readonly applied: ChangeSet;
+  readonly parked: ChangeSet;
+  readonly merged: ChangeSet;
+  readonly receipt: ChangeSetRollbackMergeReceipt;
+}
+
+export class AppliedChangeSetSaveError extends DomainError {
+  public constructor(cause: unknown) {
+    super(
+      "INTERNAL",
+      "Applied Change Set persistence failed; expected durable state before presentation",
+      cause,
+    );
+    this.name = "AppliedChangeSetSaveError";
+  }
+}
+
 export class ChangeSetParking {
   public constructor(
     private readonly changes: ChangeSetStore,
@@ -60,21 +78,21 @@ export class ChangeSetParking {
     parked: ChangeSet,
     application: ChangeSetRollbackMergePort,
   ): Promise<ChangeSet> {
-    const merge = this.requireMergeable(chatId, applied, parked);
-    const receipt = await application.mergeRollbacks(
-      merge.applied.runId,
+    const merge = await this.beginAppliedReviewMerge(
       chatId,
-      merge.parked.runId,
+      applied,
+      parked,
+      application,
     );
-    await receipt.commit();
-    return this.changes.absorbAppliedChanges(
-      merge.applied.id,
-      merge.parked.changes,
-      {
-        chatId,
-        runId: merge.applied.runId,
-      },
-    );
+    const chat = await this.requireChat(chatId);
+    try {
+      await this.saveAppliedReview(chat, applied.runId, merge.merged);
+    } catch (error: unknown) {
+      await this.rollbackAppliedReviewMerge(merge);
+      throw error;
+    }
+    await merge.receipt.commit();
+    return merge.merged;
   }
 
   /**
@@ -131,12 +149,55 @@ export class ChangeSetParking {
     const applied = this.changes.get(changeSetId);
     if (!applied) return false;
     const chat = await this.requireChat(chatId);
-    const retained = await this.absorbParked(chat, applied, application);
-    const reviewed = await this.attachAppliedReview(retained, chat.title);
+    await this.saveAppliedBeforePresentation(chat, runId, applied);
+    const retention = await this.absorbParked(chat, applied, application);
+    if (retention.merge) {
+      try {
+        await this.saveAppliedReview(chat, runId, retention.changeSet);
+      } catch (error: unknown) {
+        await this.rollbackAppliedReviewMerge(retention.merge);
+        throw error;
+      }
+      await retention.merge.receipt.commit();
+    }
+    const reviewed = await this.attachAppliedReview(
+      retention.changeSet,
+      chat.title,
+    );
     await this.saveAppliedReview(chat, runId, reviewed);
     await this.disposeReplacedReviewNote(applied, reviewed);
     this.dropAbsorbedParked(chat, reviewed);
     return true;
+  }
+
+  /**
+   * Persists applied state without starting Review Note presentation.
+   *
+   * @example await parking.checkpointAppliedReview(chatId, runId, changeSetId)
+   */
+  public async checkpointAppliedReview(
+    chatId: string,
+    runId: string,
+    changeSetId: string,
+  ): Promise<void> {
+    const applied = this.changes.getScoped(changeSetId, { chatId, runId });
+    const chat = await this.requireChat(chatId);
+    await this.saveAppliedBeforePresentation(chat, runId, applied);
+  }
+
+  /**
+   * Retries durable non-reapplicable state after compensation conflicts.
+   *
+   * @example await parking.persistAppliedRecovery(chatId, runId, changeSetId)
+   */
+  public async persistAppliedRecovery(
+    chatId: string,
+    runId: string,
+    changeSetId: string,
+  ): Promise<void> {
+    const chat = await this.requireChat(chatId);
+    const applied = this.changes.getScoped(changeSetId, { chatId, runId });
+    await this.saveAppliedCheckpoint(chat, runId, applied);
   }
 
   private async mergeParkedReview(
@@ -145,14 +206,20 @@ export class ChangeSetParking {
     existing: ChangeSet,
     application: ChangeSetRollbackMergePort,
   ): Promise<void> {
-    const merged = await this.mergeAppliedReviews(
+    const merge = await this.beginAppliedReviewMerge(
       chat.id,
       pending,
       existing,
       application,
     );
-    await this.saveParked(chat, stripReviewNote(merged));
-    if (existing.id !== merged.id) this.changes.drop(existing.id);
+    try {
+      await this.saveParked(chat, stripReviewNote(merge.merged));
+    } catch (error: unknown) {
+      await this.rollbackAppliedReviewMerge(merge);
+      throw error;
+    }
+    await merge.receipt.commit();
+    if (existing.id !== merge.merged.id) this.changes.drop(existing.id);
     await this.disposeReviewNotes([pending, existing]);
   }
 
@@ -160,10 +227,50 @@ export class ChangeSetParking {
     chat: PersistedChat,
     applied: ChangeSet,
     application: ChangeSetRollbackMergePort,
-  ): Promise<ChangeSet> {
+  ): Promise<{
+    readonly changeSet: ChangeSet;
+    readonly merge: AppliedReviewMerge | null;
+  }> {
     const parked = chat.parkedAppliedChangeSet;
-    if (!parked) return applied;
-    return this.mergeAppliedReviews(chat.id, applied, parked, application);
+    if (!parked) return { changeSet: applied, merge: null };
+    const merge = await this.beginAppliedReviewMerge(
+      chat.id,
+      applied,
+      parked,
+      application,
+    );
+    return { changeSet: merge.merged, merge };
+  }
+
+  private async beginAppliedReviewMerge(
+    chatId: string,
+    applied: ChangeSet,
+    parked: ChangeSet,
+    application: ChangeSetRollbackMergePort,
+  ): Promise<AppliedReviewMerge> {
+    const merge = this.requireMergeable(chatId, applied, parked);
+    const receipt = await application.mergeRollbacks(
+      merge.applied.runId,
+      chatId,
+      merge.parked.runId,
+    );
+    const merged = this.changes.absorbAppliedChanges(
+      merge.applied.id,
+      merge.parked.changes,
+      { chatId, runId: merge.applied.runId },
+    );
+    return { ...merge, merged, receipt };
+  }
+
+  private async rollbackAppliedReviewMerge(
+    merge: AppliedReviewMerge,
+  ): Promise<void> {
+    try {
+      await merge.receipt.rollback();
+    } finally {
+      this.changes.restore(merge.applied);
+      this.changes.restore(merge.parked);
+    }
   }
 
   private async attachAppliedReview(
@@ -274,6 +381,36 @@ export class ChangeSetParking {
       runSummaries,
       pendingChangeSet: reviewed,
       parkedAppliedChangeSet: null,
+    });
+  }
+
+  private async saveAppliedBeforePresentation(
+    chat: PersistedChat,
+    runId: string,
+    applied: ChangeSet,
+  ): Promise<void> {
+    try {
+      await this.saveAppliedCheckpoint(chat, runId, applied);
+    } catch (error: unknown) {
+      throw new AppliedChangeSetSaveError(error);
+    }
+  }
+
+  private async saveAppliedCheckpoint(
+    chat: PersistedChat,
+    runId: string,
+    applied: ChangeSet,
+  ): Promise<void> {
+    const runSummaries = chat.runSummaries.map((summary) =>
+      summary.runId === runId
+        ? { ...summary, status: "applied" as const }
+        : summary,
+    );
+    await this.chats.save({
+      ...chat,
+      updatedAt: Date.now(),
+      runSummaries,
+      pendingChangeSet: applied,
     });
   }
 

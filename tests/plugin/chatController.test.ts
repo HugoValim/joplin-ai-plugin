@@ -46,6 +46,20 @@ import { registerNoteTools } from "../../src/tools/noteTools";
 import { SecretNotebookStore } from "../../src/persistence/secretNotebookStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
 
+class FailingRecoveryChatFilePort extends MemoryJsonFilePort {
+  public failWrites = false;
+
+  public override writeTextAtomic(
+    path: string,
+    content: string,
+  ): Promise<void> {
+    if (this.failWrites) {
+      return Promise.reject(new Error("Chat persistence unavailable"));
+    }
+    return super.writeTextAtomic(path, content);
+  }
+}
+
 class BlockingProvider implements AiProvider {
   public lastRequest: StreamChatRequest | null = null;
   private releaseRun: (() => void) | null = null;
@@ -339,6 +353,106 @@ function createSecretNotebookStore(): SecretNotebookStore {
 }
 
 describe("ChatController", () => {
+  test("renders recovered journal changes as applied when chat persistence stays stale", async () => {
+    const files = new FailingRecoveryChatFilePort();
+    const chats = new ChatStore("/plugin", files);
+    const chat = await chats.create("Recovered review");
+    const changes = new InMemoryChangeSetStore();
+    const proposed = changes.add(chat.id, "run-recovered", {
+      kind: "note",
+      operation: "update",
+      noteId: "note-1",
+      targetLabel: "Guide",
+      before: "Old",
+      after: "New",
+      expectedUpdatedTime: 1,
+    });
+    const changeSet = changes.getByRun("run-recovered");
+    if (!changeSet) throw new Error("Expected recovery change set");
+    await chats.save({
+      ...chat,
+      pendingChangeSet: changeSet,
+      runSummaries: [
+        {
+          runId: changeSet.runId,
+          status: "awaiting-approval",
+          summary: "Changes proposed",
+          completedAt: 1,
+        },
+      ],
+    });
+    const rollbacks = new InMemoryRollbackStore();
+    await rollbacks.save({
+      runId: changeSet.runId,
+      chatId: chat.id,
+      createdAt: Date.now(),
+      items: [],
+      application: {
+        changeSetId: changeSet.id,
+        state: "applying",
+        acceptedChangeIds: [proposed.id],
+      },
+    });
+    const panel = new RecordingPanel();
+    const commands = new EmptyCommands();
+    const workspaces = new PerChatWorkspaceResolver(
+      new FakeFileSystem(),
+      new EmptyCandidateFinder(),
+      new EmptyAtomicWriter(),
+    );
+    const controller = new ChatController(
+      panel,
+      chats,
+      new ContextBuilder(
+        new EmptyActiveNoteSource(),
+        new EmptyRetrievalPort(),
+        async () => null,
+      ),
+      new ToolRegistry(),
+      changes,
+      new ChangeApplier(
+        changes,
+        new EmptyNoteRepository(),
+        workspaces,
+        rollbacks,
+      ),
+      workspaces,
+      new FakeSettings(),
+      new EmptyDialogs(),
+      commands,
+      new AssistantOutputActions(
+        chats,
+        new EmptyActiveNoteSource(),
+        new EmptyNoteRepository(),
+        commands,
+      ),
+      createSecretNotebookStore(),
+      () => new BlockingProvider(),
+    );
+    files.failWrites = true;
+
+    await controller.handle({
+      version: PROTOCOL_VERSION,
+      messageId: "select-recovered-chat",
+      chatId: chat.id,
+      type: "chat.select",
+      payload: {},
+    });
+
+    const snapshot = [...panel.events]
+      .reverse()
+      .find((event) => event.type === "state.snapshot");
+    if (snapshot?.type !== "state.snapshot") {
+      throw new Error("Expected recovered snapshot");
+    }
+    expect(snapshot.payload.activeChat?.pendingChangeSet).toMatchObject({
+      applyToken: "",
+      changes: [{ id: proposed.id, status: "applied", undoable: true }],
+    });
+    expect(
+      (await chats.get(chat.id))?.pendingChangeSet?.changes[0]?.status,
+    ).toBe("proposed");
+  });
   test("rejects a concurrent same-chat run before persisting its message", async () => {
     const files = new MemoryJsonFilePort();
     const chats = new ChatStore("/plugin", files);
