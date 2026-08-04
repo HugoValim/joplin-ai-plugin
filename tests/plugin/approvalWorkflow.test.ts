@@ -341,7 +341,7 @@ describe("ApprovalWorkflow", () => {
     });
 
     expect(notes.note.body).toBe("New");
-    expect(reviewNotes.disposed).toEqual([]);
+    expect(reviewNotes.disposed).toEqual(["review-note-1"]);
     expect(
       provider.lastRequest?.messages.some((message) =>
         message.content.includes('"status":"applied"'),
@@ -901,7 +901,7 @@ describe("ApprovalWorkflow multi-batch review accumulation", () => {
     expect(saved?.parkedAppliedChangeSet?.changes[0]?.targetLabel).toBe("a.md");
   });
 
-  test("keep-all clears pending and parked applied reviews", async () => {
+  test("discarding a newer proposal restores the parked applied review", async () => {
     const workspace = new FakeFileWorkspace();
     workspace.files.clear();
     workspace.files.set("a.md", snapshot("a.md", "A original", "a-hash"));
@@ -944,7 +944,11 @@ describe("ApprovalWorkflow multi-batch review accumulation", () => {
     });
 
     const saved = await chats.get(id);
-    expect(saved?.pendingChangeSet).toBeNull();
+    expect(saved?.pendingChangeSet).toMatchObject({
+      id: batchA.id,
+      runId: "run-a",
+      status: "applied",
+    });
     expect(saved?.parkedAppliedChangeSet).toBeNull();
     expect(workspace.files.get("a.md")?.content).toBe("A new");
   });
