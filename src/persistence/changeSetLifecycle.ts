@@ -7,6 +7,23 @@ import type {
   ProposedChange,
 } from "./changeSetStore";
 import type { ChatStore, PersistedChat } from "./chatStore";
+import {
+  ChangeSetResolution,
+  type ChangeSetResolutionInput,
+  type ChangeSetResolutionTransitionPort,
+  type ChangeSetRollbackInput,
+  type ChangeSetRollbackPort,
+  type ChangeSetSelectionResolutionInput,
+} from "./changeSetResolution";
+
+export type {
+  ChangeSetResolutionEvent,
+  ChangeSetResolutionInput,
+  ChangeSetResolutionTransitionPort,
+  ChangeSetRollbackInput,
+  ChangeSetRollbackPort,
+  ChangeSetSelectionResolutionInput,
+} from "./changeSetResolution";
 
 export interface ChangeSetReviewNotePort {
   openForChangeSet(changeSet: ChangeSet, chatTitle: string): Promise<string>;
@@ -76,12 +93,71 @@ export interface ChangeSetDiscardInput extends ChangeSetScope {
 
 export class ChangeSetLifecycle {
   private readonly applyTokens = new Map<string, string>();
+  private readonly resolution: ChangeSetResolution;
 
   public constructor(
     private readonly changes: ChangeSetStore,
     private readonly chats: ChatStore,
     private readonly reviewNotes: ChangeSetReviewNotePort,
-  ) {}
+  ) {
+    this.resolution = new ChangeSetResolution(
+      changes,
+      chats,
+      reviewNotes,
+      (changeSetId): void => this.revokeApplyToken(changeSetId),
+    );
+  }
+
+  /**
+   * Keeps selected applied items and retains any unresolved review items.
+   *
+   * @example await lifecycle.keep(input, transition)
+   */
+  public keep(
+    input: ChangeSetSelectionResolutionInput,
+    transition: ChangeSetResolutionTransitionPort,
+  ): Promise<void> {
+    return this.resolution.keep(input, transition);
+  }
+
+  /**
+   * Denies a proposed or applied Change Set through its required resolution path.
+   *
+   * @example await lifecycle.deny(input, rollback, transition)
+   */
+  public deny(
+    input: ChangeSetResolutionInput,
+    rollback: ChangeSetRollbackPort,
+    transition: ChangeSetResolutionTransitionPort,
+  ): Promise<void> {
+    return this.resolution.deny(input, rollback, transition);
+  }
+
+  /**
+   * Restores selected applied items and retains any unresolved review items.
+   *
+   * @example await lifecycle.undoSelected(input, rollback, transition)
+   */
+  public undoSelected(
+    input: ChangeSetSelectionResolutionInput,
+    rollback: ChangeSetRollbackPort,
+    transition: ChangeSetResolutionTransitionPort,
+  ): Promise<void> {
+    return this.resolution.undoSelected(input, rollback, transition);
+  }
+
+  /**
+   * Restores every retained rollback item for an applied run.
+   *
+   * @example await lifecycle.rollback(input, rollback, transition)
+   */
+  public rollback(
+    input: ChangeSetRollbackInput,
+    rollback: ChangeSetRollbackPort,
+    transition: ChangeSetResolutionTransitionPort,
+  ): Promise<void> {
+    return this.resolution.rollback(input, rollback, transition);
+  }
 
   /**
    * Applies an approved Change Set through the lifecycle security boundary.
@@ -296,26 +372,7 @@ export class ChangeSetLifecycle {
     runId: string,
     status: PersistedChat["runSummaries"][number]["status"],
   ): Promise<void> {
-    const chat = await this.requireChat(chatId);
-    await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat.parkedAppliedChangeSet?.reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId ? { ...summary, status } : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: null,
-    });
-  }
-
-  private async disposeReviewNote(
-    reviewNoteId: string | undefined,
-  ): Promise<void> {
-    if (!reviewNoteId) return;
-    await this.reviewNotes.dispose(reviewNoteId);
+    await this.resolution.clearPending(chatId, runId, status);
   }
 
   private async attachReviewNote(
