@@ -385,7 +385,7 @@ export class ChatController {
 
   private async selectChat(chatId: string): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
-    this.changeSetLifecycle.recover(chat);
+    await this.changeSetLifecycle.recover(chat);
     this.activeChatId = chat.id;
     this.workspaces.setRoot(chat.id, chat.externalRoot);
     await this.sendSnapshot();
