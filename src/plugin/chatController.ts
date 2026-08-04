@@ -75,14 +75,15 @@ export class ChatController {
   private readonly approvals: ApprovalWorkflow;
   private readonly changeSetLifecycle: ChangeSetLifecycle;
   private readonly modelRuns: ModelRunLifecycle;
+  private recoveredPendingChangeSet: ChangeSet | null = null;
 
   public constructor(
     private readonly panel: PanelPort,
     private readonly chats: ChatStore,
     private readonly contextBuilder: ContextBuilder,
     tools: ToolRegistry,
-    changes: ChangeSetStore,
-    applier: ChangeApplier,
+    private readonly changes: ChangeSetStore,
+    private readonly applier: ChangeApplier,
     private readonly workspaces: PerChatWorkspaceResolver,
     private readonly settings: SettingsPort,
     private readonly dialogs: DialogPort,
@@ -103,18 +104,18 @@ export class ChatController {
     this.modelRuns = new ModelRunLifecycle(
       chats,
       tools,
-      changes,
+      this.changes,
       this.events,
       this.activeRuns,
     );
     this.changeSetLifecycle = new ChangeSetLifecycle(
-      changes,
+      this.changes,
       chats,
       reviewNotes,
     );
     this.approvals = new ApprovalWorkflow(
       chats,
-      changes,
+      this.changes,
       applier,
       tools,
       this.providerConnector,
@@ -385,7 +386,10 @@ export class ChatController {
 
   private async selectChat(chatId: string): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
-    this.changeSetLifecycle.recover(chat);
+    this.recoveredPendingChangeSet = await this.changeSetLifecycle.recover(
+      chat,
+      this.applier,
+    );
     this.activeChatId = chat.id;
     this.workspaces.setRoot(chat.id, chat.externalRoot);
     await this.sendSnapshot();
@@ -818,11 +822,16 @@ export class ChatController {
   }
 
   private createActiveChatView(chat: PersistedChat): ActiveChatView {
-    const pending = chat.pendingChangeSet;
+    const recovered = this.recoveredPendingChangeSet;
+    const persisted = chat.pendingChangeSet;
+    const runtime = persisted ? this.changes.get(persisted.id) : null;
+    const pending =
+      runtime ??
+      (recovered && recovered.id === persisted?.id ? recovered : persisted);
     const applyToken = pending
       ? this.approvals.applyTokenForChangeSet(pending.id)
       : "";
-    return toActiveChat(chat, applyToken);
+    return toActiveChat({ ...chat, pendingChangeSet: pending }, applyToken);
   }
 }
 

@@ -99,36 +99,36 @@ describe("ChangeSetLifecycle", () => {
     ).toEqual(reviewed);
   });
 
-  test("recovers a persisted pending Change Set", () => {
+  test("recovers a persisted pending Change Set", async () => {
     const changes = new InMemoryChangeSetStore();
     const lifecycle = recoveryLifecycle(changes);
     const pending = sampleChangeSet("pending-1", "run-1", "proposed");
 
-    lifecycle.recover(sampleChat({ pendingChangeSet: pending }));
+    await lifecycle.recover(sampleChat({ pendingChangeSet: pending }));
 
     expect(changes.get(pending.id)).toEqual(pending);
   });
 
-  test("recovers a parked applied Change Set", () => {
+  test("recovers a parked applied Change Set", async () => {
     const changes = new InMemoryChangeSetStore();
     const lifecycle = recoveryLifecycle(changes);
     const applied = sampleChangeSet("applied-1", "run-1", "applied");
 
-    lifecycle.recover(sampleChat({ parkedAppliedChangeSet: applied }));
+    await lifecycle.recover(sampleChat({ parkedAppliedChangeSet: applied }));
 
     expect(changes.get(applied.id)).toEqual(applied);
   });
 
-  test("does nothing when persisted Change Set references are missing", () => {
+  test("does nothing when persisted Change Set references are missing", async () => {
     const changes = new InMemoryChangeSetStore();
     const lifecycle = recoveryLifecycle(changes);
 
-    lifecycle.recover(sampleChat());
+    await lifecycle.recover(sampleChat());
 
     expect(changes.getByRun("run-1")).toBeNull();
   });
 
-  test("rejects a malformed persisted Change Set reference", () => {
+  test("rejects a malformed persisted Change Set reference", async () => {
     const changes = new InMemoryChangeSetStore();
     const lifecycle = recoveryLifecycle(changes);
     const malformed = {
@@ -136,14 +136,14 @@ describe("ChangeSetLifecycle", () => {
       chatId: undefined,
     };
 
-    expect(() =>
+    await expect(
       lifecycle.recover(
         sampleChat({ pendingChangeSet: malformed as unknown as ChangeSet }),
       ),
-    ).toThrow("expected a schema-v1 proposal batch");
+    ).rejects.toThrow("expected a schema-v1 proposal batch");
   });
 
-  test("repeated recovery leaves the same runtime state", () => {
+  test("repeated recovery leaves the same runtime state", async () => {
     const changes = new InMemoryChangeSetStore();
     const lifecycle = recoveryLifecycle(changes);
     const pending = sampleChangeSet("pending-1", "run-new", "proposed");
@@ -153,8 +153,8 @@ describe("ChangeSetLifecycle", () => {
       parkedAppliedChangeSet: parked,
     });
 
-    lifecycle.recover(chat);
-    lifecycle.recover(chat);
+    await lifecycle.recover(chat);
+    await lifecycle.recover(chat);
 
     expect(changes.get(pending.id)).toEqual(pending);
     expect(changes.get(parked.id)).toEqual(parked);

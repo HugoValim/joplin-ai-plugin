@@ -105,7 +105,7 @@ export class ApprovalWorkflow {
    * @example workflow.applyTokenForChangeSet("changes-1")
    */
   public applyTokenForChangeSet(changeSetId: string): string {
-    return this.changeSetLifecycle.ensureApplyToken(changeSetId);
+    return this.changeSetLifecycle.applyTokenIfPending(changeSetId) ?? "";
   }
 
   /**

@@ -1,4 +1,17 @@
 import {
+  ChangeApplier,
+  InMemoryRollbackStore,
+  type RollbackRecord,
+} from "../../src/agent/changeApplier";
+import type {
+  CreateNoteInput,
+  NoteRecord,
+  NoteRepository,
+  NoteSearchHit,
+  NotebookRecord,
+  UpdateNoteBodyInput,
+} from "../../src/notes/retriever";
+import {
   InMemoryChangeSetStore,
   type ChangeSet,
   type ChangeSetScope,
@@ -111,24 +124,275 @@ describe("ChangeSetLifecycle apply and discard", () => {
     ]);
   });
 
-  test("keeps an applied Change Set recoverable when chat persistence fails", async () => {
-    const files = new FailingMemoryJsonFilePort();
-    const harness = await applyHarness("Persistence failure", files);
-    const changeSet = addNoteUpdate(harness, "run-persistence");
+  test("checkpoints applied state when rollback finalization is unavailable", async () => {
+    const harness = await applyHarness("Rollback failure");
+    const changeSet = addNoteUpdate(harness, "run-rollback-failure");
     const activation = await harness.lifecycle.activateReview(changeSet, false);
-    const handoff = new RecordingApplyHandoffPort(true);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    application.durabilityFailure = "Rollback storage unavailable";
+
+    await expect(
+      harness.lifecycle.apply(
+        applyInput(harness.chat.id, changeSet, activation.applyToken),
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("application journal remains locked");
+
+    expect(
+      (await harness.chats.get(harness.chat.id))?.pendingChangeSet?.status,
+    ).toBe("applied");
+    expect(() => harness.lifecycle.ensureApplyToken(changeSet.id)).toThrow(
+      "not pending",
+    );
+  });
+
+  test("keeps the application journal authoritative when chat storage also fails", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await applyHarness("Both stores unavailable", files);
+    const changeSet = addNoteUpdate(harness, "run-both-unavailable");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    application.durabilityFailure = "Rollback storage unavailable";
     files.failWrites = true;
 
     await expect(
       harness.lifecycle.apply(
         applyInput(harness.chat.id, changeSet, activation.applyToken),
-        new RecordingChangeSetApplicationPort(harness.changes),
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("application journal remains locked");
+
+    expect(harness.changes.get(changeSet.id)?.status).toBe("applied");
+    expect(() => harness.lifecycle.ensureApplyToken(changeSet.id)).toThrow(
+      "not pending",
+    );
+    const stale = await harness.chats.get(harness.chat.id);
+    if (!stale) throw new Error("Expected stale persisted proposal");
+    const restartedChanges = new InMemoryChangeSetStore();
+    const restarted = new ChangeSetLifecycle(
+      restartedChanges,
+      harness.chats,
+      new RecordingReviewNotePort(),
+    );
+    const recovered = await restarted.recover(stale, application);
+    expect(recovered?.status).toBe("applied");
+    expect(application.rollbackMergeRepairs).toBe(1);
+    expect(restarted.applyTokenIfPending(changeSet.id)).toBeNull();
+    expect(application.duplicateApplications).toBe(0);
+  });
+
+  test("prevents duplicate note writes after both post-write saves fail", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await applyHarness("Real write-ahead recovery", files);
+    const changeSet = addNoteUpdate(harness, "run-real-journal");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const notes = new DurableTestNoteRepository();
+    const rollbacks = new RejectingSecondRollbackSave();
+    const applier = new ChangeApplier(
+      harness.changes,
+      notes,
+      { resolve: () => null },
+      rollbacks,
+    );
+    files.failWrites = true;
+    const input = applyInput(harness.chat.id, changeSet, activation.applyToken);
+
+    await expect(
+      harness.lifecycle.apply(input, applier, new RecordingApplyHandoffPort()),
+    ).rejects.toThrow("application journal remains locked");
+
+    const stale = await harness.chats.get(harness.chat.id);
+    if (!stale)
+      throw new Error("Expected stale proposal after chat save failure");
+    const restartedChanges = new InMemoryChangeSetStore();
+    const restartedApplier = new ChangeApplier(
+      restartedChanges,
+      notes,
+      { resolve: () => null },
+      rollbacks,
+    );
+    const restarted = new ChangeSetLifecycle(
+      restartedChanges,
+      harness.chats,
+      new RecordingReviewNotePort(),
+    );
+    const recovered = await restarted.recover(stale, restartedApplier);
+    expect(recovered?.status).toBe("applied");
+    expect(restarted.applyTokenIfPending(changeSet.id)).toBeNull();
+    await expect(
+      restarted.apply(input, restartedApplier, new RecordingApplyHandoffPort()),
+    ).rejects.toThrow("Invalid apply token");
+    expect(notes.updateCount).toBe(1);
+  });
+
+  test("compensates writes and restores a retryable proposal when durable save fails", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await applyHarness("Persistence failure", files);
+    const changeSet = addNoteUpdate(harness, "run-persistence");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const handoff = new RecordingApplyHandoffPort(true);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    files.failWrites = true;
+
+    await expect(
+      harness.lifecycle.apply(
+        applyInput(harness.chat.id, changeSet, activation.applyToken),
+        application,
         handoff,
       ),
-    ).rejects.toThrow("Chat persistence unavailable");
-    expect(harness.changes.get(changeSet.id)?.status).toBe("applied");
+    ).rejects.toThrow("completed writes were compensated");
+    expect(harness.changes.get(changeSet.id)?.status).toBe("proposed");
+    expect(application.compensatedChangeIds).toEqual([
+      changeSet.changes[0]?.id,
+    ]);
+    expect(application.duplicateApplications).toBe(0);
+    expect([...application.activeChangeIds]).toEqual([]);
+    expect(
+      harness.lifecycle.verifyApplyToken(changeSet.id, activation.applyToken),
+    ).toBe(false);
     expect(handoff.continuedChangeSetIds).toEqual([]);
     expect(handoff.completedChangeSetIds).toEqual([]);
+
+    const recoveredChanges = new InMemoryChangeSetStore();
+    const recovered = new ChangeSetLifecycle(
+      recoveredChanges,
+      harness.chats,
+      new RecordingReviewNotePort(),
+    );
+    files.failWrites = false;
+    const persisted = await harness.chats.get(harness.chat.id);
+    if (!persisted) throw new Error("Expected persisted proposal");
+    await recovered.recover(persisted, application);
+    expect(recoveredChanges.get(changeSet.id)?.status).toBe("proposed");
+
+    const retryToken = harness.lifecycle.ensureApplyToken(changeSet.id);
+    await harness.lifecycle.apply(
+      applyInput(harness.chat.id, changeSet, retryToken),
+      application,
+      new RecordingApplyHandoffPort(),
+    );
+    expect(application.appliedChangeSetIds).toEqual([
+      changeSet.id,
+      changeSet.id,
+    ]);
+    expect(application.compensatedChangeIds).toEqual([
+      changeSet.changes[0]?.id,
+    ]);
+    expect(application.duplicateApplications).toBe(0);
+    expect([...application.activeChangeIds]).toEqual([
+      changeSet.changes[0]?.id,
+    ]);
+  });
+
+  test("conservatively locks stale journal IDs after successful compensation", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await applyHarness("Stale compensation journal", files);
+    const changeSet = addNoteUpdate(harness, "run-stale-journal");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    application.retainCompensatedIds = true;
+    files.failWrites = true;
+
+    await expect(
+      harness.lifecycle.apply(
+        applyInput(harness.chat.id, changeSet, activation.applyToken),
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("completed writes were compensated");
+
+    const stale = await harness.chats.get(harness.chat.id);
+    if (!stale) throw new Error("Expected persisted proposal");
+    const restartedChanges = new InMemoryChangeSetStore();
+    const restarted = new ChangeSetLifecycle(
+      restartedChanges,
+      harness.chats,
+      new RecordingReviewNotePort(),
+    );
+    const recovered = await restarted.recover(stale, application);
+    expect(recovered?.status).toBe("applied");
+    expect(recovered?.changes[0]?.status).toBe("applied");
+    expect(restarted.applyTokenIfPending(changeSet.id)).toBeNull();
+  });
+
+  test("keeps applied state non-reapplicable when Review Note replacement fails", async () => {
+    const reviewNotes = new RecordingReviewNotePort();
+    const harness = await applyHarness(
+      "Review Note failure",
+      new MemoryJsonFilePort(),
+      reviewNotes,
+    );
+    const changeSet = addNoteUpdate(harness, "run-review-failure");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    reviewNotes.failOpens = true;
+
+    await expect(
+      harness.lifecycle.apply(
+        applyInput(harness.chat.id, changeSet, activation.applyToken),
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("Review Note unavailable");
+
+    expect(harness.changes.get(changeSet.id)?.status).toBe("applied");
+    expect(
+      (await harness.chats.get(harness.chat.id))?.pendingChangeSet?.status,
+    ).toBe("applied");
+    expect(application.compensatedChangeIds).toEqual([]);
+    expect(
+      harness.lifecycle.verifyApplyToken(changeSet.id, activation.applyToken),
+    ).toBe(false);
+  });
+
+  test("recovers non-reapplicable state when compensation and chat saves fail", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await applyHarness("Compensation conflict", files);
+    const changeSet = addNoteUpdate(harness, "run-compensation-conflict");
+    const activation = await harness.lifecycle.activateReview(changeSet, false);
+    const application = new RecordingChangeSetApplicationPort(harness.changes);
+    application.compensationConflicts.push("note changed after apply");
+    files.failWrites = true;
+    const input = applyInput(harness.chat.id, changeSet, activation.applyToken);
+
+    await expect(
+      harness.lifecycle.apply(
+        input,
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("compensation conflicted");
+
+    expect(harness.changes.get(changeSet.id)?.status).toBe("applied");
+    const persisted = await harness.chats.get(harness.chat.id);
+    expect(persisted?.pendingChangeSet?.status).toBe("proposed");
+    expect(
+      harness.lifecycle.verifyApplyToken(changeSet.id, activation.applyToken),
+    ).toBe(false);
+    await expect(
+      harness.lifecycle.apply(
+        input,
+        application,
+        new RecordingApplyHandoffPort(),
+      ),
+    ).rejects.toThrow("Invalid apply token");
+    expect(application.appliedChangeSetIds).toHaveLength(1);
+
+    const recoveredChanges = new InMemoryChangeSetStore();
+    const recovered = new ChangeSetLifecycle(
+      recoveredChanges,
+      harness.chats,
+      new RecordingReviewNotePort(),
+    );
+    if (!persisted) throw new Error("Expected persisted proposal");
+    await recovered.recover(persisted, application);
+    expect(recoveredChanges.get(changeSet.id)?.status).toBe("applied");
+    expect(() => recovered.ensureApplyToken(changeSet.id)).toThrow(
+      "not pending",
+    );
+    expect(recovered.applyTokenIfPending(changeSet.id)).toBeNull();
   });
 });
 
@@ -142,6 +406,7 @@ interface ApplyHarness {
 async function applyHarness(
   title: string,
   files: MemoryJsonFilePort = new MemoryJsonFilePort(),
+  reviewNotes: RecordingReviewNotePort = new RecordingReviewNotePort(),
 ): Promise<ApplyHarness> {
   const changes = new InMemoryChangeSetStore();
   const chats = new ChatStore("/plugin", files);
@@ -150,11 +415,7 @@ async function applyHarness(
     changes,
     chats,
     chat,
-    lifecycle: new ChangeSetLifecycle(
-      changes,
-      chats,
-      new RecordingReviewNotePort(),
-    ),
+    lifecycle: new ChangeSetLifecycle(changes, chats, reviewNotes),
   };
 }
 
@@ -231,6 +492,13 @@ function discardInput(
 
 class RecordingChangeSetApplicationPort {
   public readonly appliedChangeSetIds: string[] = [];
+  public readonly compensatedChangeIds: string[] = [];
+  public readonly compensationConflicts: string[] = [];
+  public readonly activeChangeIds = new Set<string>();
+  public duplicateApplications = 0;
+  public durabilityFailure: string | null = null;
+  public retainCompensatedIds = false;
+  public rollbackMergeRepairs = 0;
 
   public constructor(
     private readonly changes?: InMemoryChangeSetStore,
@@ -249,15 +517,56 @@ class RecordingChangeSetApplicationPort {
     const results = changeSet.changes.map((change, index) =>
       applyResult(change, this.partial && index === 1),
     );
+    for (const result of results) {
+      if (result.status !== "applied") continue;
+      if (this.activeChangeIds.has(result.id)) this.duplicateApplications += 1;
+      this.activeChangeIds.add(result.id);
+    }
     this.changes?.setResults(changeSetId, results);
     return Promise.resolve({
       changeSetId,
       changes: results,
       undoAvailable: true,
+      ...(this.durabilityFailure
+        ? { durabilityFailure: this.durabilityFailure }
+        : {}),
     });
   }
 
-  public mergeRollbacks(): Promise<void> {
+  public mergeRollbacks(): Promise<{
+    commit(): Promise<void>;
+    rollback(): Promise<void>;
+  }> {
+    return Promise.resolve({
+      commit: (): Promise<void> => Promise.resolve(),
+      rollback: (): Promise<void> => Promise.resolve(),
+    });
+  }
+
+  public compensate(
+    _runId: string,
+    _chatId: string,
+    changeIds: readonly string[],
+  ): Promise<{
+    readonly restored: number;
+    readonly conflicts: readonly string[];
+  }> {
+    this.compensatedChangeIds.push(...changeIds);
+    if (this.compensationConflicts.length === 0 && !this.retainCompensatedIds) {
+      for (const changeId of changeIds) this.activeChangeIds.delete(changeId);
+    }
+    return Promise.resolve({
+      restored: changeIds.length - this.compensationConflicts.length,
+      conflicts: this.compensationConflicts,
+    });
+  }
+
+  public retainedAppliedChangeIds(): Promise<readonly string[]> {
+    return Promise.resolve([...this.activeChangeIds]);
+  }
+
+  public resolvePendingRollbackMerge(): Promise<void> {
+    this.rollbackMergeRepairs += 1;
     return Promise.resolve();
   }
 }
@@ -308,7 +617,11 @@ class RecordingApplyHandoffPort {
 }
 
 class RecordingReviewNotePort implements ReviewNotePort {
+  public failOpens = false;
+
   public openForChangeSet(): Promise<string> {
+    if (this.failOpens)
+      return Promise.reject(new Error("Review Note unavailable"));
     return Promise.resolve("review-note-1");
   }
 
@@ -321,15 +634,63 @@ class RecordingReviewNotePort implements ReviewNotePort {
   }
 }
 
+class RejectingSecondRollbackSave extends InMemoryRollbackStore {
+  private saveCount = 0;
+
+  public override save(record: RollbackRecord): Promise<void> {
+    this.saveCount += 1;
+    if (this.saveCount === 2) {
+      return Promise.reject(new Error("Rollback finalization unavailable"));
+    }
+    return super.save(record);
+  }
+}
+
+class DurableTestNoteRepository implements NoteRepository {
+  public updateCount = 0;
+  private note: NoteRecord = {
+    id: "note-1",
+    parentId: "folder-1",
+    title: "Guide",
+    body: "Old",
+    updatedTime: 1,
+  };
+
+  public searchNotes(): Promise<readonly NoteSearchHit[]> {
+    return Promise.resolve([]);
+  }
+
+  public readNote(): Promise<NoteRecord> {
+    return Promise.resolve(this.note);
+  }
+
+  public listNotebooks(): Promise<readonly NotebookRecord[]> {
+    return Promise.resolve([]);
+  }
+
+  public createNote(_input: CreateNoteInput): Promise<NoteRecord> {
+    return Promise.reject(new Error("Note creation not expected"));
+  }
+
+  public updateNoteBody(input: UpdateNoteBodyInput): Promise<NoteRecord> {
+    this.updateCount += 1;
+    this.note = { ...this.note, body: input.body, updatedTime: 2 };
+    return Promise.resolve(this.note);
+  }
+}
+
 class FailingMemoryJsonFilePort extends MemoryJsonFilePort {
   public failWrites = false;
+  public failuresRemaining = 0;
 
   public override writeTextAtomic(
     path: string,
     content: string,
   ): Promise<void> {
-    if (this.failWrites)
+    if (this.failWrites || this.failuresRemaining > 0) {
+      this.failuresRemaining -= 1;
       return Promise.reject(new Error("Chat persistence unavailable"));
+    }
     return super.writeTextAtomic(path, content);
   }
 }

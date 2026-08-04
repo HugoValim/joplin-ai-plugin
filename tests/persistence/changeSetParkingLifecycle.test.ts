@@ -57,6 +57,9 @@ describe("ChangeSetLifecycle cumulative parking", () => {
     expect(harness.application.merges).toEqual([
       { runId: "run-newer", chatId: harness.chat.id, sourceRunId: "run-older" },
     ]);
+    expect(harness.application.committedMerges).toEqual([
+      { runId: "run-newer", sourceRunId: "run-older" },
+    ]);
     expect(harness.changes.get(older.id)).toBeNull();
     expect(harness.changes.get(newer.id)?.changes).toHaveLength(2);
     expect(harness.reviewNotes.disposed).toEqual([
@@ -248,6 +251,31 @@ describe("ChangeSetLifecycle cumulative parking", () => {
     expect(harness.reviewNotes.disposed).toEqual(["review-run-older"]);
   });
 
+  test("reverses rollback ownership and runtime merge when chat save fails", async () => {
+    const files = new FailingMemoryJsonFilePort();
+    const harness = await parkingHarness(files);
+    const older = await addAppliedReview(harness, "run-older", "Older");
+    await harness.lifecycle.parkAppliedReview(
+      harness.chat.id,
+      harness.application,
+    );
+    const newer = await addAppliedReview(harness, "run-newer", "Newer");
+    files.failuresRemaining = 1;
+
+    await expect(
+      harness.lifecycle.parkAppliedReview(harness.chat.id, harness.application),
+    ).rejects.toThrow("Chat persistence unavailable");
+
+    const saved = await harness.chats.get(harness.chat.id);
+    expect(saved?.pendingChangeSet?.id).toBe(newer.id);
+    expect(saved?.parkedAppliedChangeSet?.id).toBe(older.id);
+    expect(harness.changes.get(newer.id)?.changes).toHaveLength(1);
+    expect(harness.changes.get(older.id)?.changes).toHaveLength(1);
+    expect(harness.application.rolledBackMerges).toEqual([
+      { runId: "run-newer", sourceRunId: "run-older" },
+    ]);
+  });
+
   test("disposes a replaced proposal Review Note exactly once after apply", async () => {
     const harness = await parkingHarness();
     const proposed = await addProposedReview(
@@ -286,9 +314,11 @@ interface ParkingHarness {
   readonly application: RecordingApplicationPort;
 }
 
-async function parkingHarness(): Promise<ParkingHarness> {
+async function parkingHarness(
+  files: MemoryJsonFilePort = new MemoryJsonFilePort(),
+): Promise<ParkingHarness> {
   const changes = new InMemoryChangeSetStore();
-  const chats = new ChatStore("/plugin", new MemoryJsonFilePort());
+  const chats = new ChatStore("/plugin", files);
   const chat = await chats.create("Cumulative review");
   const reviewNotes = new RecordingReviewNotePort();
   return {
@@ -395,6 +425,14 @@ class RecordingApplicationPort {
     readonly chatId: string;
     readonly sourceRunId: string;
   }> = [];
+  public readonly rolledBackMerges: Array<{
+    readonly runId: string;
+    readonly sourceRunId: string;
+  }> = [];
+  public readonly committedMerges: Array<{
+    readonly runId: string;
+    readonly sourceRunId: string;
+  }> = [];
 
   public constructor(private readonly changes: InMemoryChangeSetStore) {}
 
@@ -420,11 +458,46 @@ class RecordingApplicationPort {
     runId: string,
     chatId: string,
     sourceRunId: string,
-  ): Promise<void> {
+  ): Promise<{ commit(): Promise<void>; rollback(): Promise<void> }> {
     this.merges.push({ runId, chatId, sourceRunId });
     if (this.failMergesWith)
       return Promise.reject(new Error(this.failMergesWith));
-    return Promise.resolve();
+    return Promise.resolve({
+      commit: (): Promise<void> => {
+        this.committedMerges.push({ runId, sourceRunId });
+        return Promise.resolve();
+      },
+      rollback: (): Promise<void> => {
+        this.rolledBackMerges.push({ runId, sourceRunId });
+        return Promise.resolve();
+      },
+    });
+  }
+
+  public compensate(
+    _runId: string,
+    _chatId: string,
+    changeIds: readonly string[],
+  ): Promise<{
+    readonly restored: number;
+    readonly conflicts: readonly string[];
+  }> {
+    return Promise.resolve({ restored: changeIds.length, conflicts: [] });
+  }
+}
+
+class FailingMemoryJsonFilePort extends MemoryJsonFilePort {
+  public failuresRemaining = 0;
+
+  public override writeTextAtomic(
+    path: string,
+    content: string,
+  ): Promise<void> {
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining -= 1;
+      return Promise.reject(new Error("Chat persistence unavailable"));
+    }
+    return super.writeTextAtomic(path, content);
   }
 }
 
