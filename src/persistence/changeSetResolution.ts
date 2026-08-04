@@ -38,6 +38,7 @@ export type ChangeSetResolutionEvent =
       readonly changeSet: ChangeSet;
       readonly summary?: string;
       readonly undoRunId?: string;
+      readonly restored?: boolean;
     };
 
 export interface ChangeSetResolutionTransitionPort {
@@ -45,15 +46,17 @@ export interface ChangeSetResolutionTransitionPort {
   deleteContinuation(changeSetId: string): void;
 }
 
-export interface ChangeSetResolutionReviewNotePort {
-  dispose(noteId: string): Promise<void>;
-}
+type ResolveCurrentReview = (
+  chatId: string,
+  runId: string,
+  status: PersistedChat["runSummaries"][number]["status"],
+) => Promise<ChangeSet | null>;
 
 export class ChangeSetResolution {
   public constructor(
     private readonly changes: ChangeSetStore,
     private readonly chats: ChatStore,
-    private readonly reviewNotes: ChangeSetResolutionReviewNotePort,
+    private readonly resolveCurrentReview: ResolveCurrentReview,
     private readonly revokeApplyToken: (changeSetId: string) => void,
   ) {}
 
@@ -67,11 +70,11 @@ export class ChangeSetResolution {
   ): Promise<void> {
     const remaining = this.removeSelected(input);
     if (!remaining) {
-      await this.complete(input, "applied");
-      transition.publish(input, {
-        mode: "completed",
-        summary: "Kept applied changes",
-      });
+      const restored = await this.complete(input, "applied");
+      transition.publish(
+        input,
+        completionEvent("Kept applied changes", restored),
+      );
       return;
     }
     await this.savePending(input.chatId, remaining);
@@ -95,11 +98,11 @@ export class ChangeSetResolution {
     this.assertApplied(changeSet);
     const result = await rollback.undo(changeSet.runId, input.chatId);
     this.removeAll(input, changeSet);
-    await this.complete(input, "denied");
-    transition.publish(input, {
-      mode: "completed",
-      summary: undoSummary("Denied and restored", result),
-    });
+    const restored = await this.complete(input, "denied");
+    transition.publish(
+      input,
+      completionEvent(undoSummary("Denied and restored", result), restored),
+    );
   }
 
   /**
@@ -146,34 +149,22 @@ export class ChangeSetResolution {
     chatId: string,
     runId: string,
     status: PersistedChat["runSummaries"][number]["status"],
-  ): Promise<void> {
-    const chat = await this.requireChat(chatId);
-    await this.disposeReviewNote(chat.pendingChangeSet?.reviewNoteId);
-    await this.disposeReviewNote(chat.parkedAppliedChangeSet?.reviewNoteId);
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId ? { ...summary, status } : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: null,
-      parkedAppliedChangeSet: null,
-    });
+  ): Promise<ChangeSet | null> {
+    return this.resolveCurrentReview(chatId, runId, status);
   }
 
   private async denyProposed(
     input: ChangeSetResolutionInput,
     transition: ChangeSetResolutionTransitionPort,
   ): Promise<void> {
-    this.changes.discard(input.changeSetId, input);
     this.revokeApplyToken(input.changeSetId);
+    const restored = await this.complete(input, "denied");
+    this.changes.discard(input.changeSetId, input);
     transition.deleteContinuation(input.changeSetId);
-    await this.complete(input, "denied");
-    transition.publish(input, {
-      mode: "completed",
-      summary: "Changes denied before apply",
-    });
+    transition.publish(
+      input,
+      completionEvent("Changes denied before apply", restored),
+    );
   }
 
   private async finishUndo(
@@ -185,8 +176,8 @@ export class ChangeSetResolution {
   ): Promise<void> {
     const summary = undoSummary("Undid", result);
     if (!remaining) {
-      await this.complete(input, "applied");
-      transition.publish(input, { mode: "completed", summary });
+      const restored = await this.complete(input, "applied");
+      transition.publish(input, completionEvent(summary, restored));
       return;
     }
     await this.savePending(input.chatId, remaining);
@@ -238,7 +229,7 @@ export class ChangeSetResolution {
   private complete(
     input: ChangeSetScope,
     status: PersistedChat["runSummaries"][number]["status"],
-  ): Promise<void> {
+  ): Promise<ChangeSet | null> {
     return this.clearPending(input.chatId, input.runId, status);
   }
 
@@ -262,11 +253,14 @@ export class ChangeSetResolution {
       `Chat ${safeValue(chatId)} not found; expected a persisted chat`,
     );
   }
+}
 
-  private async disposeReviewNote(noteId: string | undefined): Promise<void> {
-    if (!noteId) return;
-    await this.reviewNotes.dispose(noteId);
-  }
+function completionEvent(
+  summary: string,
+  restored: ChangeSet | null,
+): ChangeSetResolutionEvent {
+  if (!restored) return { mode: "completed", summary };
+  return { mode: "review", changeSet: restored, summary, restored: true };
 }
 
 function undoSummary(prefix: string, result: UndoResult): string {

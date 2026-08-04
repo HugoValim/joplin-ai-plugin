@@ -8,6 +8,10 @@ import type {
 } from "./changeSetStore";
 import type { ChatStore, PersistedChat } from "./chatStore";
 import {
+  ChangeSetParking,
+  type ChangeSetRollbackMergePort,
+} from "./changeSetParking";
+import {
   ChangeSetResolution,
   type ChangeSetResolutionInput,
   type ChangeSetResolutionTransitionPort,
@@ -61,17 +65,12 @@ export interface ChangeSetApplyResult {
   readonly undoAvailable: boolean;
 }
 
-export interface ChangeSetApplicationPort {
+export interface ChangeSetApplicationPort extends ChangeSetRollbackMergePort {
   apply(
     changeSetId: string,
     acceptedChangeIds: readonly string[],
     scope: ChangeSetScope,
   ): Promise<ChangeSetApplyResult>;
-  mergeRollbacks(
-    runId: string,
-    chatId: string,
-    sourceRunId: string,
-  ): Promise<void>;
 }
 
 export interface ChangeSetTransitionPort {
@@ -85,6 +84,7 @@ export interface ChangeSetTransitionPort {
   ): void;
   deleteContinuation(changeSetId: string): void;
   discardCompleted(input: ChangeSetDiscardInput): void;
+  reviewRestored(changeSet: ChangeSet): void;
 }
 
 export interface ChangeSetDiscardInput extends ChangeSetScope {
@@ -93,6 +93,7 @@ export interface ChangeSetDiscardInput extends ChangeSetScope {
 
 export class ChangeSetLifecycle {
   private readonly applyTokens = new Map<string, string>();
+  private readonly parking: ChangeSetParking;
   private readonly resolution: ChangeSetResolution;
 
   public constructor(
@@ -100,12 +101,40 @@ export class ChangeSetLifecycle {
     private readonly chats: ChatStore,
     private readonly reviewNotes: ChangeSetReviewNotePort,
   ) {
-    this.resolution = new ChangeSetResolution(
+    this.parking = new ChangeSetParking(
       changes,
       chats,
       reviewNotes,
       (changeSetId): void => this.revokeApplyToken(changeSetId),
     );
+    this.resolution = new ChangeSetResolution(
+      changes,
+      chats,
+      (chatId, runId, status): Promise<ChangeSet | null> =>
+        this.parking.resolveCurrent(chatId, runId, status),
+      (changeSetId): void => this.revokeApplyToken(changeSetId),
+    );
+  }
+
+  /**
+   * Parks the current applied review while another Change Set is presented.
+   *
+   * @example await lifecycle.parkAppliedReview(chatId, application)
+   */
+  public parkAppliedReview(
+    chatId: string,
+    application: ChangeSetRollbackMergePort,
+  ): Promise<void> {
+    return this.parking.parkAppliedReview(chatId, application);
+  }
+
+  /**
+   * Clears runtime approval state before a chat is cleared or deleted.
+   *
+   * @example await lifecycle.abandon(chatId)
+   */
+  public async abandon(chatId: string): Promise<void> {
+    await this.parking.abandon(chatId);
   }
 
   /**
@@ -190,14 +219,16 @@ export class ChangeSetLifecycle {
     input: ChangeSetDiscardInput,
     transition: ChangeSetTransitionPort,
   ): Promise<void> {
-    this.changes.discard(input.changeSetId, {
-      chatId: input.chatId,
-      runId: input.runId,
-    });
     this.revokeApplyToken(input.changeSetId);
+    const restored = await this.parking.resolveCurrent(
+      input.chatId,
+      input.runId,
+      "completed",
+    );
+    this.changes.discard(input.changeSetId, input);
     transition.deleteContinuation(input.changeSetId);
-    await this.clearPending(input.chatId, input.runId, "completed");
     transition.discardCompleted(input);
+    if (restored) transition.reviewRestored(restored);
   }
 
   /**
@@ -286,40 +317,15 @@ export class ChangeSetLifecycle {
     result: ChangeSetApplyResult,
     application: ChangeSetApplicationPort,
   ): Promise<void> {
-    const changeSet = this.changes.get(result.changeSetId);
-    if (!changeSet) {
-      await this.clearPending(input.chatId, input.runId, "applied");
-      return;
-    }
-    const chat = await this.requireChat(input.chatId);
-    const retained = await this.retainParkedReview(
-      chat,
-      changeSet,
+    const retained = await this.parking.retainAppliedReview(
+      input.chatId,
+      input.runId,
+      result.changeSetId,
       application,
     );
-    const reviewed = await this.attachAppliedReview(retained, chat.title);
-    await this.saveAppliedReview(chat, input.runId, reviewed);
-  }
-
-  private async retainParkedReview(
-    chat: PersistedChat,
-    applied: ChangeSet,
-    application: ChangeSetApplicationPort,
-  ): Promise<ChangeSet> {
-    const parked = chat.parkedAppliedChangeSet;
-    if (!parked) return applied;
-    return this.mergeAppliedReviews(chat.id, applied, parked, application);
-  }
-
-  private async attachAppliedReview(
-    changeSet: ChangeSet,
-    chatTitle: string,
-  ): Promise<ChangeSet> {
-    const noteId = await this.reviewNotes.openForChangeSet(
-      changeSet,
-      chatTitle,
-    );
-    return this.changes.attachReviewNote(changeSet.id, noteId);
+    if (!retained) {
+      await this.clearPending(input.chatId, input.runId, "applied");
+    }
   }
 
   /**
@@ -333,33 +339,14 @@ export class ChangeSetLifecycle {
     parked: ChangeSet,
     application: ChangeSetApplicationPort,
   ): Promise<ChangeSet> {
-    await application.mergeRollbacks(applied.runId, chatId, parked.runId);
-    const merged = this.changes.absorbAppliedChanges(
-      applied.id,
-      parked.changes,
-      { chatId, runId: applied.runId },
+    const merged = await this.parking.mergeAppliedReviews(
+      chatId,
+      applied,
+      parked,
+      application,
     );
     if (parked.id !== applied.id) this.changes.drop(parked.id);
     return merged;
-  }
-
-  private async saveAppliedReview(
-    chat: PersistedChat,
-    runId: string,
-    reviewed: ChangeSet,
-  ): Promise<void> {
-    const runSummaries = chat.runSummaries.map((summary) =>
-      summary.runId === runId
-        ? { ...summary, status: "applied" as const }
-        : summary,
-    );
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      runSummaries,
-      pendingChangeSet: reviewed,
-      parkedAppliedChangeSet: null,
-    });
   }
 
   /**
