@@ -1,9 +1,5 @@
 import type { ProviderMessage } from "../providers/types";
-import type {
-  ChangeSet,
-  ChangeSetStore,
-  ProposedChange,
-} from "../persistence/changeSetStore";
+import type { ChangeSet, ProposedChange } from "../persistence/changeSetStore";
 import type {
   PersistedChat,
   PersistedChatMessage,
@@ -27,13 +23,9 @@ export function mergeHistory(
 
 export function toActiveChat(
   chat: PersistedChat,
-  changes: ChangeSetStore,
-  applyTokenForPending?: (changeSetId: string) => string,
+  pendingApplyToken = "",
 ): ActiveChatView {
-  const parked = chat.parkedAppliedChangeSet;
-  if (parked) changes.restore(parked);
   const pending = chat.pendingChangeSet;
-  if (pending) changes.restore(pending);
   return {
     id: chat.id,
     title: chat.title,
@@ -41,7 +33,7 @@ export function toActiveChat(
     context: chat.context,
     externalRoot: chat.externalRoot,
     pendingChangeSet: pending
-      ? toChangeSetView(pending, applyTokenForPending?.(pending.id) ?? "")
+      ? toChangeSetView(pending, pendingApplyToken)
       : null,
     runSummaries: chat.runSummaries,
   };

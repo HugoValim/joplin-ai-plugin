@@ -8,6 +8,7 @@ import {
 import type { ChangeApplier } from "../agent/changeApplier";
 import type { ContextBuilder } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
+import { ChangeSetLifecycle } from "../persistence/changeSetLifecycle";
 import type {
   ChatStore,
   PersistedChat,
@@ -15,7 +16,7 @@ import type {
   PersistedRunSummary,
 } from "../persistence/chatStore";
 import { DomainError, safeValue } from "../shared/errors";
-import type { PanelRequest } from "../shared/protocol";
+import type { ActiveChatView, PanelRequest } from "../shared/protocol";
 import { isSafeExternalMarkdownUrl } from "../shared/safeExternalUrl";
 import {
   resolveSelectionRange,
@@ -71,6 +72,7 @@ export class ChatController {
   private readonly providerConnector: ProviderConnector;
   private readonly events: PluginEventSender;
   private readonly approvals: ApprovalWorkflow;
+  private readonly changeSetLifecycle: ChangeSetLifecycle;
 
   public constructor(
     private readonly panel: PanelPort,
@@ -96,6 +98,7 @@ export class ChatController {
       createProvider,
     );
     this.events = new PluginEventSender(panel);
+    this.changeSetLifecycle = new ChangeSetLifecycle(changes);
     this.approvals = new ApprovalWorkflow(
       chats,
       changes,
@@ -367,6 +370,7 @@ export class ChatController {
 
   private async selectChat(chatId: string): Promise<void> {
     const chat = await requireChat(this.chats, chatId);
+    this.changeSetLifecycle.recover(chat);
     this.activeChatId = chat.id;
     this.workspaces.setRoot(chat.id, chat.externalRoot);
     await this.sendSnapshot();
@@ -941,11 +945,7 @@ export class ChatController {
     const chatId = active?.id ?? "bootstrap";
     this.events.post("state.snapshot", chatId, {
       chats: summaries,
-      activeChat: active
-        ? toActiveChat(active, this.changes, (changeSetId) =>
-            this.approvals.applyTokenForChangeSet(changeSetId),
-          )
-        : null,
+      activeChat: active ? this.createActiveChatView(active) : null,
       endpointStatus: this.endpointStatus,
       modelName: this.modelName,
       privacyNotice: PRIVACY_NOTICE,
@@ -953,6 +953,14 @@ export class ChatController {
       availableModels: [...this.availableModels],
       contextWindowMax: this.contextWindowMax,
     });
+  }
+
+  private createActiveChatView(chat: PersistedChat): ActiveChatView {
+    const pending = chat.pendingChangeSet;
+    const applyToken = pending
+      ? this.approvals.applyTokenForChangeSet(pending.id)
+      : "";
+    return toActiveChat(chat, applyToken);
   }
 }
 
