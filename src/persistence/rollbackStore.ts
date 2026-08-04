@@ -5,7 +5,7 @@ import type {
   RollbackMergeJournal,
   RollbackRecord,
   RollbackStore,
-} from "../agent/changeApplier";
+} from "../agent/changeCompensation";
 import { DomainError, safeValue } from "../shared/errors";
 import type { JsonFilePort } from "./chatStore";
 

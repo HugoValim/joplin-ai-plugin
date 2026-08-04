@@ -19,6 +19,50 @@ type NotebookOrganizationChange = Extract<ProposedChange, { kind: "notebook" }>;
 export type OrganizationChange =
   NoteOrganizationChange | NotebookOrganizationChange;
 
+export type OrganizationRollbackItem =
+  | {
+      readonly kind: "notebook-create";
+      readonly changeId: string;
+      readonly notebookId: string;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "note-metadata";
+      readonly changeId: string;
+      readonly original: NoteMetadataRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "notebook-metadata";
+      readonly changeId: string;
+      readonly original: NotebookMetadataRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "note-trash";
+      readonly changeId: string;
+      readonly original: NoteMetadataRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "notebook-trash";
+      readonly changeId: string;
+      readonly original: NotebookMetadataRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "note-restore";
+      readonly changeId: string;
+      readonly original: TrashedNoteRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    }
+  | {
+      readonly kind: "notebook-restore";
+      readonly changeId: string;
+      readonly original: TrashedNotebookRecord;
+      readonly expectedAppliedUpdatedTime: number;
+    };
+
 export type ReadyOrganizationChange =
   | {
       readonly kind: "notebook-create";

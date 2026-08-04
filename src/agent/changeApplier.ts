@@ -15,11 +15,28 @@ import type {
   ProposedChange,
 } from "../persistence/changeSetStore";
 import { DomainError, safeValue } from "../shared/errors";
+import type {
+  RollbackItem,
+  RollbackRecord,
+  RollbackStore,
+  UndoResult,
+} from "./changeCompensation";
 import {
   applyOrganizationChange,
   preflightOrganizationChange,
   type ReadyOrganizationChange,
 } from "./noteOrganizationChangeApplier";
+
+export {
+  type RollbackApplicationJournal,
+  type RollbackItem,
+  type RollbackMergeJournal,
+  type RollbackMergeReceipt,
+  type RollbackRecord,
+  type RollbackStore,
+  type UndoResult,
+} from "./changeCompensation";
+export { InMemoryRollbackStore } from "./inMemoryRollbackStore";
 
 export interface FileWorkspaceWritePort {
   listTextFiles(): Promise<readonly TextFileSnapshot[]>;
@@ -41,71 +58,10 @@ export interface FileWorkspaceWriteResolver {
   resolve(chatId: string): FileWorkspaceWritePort | null;
 }
 
-export type RollbackItem =
-  | {
-      readonly kind: "file";
-      readonly changeId: string;
-      readonly chatId: string;
-      readonly snapshot: FileRollbackSnapshot;
-      readonly expectedAppliedSha256: string;
-    }
-  | {
-      readonly kind: "note";
-      readonly changeId: string;
-      readonly noteId: string;
-      readonly originalBody: string;
-      readonly expectedAppliedUpdatedTime: number;
-    };
-
-export interface RollbackRecord {
-  readonly runId: string;
-  readonly chatId: string;
-  readonly createdAt: number;
-  readonly items: readonly RollbackItem[];
-}
-
-export interface RollbackStore {
-  save(record: RollbackRecord): Promise<void>;
-  get(runId: string): Promise<RollbackRecord | null>;
-}
-
-export class InMemoryRollbackStore implements RollbackStore {
-  private readonly records = new Map<string, RollbackRecord>();
-
-  public constructor(private readonly now: () => number = Date.now) {}
-
-  public save(record: RollbackRecord): Promise<void> {
-    this.records.set(record.runId, cloneRollback(record));
-    this.prune();
-    return Promise.resolve();
-  }
-
-  public async get(runId: string): Promise<RollbackRecord | null> {
-    const record = this.records.get(runId);
-    return Promise.resolve(record ? cloneRollback(record) : null);
-  }
-
-  private prune(): void {
-    const cutoff = this.now() - 7 * 24 * 60 * 60 * 1_000;
-    const retained = [...this.records.values()]
-      .filter((record) => record.createdAt >= cutoff)
-      .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, 10);
-    this.records.clear();
-    for (const record of retained) this.records.set(record.runId, record);
-  }
-}
-
 export interface ApplyResult {
   readonly changeSetId: string;
   readonly changes: readonly ProposedChange[];
   readonly undoAvailable: boolean;
-}
-
-export interface UndoResult {
-  readonly runId: string;
-  readonly restored: number;
-  readonly conflicts: readonly string[];
 }
 
 type ReadyChange =
@@ -395,11 +351,18 @@ export class ChangeApplier {
       );
       return;
     }
-    await this.notes.updateNoteBody({
-      noteId: item.noteId,
-      body: item.originalBody,
-      expectedUpdatedTime: item.expectedAppliedUpdatedTime,
-    });
+    if (item.kind === "note") {
+      await this.notes.updateNoteBody({
+        noteId: item.noteId,
+        body: item.originalBody,
+        expectedUpdatedTime: item.expectedAppliedUpdatedTime,
+      });
+      return;
+    }
+    throw new DomainError(
+      "NOT_AVAILABLE",
+      `Rollback kind ${item.kind} is not handled by ChangeApplier undo; expected ChangeCompensator`,
+    );
   }
 }
 

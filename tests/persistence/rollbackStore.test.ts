@@ -1,4 +1,4 @@
-import type { RollbackRecord } from "../../src/agent/changeApplier";
+import type { RollbackRecord } from "../../src/agent/changeCompensation";
 import { ChatStore } from "../../src/persistence/chatStore";
 import { JsonRollbackStore } from "../../src/persistence/rollbackStore";
 import { MemoryJsonFilePort } from "../fakes/memoryJsonFilePort";
