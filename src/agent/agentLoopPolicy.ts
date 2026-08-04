@@ -1,9 +1,6 @@
 import type { ProviderMessage } from "../providers/types";
 import { pendingAgentPlanCount } from "./agentPlan";
-import type {
-  ToolExecutionContext,
-  ToolRegistry,
-} from "../tools/toolRegistry";
+import type { ToolExecutionContext, ToolRegistry } from "../tools/toolRegistry";
 
 /** After this many content-body reads without a proposal, force propose-write only. */
 export const READ_BUDGET_TOOL_CALLS = 8;

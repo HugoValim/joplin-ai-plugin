@@ -321,7 +321,11 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Loop forever" }],
-          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false,
+          vault: true,
+          readOnly: false,
+          readableNoteIds: new Set<string>(),
+          secretNotebookIds: new Set<string>(),
         },
         new AbortController().signal,
       ),
@@ -393,7 +397,11 @@ describe("AgentRunner", () => {
         chatId: "chat-1",
         runId: "run-1",
         messages: [{ role: "user", content: "Improve the guide" }],
-        hasFileWorkspace: true, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+        hasFileWorkspace: true,
+        vault: true,
+        readOnly: false,
+        readableNoteIds: new Set<string>(),
+        secretNotebookIds: new Set<string>(),
       },
       new AbortController().signal,
     );
@@ -456,7 +464,11 @@ describe("AgentRunner", () => {
           chatId: "chat-1",
           runId: "run-1",
           messages: [{ role: "user", content: "Do not run" }],
-          hasFileWorkspace: false, vault: true, readOnly: false, readableNoteIds: new Set<string>(), secretNotebookIds: new Set<string>(),
+          hasFileWorkspace: false,
+          vault: true,
+          readOnly: false,
+          readableNoteIds: new Set<string>(),
+          secretNotebookIds: new Set<string>(),
         },
         controller.signal,
       ),
@@ -518,7 +530,7 @@ describe("AgentRunner", () => {
           messages: [{ role: "user", content: "Keep reading" }],
           hasFileWorkspace: false,
           vault: false,
-        readOnly: false,
+          readOnly: false,
           readableNoteIds: new Set<string>(),
           secretNotebookIds: new Set<string>(),
         },
@@ -731,9 +743,7 @@ describe("AgentRunner", () => {
       {
         chatId: "chat-1",
         runId: "run-force-plan",
-        messages: [
-          { role: "user", content: "Improve writing in all notes" },
-        ],
+        messages: [{ role: "user", content: "Improve writing in all notes" }],
         hasFileWorkspace: false,
         vault: false,
         readOnly: false,
@@ -1131,8 +1141,7 @@ describe("AgentRunner", () => {
     expect(result.status).toBe("awaiting-approval");
     const capped = result.messages.filter(
       (message) =>
-        message.role === "tool" &&
-        message.content.includes("per-segment cap"),
+        message.role === "tool" && message.content.includes("per-segment cap"),
     );
     expect(capped.length).toBeGreaterThanOrEqual(1);
     expect(captured[1]?.tools.map((tool) => tool.name)).not.toContain(
@@ -1160,7 +1169,11 @@ describe("AgentRunner", () => {
                 name: "set_agent_plan",
                 arguments: {
                   items: [
-                    { id: "1", content: "Improve batch 1", status: "completed" },
+                    {
+                      id: "1",
+                      content: "Improve batch 1",
+                      status: "completed",
+                    },
                     { id: "2", content: "Improve batch 2" },
                   ],
                 },
