@@ -41,7 +41,7 @@ class TextProvider implements AiProvider {
 
 class FailingProvider extends TextProvider {
   public override async *streamChat(): AsyncIterable<ProviderEvent> {
-    throw new Error("transport leaked detail");
+    yield await Promise.reject(new Error("transport leaked detail"));
   }
 }
 
