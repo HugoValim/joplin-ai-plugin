@@ -7,16 +7,16 @@ import {
   type ChangeSetTransitionPort,
   type ChangeSetApplyInput,
   type ChangeSetDiscardInput,
+  type ChangeSetResolutionEvent,
+  type ChangeSetResolutionTransitionPort,
 } from "../persistence/changeSetLifecycle";
 import type { ChatStore } from "../persistence/chatStore";
-import { DomainError, safeValue } from "../shared/errors";
 import type { PanelRequest } from "../shared/protocol";
 import type { ToolRegistry } from "../tools/toolRegistry";
 import {
   ApprovalContinuation,
   type ContinuationProviderPort,
 } from "./approvalContinuation";
-import { requireChat } from "./chatLifecycle";
 import { toChangeSetView } from "./chatView";
 import {
   automaticApplyRequest,
@@ -209,17 +209,14 @@ export class ApprovalWorkflow {
   public async undo(
     request: Extract<PanelRequest, { type: "run.undo" }>,
   ): Promise<void> {
-    const result = await this.applier.undo(
-      request.payload.targetRunId,
-      request.chatId,
-    );
-    this.events.post(
-      "run.completed",
-      request.chatId,
+    await this.changeSetLifecycle.rollback(
       {
-        summary: `Restored ${result.restored}; conflicts ${result.conflicts.length}`,
+        chatId: request.chatId,
+        runId: request.runId,
+        targetRunId: request.payload.targetRunId,
       },
-      request.runId,
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -233,51 +230,14 @@ export class ApprovalWorkflow {
   public async deny(
     request: Extract<PanelRequest, { type: "changes.deny" }>,
   ): Promise<void> {
-    const changeSet = this.changes.get(request.payload.changeSetId);
-    if (!changeSet) {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `Change set ${safeValue(request.payload.changeSetId)} not found; expected an applied or pending change set`,
-      );
-    }
-    if (changeSet.status === "proposed") {
-      this.changes.discard(request.payload.changeSetId, {
+    await this.changeSetLifecycle.deny(
+      {
         chatId: request.chatId,
         runId: request.runId,
-      });
-      this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
-      this.continuationRuns.delete(request.payload.changeSetId);
-      await this.changeSetLifecycle.clearPending(
-        request.chatId,
-        request.runId,
-        "denied",
-      );
-      this.events.post(
-        "run.completed",
-        request.chatId,
-        { summary: "Changes denied before apply" },
-        request.runId,
-      );
-      return;
-    }
-    const result = await this.applier.undo(changeSet.runId, request.chatId);
-    this.changes.removeChanges(
-      changeSet.id,
-      changeSet.changes.map((change) => change.id),
-      { chatId: request.chatId, runId: request.runId },
-    );
-    await this.changeSetLifecycle.clearPending(
-      request.chatId,
-      request.runId,
-      "denied",
-    );
-    this.events.post(
-      "run.completed",
-      request.chatId,
-      {
-        summary: `Denied and restored ${result.restored}; conflicts ${result.conflicts.length}`,
+        changeSetId: request.payload.changeSetId,
       },
-      request.runId,
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -289,31 +249,14 @@ export class ApprovalWorkflow {
   public async keep(
     request: Extract<PanelRequest, { type: "changes.keep" }>,
   ): Promise<void> {
-    const remaining = this.changes.removeChanges(
-      request.payload.changeSetId,
-      request.payload.changeIds,
-      { chatId: request.chatId, runId: request.runId },
-    );
-    if (!remaining) {
-      await this.changeSetLifecycle.clearPending(
-        request.chatId,
-        request.runId,
-        "applied",
-      );
-      this.events.post(
-        "run.completed",
-        request.chatId,
-        { summary: "Kept applied changes" },
-        request.runId,
-      );
-      return;
-    }
-    await this.savePending(request.chatId, remaining);
-    this.events.post(
-      "changes.proposed",
-      request.chatId,
-      toChangeSetView(remaining, ""),
-      request.runId,
+    await this.changeSetLifecycle.keep(
+      {
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+        changeIds: request.payload.changeIds,
+      },
+      this.changeSetResolutionTransition(),
     );
   }
 
@@ -325,53 +268,47 @@ export class ApprovalWorkflow {
   public async undoChanges(
     request: Extract<PanelRequest, { type: "changes.undo" }>,
   ): Promise<void> {
-    const changeSet = this.changes.getScoped(request.payload.changeSetId, {
-      chatId: request.chatId,
-      runId: request.runId,
-    });
-    if (changeSet.status !== "applied" && changeSet.status !== "partial") {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `Change set ${safeValue(changeSet.id)} has status ${changeSet.status}; expected applied or partial status`,
-      );
-    }
-    const result = await this.applier.undo(
-      changeSet.runId,
-      request.chatId,
-      request.payload.changeIds,
+    await this.changeSetLifecycle.undoSelected(
+      {
+        chatId: request.chatId,
+        runId: request.runId,
+        changeSetId: request.payload.changeSetId,
+        changeIds: request.payload.changeIds,
+      },
+      this.applier,
+      this.changeSetResolutionTransition(),
     );
-    const remaining = this.changes.removeChanges(
-      changeSet.id,
-      request.payload.changeIds,
-      { chatId: request.chatId, runId: request.runId },
-    );
-    if (!remaining) {
-      await this.changeSetLifecycle.clearPending(
-        request.chatId,
-        request.runId,
-        "applied",
-      );
+  }
+
+  private changeSetResolutionTransition(): ChangeSetResolutionTransitionPort {
+    return {
+      publish: (input, event): void => this.publishResolution(input, event),
+      deleteContinuation: (changeSetId): void =>
+        this.continuationRuns.delete(changeSetId),
+    };
+  }
+
+  private publishResolution(
+    input: { readonly chatId: string; readonly runId: string },
+    event: ChangeSetResolutionEvent,
+  ): void {
+    if (event.mode === "review" && !event.summary) {
       this.events.post(
-        "run.completed",
-        request.chatId,
-        {
-          summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
-        },
-        request.runId,
+        "changes.proposed",
+        input.chatId,
+        toChangeSetView(event.changeSet, ""),
+        input.runId,
       );
       return;
     }
-    await this.savePending(request.chatId, remaining);
     this.events.post(
       "run.completed",
-      request.chatId,
+      input.chatId,
       {
-        summary: `Undid ${result.restored}; conflicts ${result.conflicts.length}`,
-        ...(result.restored > 0 || remaining.changes.some(isUndoableApplied)
-          ? { undoRunId: changeSet.runId }
-          : {}),
+        summary: event.summary,
+        ...(event.undoRunId ? { undoRunId: event.undoRunId } : {}),
       },
-      request.runId,
+      input.runId,
     );
   }
 
@@ -422,18 +359,6 @@ export class ApprovalWorkflow {
     });
   }
 
-  private async savePending(
-    chatId: string,
-    changeSet: ChangeSet,
-  ): Promise<void> {
-    const chat = await requireChat(this.chats, chatId);
-    await this.chats.save({
-      ...chat,
-      updatedAt: Date.now(),
-      pendingChangeSet: changeSet,
-    });
-  }
-
   private async disposePendingReviewNote(chatId: string): Promise<void> {
     const chat = await this.chats.get(chatId);
     await this.disposeReviewNote(chat?.pendingChangeSet?.reviewNoteId);
@@ -458,12 +383,6 @@ function stripReviewNote(changeSet: ChangeSet): ChangeSet {
     status: changeSet.status,
     changes: changeSet.changes,
   };
-}
-
-function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
-  if (change.status !== "applied") return false;
-  if (change.kind === "file") return true;
-  return change.operation === "update";
 }
 
 function applyCounts(result: ApplyResult): {
