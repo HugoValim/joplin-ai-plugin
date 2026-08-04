@@ -450,17 +450,6 @@ function errorMessage(error: unknown): string {
     : safeValue(error);
 }
 
-function cloneRollback(record: RollbackRecord): RollbackRecord {
-  return {
-    ...record,
-    items: record.items.map((item) =>
-      item.kind === "file"
-        ? { ...item, snapshot: { ...item.snapshot } }
-        : { ...item },
-    ),
-  };
-}
-
 function selectRollbackItems(
   items: readonly RollbackItem[],
   changeIds: readonly string[] | undefined,
