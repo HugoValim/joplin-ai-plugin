@@ -48,7 +48,7 @@ export function needsAgentPlanAfterDiscovery(
   if (context.agentPlan.plan) return false;
   if (toolNames.includes("set_agent_plan")) return false;
   if (!hasAgentPlanTools(tools, context)) return false;
-  return isSignificantDiscovery(toolNames);
+  return tools.hasSignificantDiscovery(toolNames);
 }
 
 /**
@@ -120,17 +120,6 @@ export function withMissingProposalNotice(assistantText: string): string {
     "No propose-write tools were called, so ChangeReview did not open. Ask again to apply the changes.";
   const trimmed = assistantText.trim();
   return trimmed ? `${trimmed}\n\n${notice}` : notice;
-}
-
-function isSignificantDiscovery(toolNames: readonly string[]): boolean {
-  const noteLists = toolNames.filter(
-    (name) => name === "list_notebook_notes",
-  ).length;
-  if (noteLists >= 2) return true;
-  return (
-    toolNames.includes("list_notebooks") &&
-    toolNames.includes("list_notebook_notes")
-  );
 }
 
 function hasAgentPlanTools(

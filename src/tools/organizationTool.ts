@@ -7,7 +7,12 @@ import type {
   TrashedNotebookRecord,
 } from "../notes/retriever";
 import { DomainError } from "../shared/errors";
-import type { AgentTool, ToolExecutionContext, ToolRisk } from "./toolRegistry";
+import type {
+  AgentTool,
+  AgentToolClassification,
+  ToolExecutionContext,
+  ToolRisk,
+} from "./toolRegistry";
 import { vaultOrgToolsEnabled } from "./noteAccessPolicy";
 
 export const OrganizationIdentifierSchema = Type.String({
@@ -40,6 +45,7 @@ export abstract class OrganizationTool<TInput, TOutput> implements AgentTool<
   public abstract readonly name: string;
   public abstract readonly description: string;
   public abstract readonly risk: ToolRisk;
+  public readonly classification: AgentToolClassification = "other";
   public abstract readonly inputSchema: TSchema;
   public abstract readonly outputSchema: TSchema;
 

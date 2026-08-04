@@ -37,6 +37,10 @@ abstract class FileTool<TInput, TOutput> implements AgentTool<TInput, TOutput> {
   public abstract readonly name: string;
   public abstract readonly description: string;
   public abstract readonly risk: ToolRisk;
+  public abstract readonly classification: AgentTool<
+    TInput,
+    TOutput
+  >["classification"];
   public abstract readonly inputSchema: TSchema;
   public abstract readonly outputSchema: TSchema;
 
@@ -55,6 +59,7 @@ class ListTextFilesTool extends FileTool<Record<string, never>, object> {
   public readonly description =
     "List eligible text files in the selected chat folder.";
   public readonly risk = "read" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -102,6 +107,7 @@ class ReadTextFileTool extends FileTool<ReadFileInput, object> {
   public readonly description =
     "Read one eligible UTF-8 text file from the selected folder.";
   public readonly risk = "read" as const;
+  public readonly classification = "content-read" as const;
   public readonly inputSchema = Type.Object(
     { relative_path: PathSchema },
     { additionalProperties: false },
@@ -139,6 +145,7 @@ class SearchTextFilesTool extends FileTool<SearchFilesInput, object> {
   public readonly name = "search_text_files";
   public readonly description = "Search eligible files in the selected folder.";
   public readonly risk = "read" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     { query: Type.String({ minLength: 1, maxLength: 10_000 }) },
     { additionalProperties: false },
@@ -188,6 +195,7 @@ class ProposeFileReplacementTool extends FileTool<
   public readonly name = "propose_file_replacement";
   public readonly description = "Propose replacing one versioned text file.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = replacementSchema();
   public readonly outputSchema = ProposalOutputSchema;
 
@@ -223,6 +231,7 @@ class ProposeFileTextReplacementTool extends FileTool<
   public readonly description =
     "Propose an exact replacement in one versioned text file.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       relative_path: PathSchema,
@@ -283,6 +292,7 @@ class ReviewTextFilesTool extends FileTool<
   public readonly description =
     "Preflight and collect a bounded multi-file prose review without writing.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       edits: Type.Array(replacementSchema(), {

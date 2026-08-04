@@ -8,19 +8,10 @@ import type {
 import { DomainError, safeValue } from "../shared/errors";
 
 export type ToolRisk = "read" | "propose-write" | "meta";
+export type AgentToolClassification = "other" | "content-read" | "discovery";
 
-/** Content-body reads that count toward the per-segment read budget. */
-export const CONTENT_READ_TOOL_NAMES = new Set([
-  "read_note",
-  "read_text_file",
-]);
-
-/** Inventory/search tools blocked after significant vault discovery. */
-export const DISCOVERY_TOOL_NAMES = new Set([
-  "list_notebooks",
-  "list_notebook_notes",
-  "search_notes",
-]);
+/** Max inventory/search executions per run segment before blocking more. */
+const MAX_DISCOVERY_TOOL_CALLS = 10;
 
 export interface ToolDefinitionOptions {
   readonly proposeOnly?: boolean;
@@ -44,6 +35,7 @@ export interface AgentTool<TInput, TOutput> {
   readonly name: string;
   readonly description: string;
   readonly risk: ToolRisk;
+  readonly classification: AgentToolClassification;
   readonly inputSchema: TSchema;
   readonly outputSchema: TSchema;
   isAvailable(context: ToolExecutionContext): boolean;
@@ -57,10 +49,28 @@ export interface ToolExecutionResult {
   readonly output: unknown;
 }
 
+export interface ToolExecutionPolicy {
+  readonly proposeOnly: boolean;
+  readonly readOnly: boolean;
+  readonly blockDiscovery: boolean;
+  readonly priorToolNames: readonly string[];
+  readonly abortSignal: AbortSignal;
+}
+
+export interface GuardedToolExecution {
+  readonly contentReadCount: number;
+  readonly discoveryCapped: boolean;
+  execute(
+    call: NormalizedToolCall,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionResult>;
+}
+
 interface RegisteredTool {
   readonly name: string;
   readonly description: string;
   readonly risk: ToolRisk;
+  readonly classification: AgentToolClassification;
   readonly inputSchema: TSchema;
   readonly outputSchema: TSchema;
   readonly isAvailable: (context: ToolExecutionContext) => boolean;
@@ -120,7 +130,7 @@ export class ToolRegistry {
       )
       .filter(
         (tool) =>
-          !options.blockDiscovery || !DISCOVERY_TOOL_NAMES.has(tool.name),
+          !options.blockDiscovery || tool.classification !== "discovery",
       )
       .map((tool) => ({
         name: tool.name,
@@ -135,7 +145,7 @@ export class ToolRegistry {
    * @example registry.isDiscoveryTool("list_notebook_notes")
    */
   public isDiscoveryTool(name: string): boolean {
-    return DISCOVERY_TOOL_NAMES.has(name);
+    return this.tools.get(name)?.classification === "discovery";
   }
 
   /**
@@ -144,7 +154,23 @@ export class ToolRegistry {
    * @example registry.countsTowardReadBudget("read_note")
    */
   public countsTowardReadBudget(name: string): boolean {
-    return CONTENT_READ_TOOL_NAMES.has(name);
+    return this.tools.get(name)?.classification === "content-read";
+  }
+
+  /**
+   * Returns whether vault discovery is broad enough to require an agent plan.
+   *
+   * @example registry.hasSignificantDiscovery(toolNames)
+   */
+  public hasSignificantDiscovery(toolNames: readonly string[]): boolean {
+    const notebookNoteLists = toolNames.filter(
+      (name) => name === "list_notebook_notes",
+    ).length;
+    if (notebookNoteLists >= 2) return true;
+    return (
+      toolNames.includes("list_notebooks") &&
+      toolNames.includes("list_notebook_notes")
+    );
   }
 
   /**
@@ -169,6 +195,17 @@ export class ToolRegistry {
    */
   public riskFor(name: string): ToolRisk | null {
     return this.tools.get(name)?.risk ?? null;
+  }
+
+  /**
+   * Starts one policy-guarded sequence of tool executions.
+   *
+   * @example registry.beginGuardedExecution(policy)
+   */
+  public beginGuardedExecution(
+    policy: ToolExecutionPolicy,
+  ): GuardedToolExecution {
+    return new RegistryGuardedExecution(this, policy);
   }
 
   /**
@@ -210,6 +247,154 @@ export class ToolRegistry {
   }
 }
 
+class RegistryGuardedExecution implements GuardedToolExecution {
+  private countedContentReads = 0;
+  private discoveryCount: number;
+  private hitDiscoveryLimit = false;
+
+  public constructor(
+    private readonly registry: ToolRegistry,
+    private readonly policy: ToolExecutionPolicy,
+  ) {
+    this.discoveryCount = policy.priorToolNames.filter((name) =>
+      registry.isDiscoveryTool(name),
+    ).length;
+  }
+
+  public get contentReadCount(): number {
+    return this.countedContentReads;
+  }
+
+  public get discoveryCapped(): boolean {
+    return this.hitDiscoveryLimit;
+  }
+
+  public async execute(
+    call: NormalizedToolCall,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    assertExecutionActive(this.policy.abortSignal);
+    const discovery = this.registry.isDiscoveryTool(call.name);
+    const hitDiscoveryCap =
+      discovery && this.discoveryCount >= MAX_DISCOVERY_TOOL_CALLS;
+    this.recordCallClassification(call.name, hitDiscoveryCap);
+    const rejection = this.policyRejection(call, discovery, hitDiscoveryCap);
+    if (rejection) return rejection;
+    if (discovery) this.recordDiscoveryExecution();
+    try {
+      return await this.registry.execute(call, context);
+    } catch (error: unknown) {
+      return toolFailureResult(call, error);
+    }
+  }
+
+  private recordCallClassification(
+    toolName: string,
+    hitDiscoveryCap: boolean,
+  ): void {
+    if (this.registry.countsTowardReadBudget(toolName)) {
+      this.countedContentReads += 1;
+    }
+    if (hitDiscoveryCap) this.hitDiscoveryLimit = true;
+  }
+
+  private policyRejection(
+    call: NormalizedToolCall,
+    discovery: boolean,
+    hitDiscoveryCap: boolean,
+  ): ToolExecutionResult | null {
+    const riskRejection = this.riskPolicyRejection(call);
+    if (riskRejection) return riskRejection;
+    if (!discovery || (!this.policy.blockDiscovery && !hitDiscoveryCap)) {
+      return null;
+    }
+    return unavailableResult(
+      call,
+      "read",
+      discoveryUnavailableMessage(call.name, hitDiscoveryCap),
+    );
+  }
+
+  private riskPolicyRejection(
+    call: NormalizedToolCall,
+  ): ToolExecutionResult | null {
+    const risk = this.registry.riskFor(call.name);
+    if (this.policy.readOnly && risk === "propose-write") {
+      return unavailableResult(
+        call,
+        "propose-write",
+        `Write tool ${call.name} is disabled in Ask mode; expected a read-only tool`,
+      );
+    }
+    if (this.policy.proposeOnly && risk === "read") {
+      return unavailableResult(
+        call,
+        "read",
+        `Read tool ${call.name} is disabled after the read budget; expected a propose-write tool`,
+      );
+    }
+    return null;
+  }
+
+  private recordDiscoveryExecution(): void {
+    this.discoveryCount += 1;
+    if (this.discoveryCount >= MAX_DISCOVERY_TOOL_CALLS) {
+      this.hitDiscoveryLimit = true;
+    }
+  }
+}
+
+function assertExecutionActive(abortSignal: AbortSignal): void {
+  if (!abortSignal.aborted) return;
+  throw new DomainError("ABORTED", "Agent run cancelled", abortSignal.reason);
+}
+
+function discoveryUnavailableMessage(
+  toolName: string,
+  hitDiscoveryCap: boolean,
+): string {
+  if (hitDiscoveryCap) {
+    return `Discovery tool ${toolName} hit the per-segment cap of ${MAX_DISCOVERY_TOOL_CALLS}; call set_agent_plan then read and propose a bounded batch`;
+  }
+  return `Discovery tool ${toolName} is disabled after inventory; call set_agent_plan then read and propose a bounded batch`;
+}
+
+function unavailableResult(
+  call: NormalizedToolCall,
+  risk: "read" | "propose-write",
+  message: string,
+): ToolExecutionResult {
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    risk,
+    output: { error: { code: "NOT_AVAILABLE", message } },
+  };
+}
+
+function toolFailureResult(
+  call: NormalizedToolCall,
+  error: unknown,
+): ToolExecutionResult {
+  if (error instanceof DomainError && shouldRethrowToolError(error)) {
+    throw error;
+  }
+  const failure =
+    error instanceof DomainError
+      ? error
+      : new DomainError("INTERNAL", "Unexpected tool failure", error);
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    risk: "read",
+    output: { error: { code: failure.code, message: failure.message } },
+  };
+}
+
+function shouldRethrowToolError(error: DomainError): boolean {
+  return error.code === "ABORTED" || error.code === "LIMIT_EXCEEDED";
+}
+
 function eraseToolTypes<TInput, TOutput>(
   tool: AgentTool<TInput, TOutput>,
 ): RegisteredTool {
@@ -217,6 +402,7 @@ function eraseToolTypes<TInput, TOutput>(
     name: tool.name,
     description: tool.description,
     risk: tool.risk,
+    classification: tool.classification,
     inputSchema: tool.inputSchema,
     outputSchema: tool.outputSchema,
     isAvailable: (context): boolean => tool.isAvailable(context),
@@ -265,8 +451,6 @@ function isNumberLikeSchema(schema: TSchema): boolean {
   return kind === "number" || kind === "integer";
 }
 
-function isPlainObject(
-  input: unknown,
-): input is Record<string, unknown> {
+function isPlainObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }

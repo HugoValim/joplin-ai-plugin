@@ -296,10 +296,7 @@ export class AgentRunner {
           toolNames,
         };
       }
-      readCallsSincePropose += countContentReads(
-        this.tools,
-        modelStep.toolCalls,
-      );
+      readCallsSincePropose += batch.contentReadCount;
       // After large inventory, block more listing and require a plan next.
       if (
         !blockDiscovery &&
@@ -370,13 +367,6 @@ export class AgentRunner {
       agentPlan,
     };
   }
-}
-
-function countContentReads(
-  tools: ToolRegistry,
-  calls: readonly NormalizedToolCall[],
-): number {
-  return calls.filter((call) => tools.countsTowardReadBudget(call.name)).length;
 }
 
 function tryBootstrapInventoryPlan(

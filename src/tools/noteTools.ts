@@ -31,6 +31,10 @@ abstract class NoteTool<TInput, TOutput> implements AgentTool<TInput, TOutput> {
   public abstract readonly name: string;
   public abstract readonly description: string;
   public abstract readonly risk: ToolRisk;
+  public abstract readonly classification: AgentTool<
+    TInput,
+    TOutput
+  >["classification"];
   public abstract readonly inputSchema: TSchema;
   public abstract readonly outputSchema: TSchema;
 
@@ -60,6 +64,7 @@ class SearchNotesTool extends NoteTool<SearchNotesInput, SearchNotesOutput> {
   public readonly description =
     "Search note titles and metadata in the Joplin vault.";
   public readonly risk = "read" as const;
+  public readonly classification = "discovery" as const;
   public readonly inputSchema = Type.Object(
     {
       query: Type.String({ minLength: 1, maxLength: 10_000 }),
@@ -123,6 +128,7 @@ class ReadNoteTool extends NoteTool<ReadNoteInput, ReadNoteOutput> {
   public readonly name = "read_note";
   public readonly description = "Read one Joplin note by opaque note ID.";
   public readonly risk = "read" as const;
+  public readonly classification = "content-read" as const;
   public readonly inputSchema = Type.Object(
     { note_id: IdentifierSchema },
     { additionalProperties: false },
@@ -174,6 +180,7 @@ class ListNotebooksTool extends NoteTool<
   public readonly name = "list_notebooks";
   public readonly description = "List available Joplin notebooks.";
   public readonly risk = "read" as const;
+  public readonly classification = "discovery" as const;
   public readonly inputSchema = Type.Object(
     {},
     { additionalProperties: false },
@@ -225,6 +232,7 @@ class CreateNoteTool extends NoteTool<CreateNoteToolInput, ProposalOutput> {
   public readonly description =
     "Propose creating a Markdown note for batch approval.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       parent_id: IdentifierSchema,
@@ -272,6 +280,7 @@ class AppendNoteTool extends NoteTool<AppendNoteInput, ProposalOutput> {
   public readonly description =
     "Propose appending Markdown to a versioned note.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       note_id: IdentifierSchema,
@@ -323,6 +332,7 @@ class ReplaceNoteTool extends NoteTool<ReplaceNoteInput, ProposalOutput> {
   public readonly description =
     "Propose an exact text replacement in a versioned note.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       note_id: IdentifierSchema,
@@ -376,6 +386,7 @@ class ReplaceNoteBodyTool extends NoteTool<
   public readonly description =
     "Propose replacing an entire note body after reading it. Prefer replace_note_text for small exact edits.";
   public readonly risk = "propose-write" as const;
+  public readonly classification = "other" as const;
   public readonly inputSchema = Type.Object(
     {
       note_id: IdentifierSchema,
