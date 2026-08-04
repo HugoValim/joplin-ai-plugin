@@ -17,7 +17,6 @@ import type {
 import { DomainError, safeValue } from "../shared/errors";
 import type {
   RollbackItem,
-  RollbackRecord,
   RollbackStore,
   UndoResult,
 } from "./changeCompensation";
