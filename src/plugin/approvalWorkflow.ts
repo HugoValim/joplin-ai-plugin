@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
-import {
-  AgentRunner,
-  type AgentContinuation,
-  type AgentObserver,
+import type {
+  AgentContinuation,
+  AgentRunRequest,
+  AgentRunOutcome,
 } from "../agent/agentRunner";
 import type { ChangeApplier, ApplyResult } from "../agent/changeApplier";
 import type { ContextCitation } from "../agent/contextBuilder";
@@ -12,18 +12,17 @@ import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
 import type { AiProvider } from "../providers/types";
 import { DomainError, safeValue } from "../shared/errors";
 import { PROTOCOL_VERSION, type PanelRequest } from "../shared/protocol";
-import type { ToolExecutionResult, ToolRegistry } from "../tools/toolRegistry";
+import type { ToolRegistry } from "../tools/toolRegistry";
 import {
   AgentContinuationStore,
   type PendingAgentContinuation,
 } from "./agentContinuationStore";
-import { persistRunOutcome, requireChat } from "./chatLifecycle";
+import { requireChat } from "./chatLifecycle";
 import { toChangeSetView } from "./chatView";
-import { DeltaBatcher } from "./deltaBatcher";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import type { ReviewNotePort } from "./reviewNoteService";
-import { summarizeToolResult } from "./toolActivity";
+import { ModelRunLifecycle } from "./modelRunLifecycle";
 
 interface ContinuationProviderPort {
   connectWithConfirmation(): Promise<{ readonly provider: AiProvider }>;
@@ -32,20 +31,25 @@ interface ContinuationProviderPort {
 export class ApprovalWorkflow {
   private readonly continuations = new AgentContinuationStore();
   private readonly changeSetLifecycle: ChangeSetLifecycle;
+  private readonly modelRuns: ModelRunLifecycle;
 
   public constructor(
     private readonly chats: ChatStore,
     private readonly changes: ChangeSetStore,
     private readonly applier: ChangeApplier,
-    private readonly tools: ToolRegistry,
+    tools: ToolRegistry,
     private readonly providers: ContinuationProviderPort,
     private readonly events: PluginEventSender,
-    private readonly activeRuns: RunCancellationRegistry,
+    activeRuns: RunCancellationRegistry,
     private readonly reviewNotes: ReviewNotePort,
     changeSetLifecycle?: ChangeSetLifecycle,
+    modelRuns?: ModelRunLifecycle,
   ) {
     this.changeSetLifecycle =
       changeSetLifecycle ?? new ChangeSetLifecycle(changes, chats, reviewNotes);
+    this.modelRuns =
+      modelRuns ??
+      new ModelRunLifecycle(chats, tools, changes, events, activeRuns);
   }
 
   public remember(
@@ -359,73 +363,39 @@ export class ApprovalWorkflow {
     automatic: boolean,
   ): Promise<void> {
     const runId = randomUUID();
-    const controller = new AbortController();
-    this.activeRuns.replace(request.chatId, runId, controller);
-    this.events.post(
-      "run.started",
-      request.chatId,
-      { startedAt: Date.now() },
+    await this.modelRuns.resume({
+      chatId: request.chatId,
       runId,
-    );
-    const deltas = this.createDeltaBatcher(request.chatId, runId);
-    try {
-      await this.executeContinuation(
-        pending,
-        applied,
-        request.runId,
-        runId,
-        automatic,
-        controller.signal,
-        deltas,
-      );
-    } catch (error: unknown) {
-      this.postContinuationFailure(request, runId, applied, error);
-    } finally {
-      deltas.dispose();
-      this.activeRuns.clearIfCurrent(request.chatId, controller);
-    }
+      continuation: pending.continuation,
+      approvalSummary: approvalSummary(applied, automatic),
+      citations: pending.citations,
+      prepare: async () => {
+        const { provider } = await this.providers.connectWithConfirmation();
+        return { provider, request: continuationRunRequest(pending) };
+      },
+      onOutcome: async (outcome) => {
+        await this.handleContinuationOutcome(
+          pending,
+          outcome,
+          request.runId,
+          runId,
+          applied.undoAvailable,
+        );
+      },
+      onFailure: () => {
+        this.postContinuationCompensation(request, runId, applied);
+      },
+    });
   }
 
-  private async executeContinuation(
+  private async handleContinuationOutcome(
     pending: PendingAgentContinuation,
-    applied: ApplyResult,
+    outcome: AgentRunOutcome,
     appliedRunId: string,
     runId: string,
-    automatic: boolean,
-    signal: AbortSignal,
-    deltas: DeltaBatcher,
+    undoAvailable: boolean,
   ): Promise<void> {
-    const { provider } = await this.providers.connectWithConfirmation();
-    const runner = new AgentRunner(
-      provider,
-      this.tools,
-      this.changes,
-      this.observer(pending.chatId, runId, deltas),
-    );
-    const outcome = await runner.resume(
-      {
-        chatId: pending.chatId,
-        runId,
-        messages: [],
-        hasFileWorkspace: pending.hasFileWorkspace,
-        vault: pending.vault,
-        readOnly: false,
-        readableNoteIds: pending.readableNoteIds,
-        secretNotebookIds: pending.secretNotebookIds,
-      },
-      pending.continuation,
-      approvalSummary(applied, automatic),
-      signal,
-    );
-    deltas.flush();
     const chat = await requireChat(this.chats, pending.chatId);
-    await persistRunOutcome(
-      this.chats,
-      chat,
-      runId,
-      outcome,
-      pending.citations,
-    );
     this.remember(
       outcome.changeSet,
       outcome.continuation,
@@ -440,75 +410,8 @@ export class ApprovalWorkflow {
       pending.chatId,
       runId,
       outcome.changeSet,
-      applied.undoAvailable ? appliedRunId : null,
+      undoAvailable ? appliedRunId : null,
       chat.context.autoApply,
-    );
-  }
-
-  private observer(
-    chatId: string,
-    runId: string,
-    deltas: DeltaBatcher,
-  ): AgentObserver {
-    return {
-      onTextDelta: (delta): void => deltas.push(delta),
-      onToolStarted: (call): void =>
-        this.events.post(
-          "tool.started",
-          chatId,
-          { toolCallId: call.id, name: call.name },
-          runId,
-        ),
-      onToolCompleted: (result): void =>
-        this.postToolCompleted(chatId, runId, result),
-      onPlanUpdated: (plan): void =>
-        this.events.post(
-          "run.plan",
-          chatId,
-          {
-            items: plan.items.map((item) => ({
-              id: item.id,
-              content: item.content,
-              status: item.status,
-            })),
-          },
-          runId,
-        ),
-      onStep: (current, total, label): void =>
-        this.events.post(
-          "run.progress",
-          chatId,
-          {
-            current,
-            total,
-            label: label ?? `Model step ${current} of ${total}`,
-          },
-          runId,
-        ),
-    };
-  }
-
-  private postToolCompleted(
-    chatId: string,
-    runId: string,
-    result: ToolExecutionResult,
-  ): void {
-    this.events.post(
-      "tool.completed",
-      chatId,
-      {
-        toolCallId: result.toolCallId,
-        name: result.name,
-        ok: true,
-        summary: summarizeToolResult(result),
-      },
-      runId,
-    );
-  }
-
-  private createDeltaBatcher(chatId: string, runId: string): DeltaBatcher {
-    return new DeltaBatcher((delta) =>
-      this.events.post("assistant.delta", chatId, { delta }, runId),
     );
   }
 
@@ -550,22 +453,11 @@ export class ApprovalWorkflow {
     );
   }
 
-  private postContinuationFailure(
+  private postContinuationCompensation(
     request: Extract<PanelRequest, { type: "changes.apply" }>,
     runId: string,
     applied: ApplyResult,
-    error: unknown,
   ): void {
-    const domain =
-      error instanceof DomainError
-        ? error
-        : new DomainError("INTERNAL", "Unexpected continuation failure");
-    this.events.post(
-      "run.failed",
-      request.chatId,
-      { code: domain.code, message: domain.message },
-      runId,
-    );
     if (!applied.undoAvailable) return;
     this.events.post(
       "run.completed",
@@ -701,6 +593,19 @@ export class ApprovalWorkflow {
     if (!reviewNoteId) return;
     await this.reviewNotes.dispose(reviewNoteId);
   }
+}
+
+function continuationRunRequest(
+  pending: PendingAgentContinuation,
+): Omit<AgentRunRequest, "chatId" | "runId"> {
+  return {
+    messages: [],
+    hasFileWorkspace: pending.hasFileWorkspace,
+    vault: pending.vault,
+    readOnly: false,
+    readableNoteIds: pending.readableNoteIds,
+    secretNotebookIds: pending.secretNotebookIds,
+  };
 }
 
 function stripReviewNote(changeSet: ChangeSet): ChangeSet {

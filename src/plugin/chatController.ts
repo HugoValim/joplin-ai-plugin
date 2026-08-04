@@ -1,10 +1,6 @@
 import { randomUUID } from "crypto";
 import path from "path";
-import {
-  AgentRunner,
-  type AgentObserver,
-  type TokenUsage,
-} from "../agent/agentRunner";
+import type { AgentRunOutcome, TokenUsage } from "../agent/agentRunner";
 import type { ChangeApplier } from "../agent/changeApplier";
 import type { ContextBuilder } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
@@ -13,7 +9,6 @@ import type {
   ChatStore,
   PersistedChat,
   PersistedChatMessage,
-  PersistedRunSummary,
 } from "../persistence/chatStore";
 import { DomainError, safeValue } from "../shared/errors";
 import type { ActiveChatView, PanelRequest } from "../shared/protocol";
@@ -25,16 +20,14 @@ import {
   type SelectionRefInput,
 } from "../shared/selectionRef";
 import { searchMentionHits, type MentionSearchPort } from "./mentionSearch";
-import type { ToolRegistry, ToolExecutionResult } from "../tools/toolRegistry";
+import type { ToolRegistry } from "../tools/toolRegistry";
 import { loadSystemPrompt, type SettingsPort } from "./settings";
 import type { PanelPort } from "./panelPort";
 import type { PerChatWorkspaceResolver } from "./workspaceAdapters";
-import { DeltaBatcher } from "./deltaBatcher";
 import { mergeHistory, toActiveChat } from "./chatView";
 import {
   deleteChatAndChooseNext,
   lastUserMessage,
-  persistRunOutcome,
   requireChat,
   truncateForRegenerate,
 } from "./chatLifecycle";
@@ -44,10 +37,13 @@ import { PRIVACY_NOTICE } from "./privacy";
 import { PluginEventSender } from "./pluginEventSender";
 import type { AssistantOutputActions } from "./assistantOutputActions";
 import type { CommandPort, DialogPort, ProviderFactory } from "./types";
-import { summarizeToolResult } from "./toolActivity";
 import { ApprovalWorkflow } from "./approvalWorkflow";
 import type { SecretNotebookStore } from "../persistence/secretNotebookStore";
 import { NoOpReviewNotePort, type ReviewNotePort } from "./reviewNoteService";
+import {
+  ModelRunLifecycle,
+  type PreparedInitialModelRun,
+} from "./modelRunLifecycle";
 
 const AUTO_APPLY_WARNING =
   "Security warning: Bypass permissions will auto-apply every model-proposed non-delete change, then keep an inline Keep/Undo review in the sidebar. Deletions still require manual ChangeReview before apply. Conflicts are still blocked. Enable for this chat?";
@@ -59,6 +55,11 @@ const MAX_SELECTION_REFS = 20;
 export interface DropSelectionPort {
   selectedNoteIds(): Promise<readonly string[]>;
   selectedFolderId(): Promise<string | null>;
+}
+
+interface ChatRunSource {
+  readonly chat: PersistedChat;
+  readonly userText: string;
 }
 
 export class ChatController {
@@ -73,13 +74,14 @@ export class ChatController {
   private readonly events: PluginEventSender;
   private readonly approvals: ApprovalWorkflow;
   private readonly changeSetLifecycle: ChangeSetLifecycle;
+  private readonly modelRuns: ModelRunLifecycle;
 
   public constructor(
     private readonly panel: PanelPort,
     private readonly chats: ChatStore,
     private readonly contextBuilder: ContextBuilder,
-    private readonly tools: ToolRegistry,
-    private readonly changes: ChangeSetStore,
+    tools: ToolRegistry,
+    changes: ChangeSetStore,
     applier: ChangeApplier,
     private readonly workspaces: PerChatWorkspaceResolver,
     private readonly settings: SettingsPort,
@@ -98,6 +100,13 @@ export class ChatController {
       createProvider,
     );
     this.events = new PluginEventSender(panel);
+    this.modelRuns = new ModelRunLifecycle(
+      chats,
+      tools,
+      changes,
+      this.events,
+      this.activeRuns,
+    );
     this.changeSetLifecycle = new ChangeSetLifecycle(
       changes,
       chats,
@@ -113,6 +122,7 @@ export class ChatController {
       this.activeRuns,
       reviewNotes,
       this.changeSetLifecycle,
+      this.modelRuns,
     );
   }
 
@@ -384,226 +394,125 @@ export class ChatController {
   private async submit(
     request: Extract<PanelRequest, { type: "chat.submit" }>,
   ): Promise<void> {
-    await this.startRun(
-      request.chatId,
-      request.runId,
-      async (deltas, signal) => {
-        const chat = await requireChat(this.chats, request.chatId);
-        const saved = await this.appendUserMessage(chat, request.payload.text);
-        await this.executeRunWithChat(
-          request.chatId,
-          request.runId,
-          saved,
-          request.payload.text,
-          deltas,
-          signal,
-        );
-      },
-    );
+    await this.startRun(request.chatId, request.runId, async () => {
+      const chat = await requireChat(this.chats, request.chatId);
+      const saved = await this.appendUserMessage(chat, request.payload.text);
+      return { chat: saved, userText: request.payload.text };
+    });
   }
 
   private async retry(
     request: Extract<PanelRequest, { type: "chat.retry" }>,
   ): Promise<void> {
-    await this.startRun(
-      request.chatId,
-      request.runId,
-      async (deltas, signal) => {
-        const chat = await requireChat(this.chats, request.chatId);
-        const userMessage = lastUserMessage(chat);
-        if (!userMessage) {
-          throw new DomainError(
-            "NOT_AVAILABLE",
-            `Chat ${safeValue(chat.id)} has no user message to retry; expected at least one user turn`,
-          );
-        }
-        await this.executeRunWithChat(
-          request.chatId,
-          request.runId,
-          chat,
-          userMessage.content,
-          deltas,
-          signal,
+    await this.startRun(request.chatId, request.runId, async () => {
+      const chat = await requireChat(this.chats, request.chatId);
+      const userMessage = lastUserMessage(chat);
+      if (!userMessage) {
+        throw new DomainError(
+          "NOT_AVAILABLE",
+          `Chat ${safeValue(chat.id)} has no user message to retry; expected at least one user turn`,
         );
-      },
-    );
+      }
+      return { chat, userText: userMessage.content };
+    });
   }
 
   private async regenerate(
     request: Extract<PanelRequest, { type: "chat.regenerate" }>,
   ): Promise<void> {
-    await this.startRun(
-      request.chatId,
-      request.runId,
-      async (deltas, signal) => {
-        const chat = await requireChat(this.chats, request.chatId);
-        const truncated = truncateForRegenerate(
-          chat,
-          request.payload.messageId,
+    await this.startRun(request.chatId, request.runId, async () => {
+      const chat = await requireChat(this.chats, request.chatId);
+      const truncated = truncateForRegenerate(chat, request.payload.messageId);
+      await this.chats.save(truncated);
+      const userMessage = lastUserMessage(truncated);
+      if (!userMessage) {
+        throw new DomainError(
+          "NOT_AVAILABLE",
+          `Chat ${safeValue(chat.id)} has no user message before regenerate target; expected a prior user turn`,
         );
-        await this.chats.save(truncated);
-        const userMessage = lastUserMessage(truncated);
-        if (!userMessage) {
-          throw new DomainError(
-            "NOT_AVAILABLE",
-            `Chat ${safeValue(chat.id)} has no user message before regenerate target; expected a prior user turn`,
-          );
-        }
-        await this.executeRunWithChat(
-          request.chatId,
-          request.runId,
-          truncated,
-          userMessage.content,
-          deltas,
-          signal,
-        );
-      },
-    );
+      }
+      return { chat: truncated, userText: userMessage.content };
+    });
   }
 
   private async startRun(
     chatId: string,
     runId: string,
-    execute: (deltas: DeltaBatcher, abortSignal: AbortSignal) => Promise<void>,
+    loadSource: () => Promise<ChatRunSource>,
   ): Promise<void> {
-    const abortController = new AbortController();
-    if (!this.activeRuns.tryStart(chatId, runId, abortController)) {
-      throw new DomainError(
-        "CONFLICT",
-        `Chat ${safeValue(chatId)} already has an active run; expected one run at a time`,
-      );
-    }
-    this.events.post("run.started", chatId, { startedAt: Date.now() }, runId);
-    const deltaBatcher = new DeltaBatcher((delta) => {
-      this.events.post("assistant.delta", chatId, { delta }, runId);
+    await this.modelRuns.start({
+      chatId,
+      runId,
+      prepare: async () => {
+        const source = await loadSource();
+        return this.prepareInitialRun(source);
+      },
+      onOutcome: async (outcome, prepared) => {
+        await this.handleInitialOutcome(runId, outcome, prepared);
+      },
+      onActivity: () => this.markEndpointOnline(),
+      onFailure: async (failure) => {
+        if (failure.code !== "ABORTED" && !this.activeRuns.has(chatId)) {
+          this.endpointStatus = "offline";
+        }
+        await this.sendSnapshot();
+      },
     });
-    try {
-      await execute(deltaBatcher, abortController.signal);
-    } catch (error: unknown) {
-      deltaBatcher.flush();
-      await this.recordFailure(chatId, runId, error);
-    } finally {
-      deltaBatcher.dispose();
-      this.activeRuns.clearIfCurrent(chatId, abortController);
-    }
   }
 
-  private async executeRunWithChat(
-    chatId: string,
-    runId: string,
-    chat: PersistedChat,
-    userText: string,
-    deltaBatcher: DeltaBatcher,
-    abortSignal: AbortSignal,
-  ): Promise<void> {
+  private async prepareInitialRun(
+    source: ChatRunSource,
+  ): Promise<PreparedInitialModelRun> {
     const session = await this.providerConnector.connectWithConfirmation();
     this.modelName = session.config.model;
     const context = await this.contextBuilder.build({
       systemPrompt: await loadSystemPrompt(this.settings),
       modelName: session.config.model,
-      userText,
-      settings: chat.context,
-      hasFileWorkspace: Boolean(chat.externalRoot),
+      userText: source.userText,
+      settings: source.chat.context,
+      hasFileWorkspace: Boolean(source.chat.externalRoot),
       secretNotebookIds: this.secretNotebookIds,
     });
-    this.activeChatId = chat.id;
+    this.activeChatId = source.chat.id;
     await this.sendSnapshot();
-    const runner = new AgentRunner(
-      session.provider,
-      this.tools,
-      this.changes,
-      this.observer({ chatId, runId }, deltaBatcher),
-    );
-    const outcome = await runner.run(
-      {
-        chatId: chat.id,
-        runId,
-        messages: mergeHistory(context.messages, chat.messages),
-        hasFileWorkspace: Boolean(chat.externalRoot),
-        vault: chat.context.vault,
-        readOnly: chat.context.interactionMode === "ask",
+    return {
+      provider: session.provider,
+      submittedChat: source.chat,
+      citations: context.citations,
+      request: {
+        messages: mergeHistory(context.messages, source.chat.messages),
+        hasFileWorkspace: Boolean(source.chat.externalRoot),
+        vault: source.chat.context.vault,
+        readOnly: source.chat.context.interactionMode === "ask",
         readableNoteIds: context.readableNoteIds,
         secretNotebookIds: this.secretNotebookIds,
       },
-      abortSignal,
-    );
-    deltaBatcher.flush();
+    };
+  }
+
+  private async handleInitialOutcome(
+    runId: string,
+    outcome: AgentRunOutcome,
+    prepared: PreparedInitialModelRun,
+  ): Promise<void> {
     this.markEndpointOnline();
-    await persistRunOutcome(
-      this.chats,
-      chat,
-      runId,
-      outcome,
-      context.citations,
-    );
     this.approvals.remember(
       outcome.changeSet,
       outcome.continuation,
-      chat.id,
-      Boolean(chat.externalRoot),
-      chat.context.vault,
-      context.readableNoteIds,
-      this.secretNotebookIds,
-      context.citations,
+      prepared.submittedChat.id,
+      prepared.request.hasFileWorkspace,
+      prepared.request.vault,
+      prepared.request.readableNoteIds,
+      prepared.request.secretNotebookIds,
+      prepared.citations,
     );
     await this.emitOutcome(
-      chat.id,
+      prepared.submittedChat.id,
       runId,
       outcome.changeSet,
-      chat.context.autoApply,
+      prepared.submittedChat.context.autoApply,
       outcome.usage,
     );
-  }
-
-  private observer(
-    request: { readonly chatId: string; readonly runId: string },
-    deltas: DeltaBatcher,
-  ): AgentObserver {
-    return {
-      onTextDelta: (delta): void => {
-        this.markEndpointOnline();
-        deltas.push(delta);
-      },
-      onToolStarted: (call): void => {
-        this.markEndpointOnline();
-        this.events.post(
-          "tool.started",
-          request.chatId,
-          { toolCallId: call.id, name: call.name },
-          request.runId,
-        );
-      },
-      onToolCompleted: (result): void =>
-        this.emitToolCompleted(request, result),
-      onPlanUpdated: (plan): void => {
-        this.markEndpointOnline();
-        this.events.post(
-          "run.plan",
-          request.chatId,
-          {
-            items: plan.items.map((item) => ({
-              id: item.id,
-              content: item.content,
-              status: item.status,
-            })),
-          },
-          request.runId,
-        );
-      },
-      onStep: (current, total, label): void => {
-        this.markEndpointOnline();
-        this.events.post(
-          "run.progress",
-          request.chatId,
-          {
-            current,
-            total,
-            label: label ?? `Model step ${current} of ${total}`,
-          },
-          request.runId,
-        );
-      },
-    };
   }
 
   /**
@@ -618,23 +527,6 @@ export class ChatController {
     if (this.endpointStatus === "online") return;
     this.endpointStatus = "online";
     void this.sendSnapshot();
-  }
-
-  private emitToolCompleted(
-    request: { readonly chatId: string; readonly runId: string },
-    result: ToolExecutionResult,
-  ): void {
-    this.events.post(
-      "tool.completed",
-      request.chatId,
-      {
-        toolCallId: result.toolCallId,
-        name: result.name,
-        ok: true,
-        summary: summarizeToolResult(result),
-      },
-      request.runId,
-    );
   }
 
   private async appendUserMessage(
@@ -684,41 +576,6 @@ export class ChatController {
         runId,
       );
     }
-    await this.sendSnapshot();
-  }
-
-  private async recordFailure(
-    chatId: string,
-    runId: string,
-    error: unknown,
-  ): Promise<void> {
-    const domain =
-      error instanceof DomainError
-        ? error
-        : new DomainError("PROVIDER", "Unexpected agent failure", error);
-    if (domain.code !== "ABORTED" && !this.activeRuns.has(chatId)) {
-      this.endpointStatus = "offline";
-    }
-    const chat = await this.chats.get(chatId);
-    if (chat) {
-      const summary: PersistedRunSummary = {
-        runId,
-        status: domain.code === "ABORTED" ? "cancelled" : "failed",
-        summary: domain.message,
-        completedAt: Date.now(),
-      };
-      await this.chats.save({
-        ...chat,
-        updatedAt: Date.now(),
-        runSummaries: [...chat.runSummaries, summary],
-      });
-    }
-    this.events.post(
-      "run.failed",
-      chatId,
-      { code: domain.code, message: domain.message },
-      runId,
-    );
     await this.sendSnapshot();
   }
 
