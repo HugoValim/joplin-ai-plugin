@@ -12,6 +12,14 @@ import {
   type ChangeSetRollbackMergePort,
 } from "./changeSetParking";
 import {
+  ChangeSetApplyDurability,
+  type ChangeSetCompensationPort,
+} from "./changeSetApplyDurability";
+import {
+  ChangeSetRecovery,
+  type ChangeSetRecoveryPort,
+} from "./changeSetRecovery";
+import {
   ChangeSetResolution,
   type ChangeSetResolutionInput,
   type ChangeSetResolutionTransitionPort,
@@ -28,6 +36,8 @@ export type {
   ChangeSetRollbackPort,
   ChangeSetSelectionResolutionInput,
 } from "./changeSetResolution";
+export type { ChangeSetCompensationResult } from "./changeSetApplyDurability";
+export type { ChangeSetRecoveryPort } from "./changeSetRecovery";
 
 export interface ChangeSetReviewNotePort {
   openForChangeSet(changeSet: ChangeSet, chatTitle: string): Promise<string>;
@@ -63,9 +73,11 @@ export interface ChangeSetApplyResult {
   readonly changeSetId: string;
   readonly changes: readonly ProposedChange[];
   readonly undoAvailable: boolean;
+  readonly durabilityFailure?: string;
 }
 
-export interface ChangeSetApplicationPort extends ChangeSetRollbackMergePort {
+export interface ChangeSetApplicationPort
+  extends ChangeSetRollbackMergePort, ChangeSetCompensationPort {
   apply(
     changeSetId: string,
     acceptedChangeIds: readonly string[],
@@ -94,7 +106,9 @@ export interface ChangeSetDiscardInput extends ChangeSetScope {
 export class ChangeSetLifecycle {
   private readonly applyTokens = new Map<string, string>();
   private readonly parking: ChangeSetParking;
+  private readonly applyDurability: ChangeSetApplyDurability;
   private readonly resolution: ChangeSetResolution;
+  private readonly recovery: ChangeSetRecovery;
 
   public constructor(
     private readonly changes: ChangeSetStore,
@@ -106,6 +120,10 @@ export class ChangeSetLifecycle {
       chats,
       reviewNotes,
       (changeSetId): void => this.revokeApplyToken(changeSetId),
+    );
+    this.applyDurability = new ChangeSetApplyDurability(changes, this.parking);
+    this.recovery = new ChangeSetRecovery(changes, chats, (changeSetId): void =>
+      this.revokeApplyToken(changeSetId),
     );
     this.resolution = new ChangeSetResolution(
       changes,
@@ -200,12 +218,38 @@ export class ChangeSetLifecycle {
   ): Promise<void> {
     this.assertApplyToken(input.changeSetId, input.applyToken);
     this.revokeApplyToken(input.changeSetId);
+    const proposed = this.changes.getScoped(input.changeSetId, input);
     const result = await application.apply(
       input.changeSetId,
       input.acceptedChangeIds,
       { chatId: input.chatId, runId: input.runId },
     );
-    await this.retainAppliedReview(input, result, application);
+    if (result.durabilityFailure) {
+      try {
+        await this.parking.checkpointAppliedReview(
+          input.chatId,
+          input.runId,
+          result.changeSetId,
+        );
+      } catch {
+        // The pre-write application journal remains the durable recovery source.
+      }
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change Set ${safeValue(result.changeSetId)} was applied but rollback finalization could not be saved; its application journal remains locked: ${safeValue(result.durabilityFailure)}`,
+      );
+    }
+    try {
+      await this.retainAppliedReview(input, result, application);
+    } catch (error: unknown) {
+      await this.applyDurability.handle(
+        input,
+        proposed,
+        result.changes,
+        application,
+        error,
+      );
+    }
     const continued = await transition.continueAfterApply(input, result);
     if (!continued) transition.applyCompleted(input, result);
   }
@@ -272,8 +316,26 @@ export class ChangeSetLifecycle {
   }
 
   public ensureApplyToken(changeSetId: string): string {
+    const changeSet = this.changes.get(changeSetId);
+    if (!changeSet || changeSet.status !== "proposed") {
+      throw new DomainError(
+        "NOT_AVAILABLE",
+        `Change set ${safeValue(changeSetId)} is not pending; expected proposed status`,
+      );
+    }
     const existing = this.applyTokens.get(changeSetId);
     return existing ?? this.issueApplyToken(changeSetId);
+  }
+
+  /**
+   * Returns an approval token only while the runtime Change Set is proposed.
+   *
+   * @example lifecycle.applyTokenIfPending(changeSetId)
+   */
+  public applyTokenIfPending(changeSetId: string): string | null {
+    const changeSet = this.changes.get(changeSetId);
+    if (!changeSet || changeSet.status !== "proposed") return null;
+    return this.ensureApplyToken(changeSetId);
   }
 
   public verifyApplyToken(changeSetId: string, token: string): boolean {
@@ -287,15 +349,13 @@ export class ChangeSetLifecycle {
   /**
    * Recovers persisted Change Sets into the runtime store.
    *
-   * @example lifecycle.recover(persistedChat)
+   * @example await lifecycle.recover(persistedChat, application)
    */
-  public recover(chat: PersistedChat): void {
-    if (chat.parkedAppliedChangeSet) {
-      this.changes.restore(chat.parkedAppliedChangeSet);
-    }
-    if (chat.pendingChangeSet) {
-      this.changes.restore(chat.pendingChangeSet);
-    }
+  public async recover(
+    chat: PersistedChat,
+    recovery?: ChangeSetRecoveryPort,
+  ): Promise<ChangeSet | null> {
+    return this.recovery.recover(chat, recovery);
   }
 
   private issueApplyToken(changeSetId: string): string {
