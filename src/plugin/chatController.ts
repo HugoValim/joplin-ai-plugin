@@ -98,7 +98,11 @@ export class ChatController {
       createProvider,
     );
     this.events = new PluginEventSender(panel);
-    this.changeSetLifecycle = new ChangeSetLifecycle(changes);
+    this.changeSetLifecycle = new ChangeSetLifecycle(
+      changes,
+      chats,
+      reviewNotes,
+    );
     this.approvals = new ApprovalWorkflow(
       chats,
       changes,
@@ -108,6 +112,7 @@ export class ChatController {
       this.events,
       this.activeRuns,
       reviewNotes,
+      this.changeSetLifecycle,
     );
   }
 

@@ -7,6 +7,7 @@ import {
 import type { ChangeApplier, ApplyResult } from "../agent/changeApplier";
 import type { ContextCitation } from "../agent/contextBuilder";
 import type { ChangeSet, ChangeSetStore } from "../persistence/changeSetStore";
+import { ChangeSetLifecycle } from "../persistence/changeSetLifecycle";
 import type { ChatStore, PersistedRunSummary } from "../persistence/chatStore";
 import type { AiProvider } from "../providers/types";
 import { DomainError, safeValue } from "../shared/errors";
@@ -19,7 +20,6 @@ import {
 import { persistRunOutcome, requireChat } from "./chatLifecycle";
 import { toChangeSetView } from "./chatView";
 import { DeltaBatcher } from "./deltaBatcher";
-import { ApplyTokenStore } from "./applyTokenStore";
 import type { PluginEventSender } from "./pluginEventSender";
 import type { RunCancellationRegistry } from "./runCancellationRegistry";
 import type { ReviewNotePort } from "./reviewNoteService";
@@ -31,7 +31,7 @@ interface ContinuationProviderPort {
 
 export class ApprovalWorkflow {
   private readonly continuations = new AgentContinuationStore();
-  private readonly applyTokens = new ApplyTokenStore();
+  private readonly changeSetLifecycle: ChangeSetLifecycle;
 
   public constructor(
     private readonly chats: ChatStore,
@@ -42,7 +42,11 @@ export class ApprovalWorkflow {
     private readonly events: PluginEventSender,
     private readonly activeRuns: RunCancellationRegistry,
     private readonly reviewNotes: ReviewNotePort,
-  ) {}
+    changeSetLifecycle?: ChangeSetLifecycle,
+  ) {
+    this.changeSetLifecycle =
+      changeSetLifecycle ?? new ChangeSetLifecycle(changes, chats, reviewNotes);
+  }
 
   public remember(
     changeSet: ChangeSet | null,
@@ -79,18 +83,10 @@ export class ApprovalWorkflow {
   public async openReview(
     request: Extract<PanelRequest, { type: "review.open" }>,
   ): Promise<void> {
-    const chat = await requireChat(this.chats, request.chatId);
-    const pending = chat.pendingChangeSet;
-    if (!pending || pending.id !== request.payload.changeSetId) {
-      throw new DomainError(
-        "NOT_AVAILABLE",
-        `No pending change set ${request.payload.changeSetId}; expected an awaiting-approval batch`,
-      );
-    }
-    const reviewNoteId = await this.reviewNotes.ensureOpen(pending, chat.title);
-    if (reviewNoteId === pending.reviewNoteId) return;
-    const updated = this.changes.attachReviewNote(pending.id, reviewNoteId);
-    await this.chats.save({ ...chat, pendingChangeSet: updated });
+    await this.changeSetLifecycle.openReview(
+      request.chatId,
+      request.payload.changeSetId,
+    );
   }
 
   /**
@@ -99,7 +95,7 @@ export class ApprovalWorkflow {
    * @example workflow.applyTokenForChangeSet("changes-1")
    */
   public applyTokenForChangeSet(changeSetId: string): string {
-    return this.applyTokens.ensure(changeSetId);
+    return this.changeSetLifecycle.ensureApplyToken(changeSetId);
   }
 
   /**
@@ -112,37 +108,26 @@ export class ApprovalWorkflow {
     autoApply: boolean,
   ): Promise<void> {
     await this.parkAppliedReview(changeSet.chatId);
-    if (autoApply && !requiresManualReview(changeSet)) {
-      this.postAutomaticProgress(changeSet);
-      const applyToken = this.applyTokens.issue(changeSet.id);
-      const chat = await requireChat(this.chats, changeSet.chatId);
-      const reviewNoteId = await this.reviewNotes.openForChangeSet(
-        changeSet,
-        chat.title,
-      );
-      const reviewed = this.changes.attachReviewNote(
-        changeSet.id,
-        reviewNoteId,
-      );
-      await this.chats.save({ ...chat, pendingChangeSet: reviewed });
+    const activation = await this.changeSetLifecycle.activateReview(
+      changeSet,
+      autoApply,
+    );
+    if (activation.mode === "automatic") {
+      this.postAutomaticProgress(activation.changeSet);
       await this.applyRequest(
-        automaticApplyRequest(reviewed, applyToken),
+        automaticApplyRequest(
+          activation.changeSet,
+          activation.acceptedChangeIds,
+          activation.applyToken,
+        ),
         true,
       );
       return;
     }
-    const applyToken = this.applyTokens.issue(changeSet.id);
-    const chat = await requireChat(this.chats, changeSet.chatId);
-    const reviewNoteId = await this.reviewNotes.openForChangeSet(
-      changeSet,
-      chat.title,
-    );
-    const reviewed = this.changes.attachReviewNote(changeSet.id, reviewNoteId);
-    await this.chats.save({ ...chat, pendingChangeSet: reviewed });
     this.events.post(
       "changes.proposed",
       changeSet.chatId,
-      toChangeSetView(reviewed, applyToken),
+      toChangeSetView(activation.changeSet, activation.applyToken),
       changeSet.runId,
     );
   }
@@ -171,7 +156,7 @@ export class ApprovalWorkflow {
     automatic: boolean,
   ): Promise<void> {
     if (
-      !this.applyTokens.verify(
+      !this.changeSetLifecycle.verifyApplyToken(
         request.payload.changeSetId,
         request.payload.applyToken,
       )
@@ -181,7 +166,7 @@ export class ApprovalWorkflow {
         `Invalid apply token for change set ${request.payload.changeSetId}; expected a plugin-issued token`,
       );
     }
-    this.applyTokens.revoke(request.payload.changeSetId);
+    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
     const result = await this.applier.apply(
       request.payload.changeSetId,
       request.payload.acceptedIds,
@@ -203,7 +188,7 @@ export class ApprovalWorkflow {
       chatId: request.chatId,
       runId: request.runId,
     });
-    this.applyTokens.revoke(request.payload.changeSetId);
+    this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
     this.continuations.delete(request.payload.changeSetId);
     await this.clearPending(request.chatId, request.runId, "completed");
     this.events.post(
@@ -253,7 +238,7 @@ export class ApprovalWorkflow {
         chatId: request.chatId,
         runId: request.runId,
       });
-      this.applyTokens.revoke(request.payload.changeSetId);
+      this.changeSetLifecycle.revokeApplyToken(request.payload.changeSetId);
       this.continuations.delete(request.payload.changeSetId);
       await this.clearPending(request.chatId, request.runId, "denied");
       this.events.post(
@@ -730,12 +715,6 @@ function stripReviewNote(changeSet: ChangeSet): ChangeSet {
   };
 }
 
-function requiresManualReview(changeSet: ChangeSet): boolean {
-  return changeSet.changes.some(
-    (change) => change.kind !== "file" && change.operation === "delete",
-  );
-}
-
 function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
   if (change.status !== "applied") return false;
   if (change.kind === "file") return true;
@@ -744,6 +723,7 @@ function isUndoableApplied(change: ChangeSet["changes"][number]): boolean {
 
 function automaticApplyRequest(
   changeSet: ChangeSet,
+  acceptedChangeIds: string[],
   applyToken: string,
 ): Extract<PanelRequest, { type: "changes.apply" }> {
   return {
@@ -754,7 +734,7 @@ function automaticApplyRequest(
     type: "changes.apply",
     payload: {
       changeSetId: changeSet.id,
-      acceptedIds: changeSet.changes.map((change) => change.id),
+      acceptedIds: acceptedChangeIds,
       applyToken,
     },
   };
