@@ -247,7 +247,6 @@ describe("ChangeSetLifecycle cumulative parking", () => {
     expect(harness.changes.get(newer.id)?.changes).toHaveLength(1);
     expect(harness.reviewNotes.disposed).toEqual(["review-run-older"]);
   });
-
 });
 
 interface ParkingHarness {
